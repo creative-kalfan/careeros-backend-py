@@ -1,0 +1,1 @@
+"""Parsing utilities (pure functions, no I/O)."""

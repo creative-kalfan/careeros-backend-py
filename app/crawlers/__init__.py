@@ -1,0 +1,1 @@
+"""Crawler framework: shared models, base classes, and ATS adapters."""
