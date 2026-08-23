@@ -111,15 +111,28 @@ async def refresh_recommendations(
         logger.exception("refresh failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Refresh failed: {exc}") from exc
 
-    # Notification hook: generate notifications from the recommendation output
-    # (consumes existing ranked results; never recalculates scores and never
-    # breaks the refresh on failure).
+    # Event-driven integration: publish the ranked output on the domain event
+    # bus. NotificationEventSubscriber consumes it to generate notifications
+    # (existing output reused, never recalculated). Handler failures are
+    # isolated by the bus and must not break the refresh.
     try:
-        from app.services.notifications.notification_service import NotificationService
+        from app.events import RecommendationGenerated, get_event_bus
 
-        await NotificationService().notify_from_recommendations(auth, recs)
+        report = await get_event_bus().publish(
+            RecommendationGenerated(
+                aggregate_id=auth.user.id,
+                user_id=auth.user.id,
+                recommendations=recs,
+            ),
+            context=auth,
+        )
+        if not report.succeeded:
+            logger.warning(
+                "RecommendationGenerated dispatch had handler failures: %s",
+                [f.error for f in report.failures],
+            )
     except Exception as exc:
-        logger.warning("Notification generation failed (non-blocking): %s", exc)
+        logger.warning("Event publish failed (non-blocking): %s", exc)
 
     return SuccessResponse(data={"result": "refresh_triggered", "count": len(recs)})
 
