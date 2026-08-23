@@ -107,10 +107,21 @@ async def refresh_recommendations(
     service = RecommendationService()
     try:
         recs = await service.generate_for_user(auth=auth, limit=50)
-        return SuccessResponse(data={"result": "refresh_triggered", "count": len(recs)})
     except Exception as exc:
         logger.exception("refresh failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Refresh failed: {exc}") from exc
+
+    # Notification hook: generate notifications from the recommendation output
+    # (consumes existing ranked results; never recalculates scores and never
+    # breaks the refresh on failure).
+    try:
+        from app.services.notifications.notification_service import NotificationService
+
+        await NotificationService().notify_from_recommendations(auth, recs)
+    except Exception as exc:
+        logger.warning("Notification generation failed (non-blocking): %s", exc)
+
+    return SuccessResponse(data={"result": "refresh_triggered", "count": len(recs)})
 
 
 @router.post(
