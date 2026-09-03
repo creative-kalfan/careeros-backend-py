@@ -130,6 +130,11 @@ def test_get_relevant_jobs_without_profile(relevance_service, mock_job_repositor
         role="engineer",
         location="remote",
         role_category=None,
+        company=None,
+        remote=None,
+        employment_type=None,
+        experience=None,
+        sort=None,
     )
     mock_personalized_service.filter_jobs.assert_not_called()
     mock_personalized_service.calculate_match_score.assert_not_called()

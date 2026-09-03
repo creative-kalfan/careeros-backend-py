@@ -8,6 +8,44 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+
+class ExceptionEnvelopeMiddleware:
+    """Convert unhandled exceptions into the CareerOS JSON error envelope.
+
+    Starlette installs ``@app.exception_handler(Exception)`` into
+    ``ServerErrorMiddleware``, which sits OUTSIDE ``CORSMiddleware``. A bare
+    500 produced there has no CORS headers, so the browser misleadingly
+    reports the failure as "blocked by CORS policy" instead of showing the
+    real backend error. This middleware runs INSIDE the CORS layer, so its
+    responses always carry ``Access-Control-Allow-Origin``.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        try:
+            await self.app(scope, receive, send)
+        except Exception:
+            logger.exception(
+                "Unhandled exception on %s %s", scope.get("method"), scope.get("path")
+            )
+            response = JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error": {
+                        "code": "internal_error",
+                        "message": "Internal server error. Please try again.",
+                    },
+                },
+            )
+            await response(scope, receive, send)
 
 from app.api.routes.jobs import router as jobs_router
 from app.api.routes.applications import router as applications_router
@@ -16,9 +54,17 @@ from app.api.routes.notifications import router as notifications_router
 from app.api.routes.notification_preferences import router as notification_preferences_router
 from app.api.routes.profile import router as profile_router
 from app.auth.router import router as auth_router
+
+from app.api.routes.export import router as export_router
+from app.api.routes.ats import router as ats_router
+from app.api.routes.resumes import router as resumes_router
+from app.api.routes.versions import router as versions_router
+from app.api.routes.improvement import router as improvement_router
+from app.api.routes.optimization import router as optimization_router
+from app.api.routes.resume_templates import router as templates_router
 from app.auth.service import AuthError
+from app.config import get_settings
 from app.services.jobs.scheduled_crawl_runner import (
-    DEFAULT_INTERVAL_HOURS,
     ScheduledCrawlRunner,
 )
 
@@ -27,14 +73,68 @@ logger = logging.getLogger(__name__)
 _scheduled_runner: ScheduledCrawlRunner | None = None
 
 
+def _init_sentry() -> None:
+    """Initialize Sentry SDK if SENTRY_DSN is configured."""
+    settings = get_settings()
+    if not settings.sentry_dsn:
+        logger.info("SENTRY_DSN not set, backend Sentry disabled")
+        return
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.sentry_environment,
+            integrations=[
+                StarletteIntegration(transaction_style="endpoint"),
+                FastApiIntegration(transaction_style="endpoint"),
+            ],
+            traces_sample_rate=0.1,
+            send_default_pii=False,
+            before_send=_scrub_pii,
+        )
+        logger.info("Sentry initialized (env=%s)", settings.sentry_environment)
+    except ImportError:
+        logger.warning("sentry-sdk not installed, skipping Sentry init")
+
+
+def _scrub_pii(event: dict, hint: dict) -> dict:
+    """Remove sensitive fields from Sentry events."""
+    if "request" in event and "headers" in event["request"]:
+        headers = event["request"]["headers"]
+        sensitive = {"authorization", "cookie", "x-api-key"}
+        event["request"]["headers"] = {
+            k: "[Filtered]" if k.lower() in sensitive else v
+            for k, v in (headers.items() if isinstance(headers, dict) else [])
+        }
+    return event
+
+
+def _get_cors_origins() -> list[str]:
+    """Build CORS origins from env or fall back to dev defaults."""
+    settings = get_settings()
+    if settings.cors_allowed_origins:
+        return [o.strip() for o in settings.cors_allowed_origins.split(",") if o.strip()]
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+    ]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start the scheduled crawl runner on server startup, stop on shutdown."""
     global _scheduled_runner
-    interval_hours = DEFAULT_INTERVAL_HOURS
-    _scheduled_runner = ScheduledCrawlRunner(interval_hours=interval_hours)
+    _init_sentry()
+    _scheduled_runner = ScheduledCrawlRunner()
     _scheduled_runner.start()
-    logger.info("Scheduled crawl runner started (every %s hours)", interval_hours)
+    logger.info("Scheduled crawl runner started")
     yield
     if _scheduled_runner is not None:
         _scheduled_runner.shutdown()
@@ -47,21 +147,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Allow the TanStack frontend (dev server + production) to call this API.
-# The frontend runs on a different port during development, so CORS is required.
+# ExceptionEnvelopeMiddleware must be registered BEFORE CORSMiddleware so the
+# CORS layer wraps it (Starlette's last-added middleware is outermost) and its
+# error responses always receive CORS headers.
+app.add_middleware(ExceptionEnvelopeMiddleware)
+
+# Explicit, safe CORS allowlist. We never use wildcard `*` for methods/headers:
+# a wildcard combined with ``allow_credentials=True`` is rejected by browsers
+# and is too permissive anyway. We allow only the HTTP methods and request
+# headers the CareerOS frontend actually sends (JSON API + Bearer auth).
+ALLOWED_CORS_METHODS = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
+ALLOWED_CORS_HEADERS = ["Authorization", "Content-Type"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-    ],
+    allow_origins=_get_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=ALLOWED_CORS_METHODS,
+    allow_headers=ALLOWED_CORS_HEADERS,
 )
 
 
@@ -89,6 +192,29 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     )
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Convert unhandled exceptions into a JSON error envelope.
+
+    Without this, Starlette's ServerErrorMiddleware (which sits OUTSIDE
+    CORSMiddleware) returns a bare 500 with no CORS headers, and the browser
+    misleadingly reports the failure as "blocked by CORS policy". Returning
+    the envelope through the app's exception-handler path keeps the response
+    inside the CORS-covered middleware stack.
+    """
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": {
+                "code": "internal_error",
+                "message": "Internal server error. Please try again.",
+            },
+        },
+    )
+
+
 app.include_router(auth_router)
 app.include_router(jobs_router)
 app.include_router(applications_router)
@@ -96,6 +222,13 @@ app.include_router(recommendations_router)
 app.include_router(notifications_router)
 app.include_router(notification_preferences_router)
 app.include_router(profile_router)
+app.include_router(export_router)
+app.include_router(ats_router)
+app.include_router(resumes_router)
+app.include_router(versions_router)
+app.include_router(improvement_router)
+app.include_router(optimization_router)
+app.include_router(templates_router)
 
 
 @app.get("/health")

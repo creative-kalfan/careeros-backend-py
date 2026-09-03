@@ -84,9 +84,10 @@ async def test_ingest_adzuna_jobs(ingestion_service: JobIngestionService) -> Non
         result = await ingestion_service.ingest_adzuna_jobs("software engineer")
 
     mock_adzuna_cls.assert_called_once_with()
-    # Default query runs India + GB remote + US = 3 calls, each returning 3 jobs = 9 normalizations
-    assert mock_adapter.search_by_query.await_count == 3
-    assert ingestion_service.job_service.normalize_and_classify.call_count == 9
+    # New behavior: ADZUNA_BATCH_SIZE=8 broad queries × 3 countries + 3 primary searches = 27 calls
+    # Each returns 3 jobs, so 27 × 3 = 81 total crawled jobs → 81 normalizations
+    assert mock_adapter.search_by_query.await_count == 27
+    assert ingestion_service.job_service.normalize_and_classify.call_count == 81
     ingestion_service.job_repository.upsert_jobs.assert_called_once()
     assert result == {"inserted": 1, "updated": 0}
 

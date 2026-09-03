@@ -1,0 +1,16 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+.env
+.env.*
+!.env.example
+.pytest_cache
+*.egg-info
+*.log
+node_modules
+dist
+.output
+.vercel

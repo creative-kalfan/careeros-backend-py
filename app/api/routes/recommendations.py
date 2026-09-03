@@ -63,7 +63,7 @@ async def list_recommendations(
         )
     except Exception as exc:
         logger.exception("generate_for_user failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to generate recommendations: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Failed to generate recommendations") from exc
 
     # Frontend expects data.recommendations; also support data as list for legacy callers
     # so we return both shapes: data is dict with recommendations key
@@ -86,7 +86,7 @@ async def get_top_recommendations(
         recs = await service.get_top(auth=auth, limit=limit)
     except Exception as exc:
         logger.exception("get_top failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Failed to get top recommendations: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Failed to get top recommendations") from exc
     return SuccessResponse(data={"recommendations": recs, "count": len(recs)})
 
 
@@ -109,7 +109,7 @@ async def refresh_recommendations(
         recs = await service.generate_for_user(auth=auth, limit=50)
     except Exception as exc:
         logger.exception("refresh failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Refresh failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Failed to refresh recommendations") from exc
 
     # Event-driven integration: publish the ranked output on the domain event
     # bus. NotificationEventSubscriber consumes it to generate notifications
@@ -224,7 +224,7 @@ async def save_recommendation(
         ).execute()
         return SuccessResponse(data={"recommendation": {"id": recommendation_id, "status": "SAVED"}})
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Save failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Failed to save recommendation") from exc
 
 
 @router.post(

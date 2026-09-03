@@ -34,6 +34,7 @@ def authenticator() -> AuthContext:
     return AuthContext(
         user=AuthUser(id="test-user-id", email="test@example.com", role="user"),
         supabase=MagicMock(),
+        jwt="test-token",
     )
 
 

@@ -15,9 +15,12 @@ from app.crawlers.models import CrawledJob
 
 logger = logging.getLogger(__name__)
 
-ADZUNA_API = "https://api.adzuna.com/v1/api/jobs/{country}/search/1"
+ADZUNA_API = "https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
 ADZUNA_RETRY_BASE_DELAY = 2.0
 ADZUNA_RETRY_MAX_ATTEMPTS = 3
+# Bounded page budget per query (path-based pagination). Callers needing more
+# pages invoke search_by_query repeatedly with explicit page numbers.
+ADZUNA_MAX_PAGES_PER_QUERY = 1
 
 
 def _coalesce(*values: Any) -> Optional[str]:
@@ -88,9 +91,18 @@ class AdzunaAdapter(BaseCrawler):
         return await self.search_by_query("software engineer")
 
     async def search_by_query(
-        self, query: str, results_per_page: int = 50, country: Optional[str] = None
+        self,
+        query: str,
+        results_per_page: int = 50,
+        country: Optional[str] = None,
+        page: int = 1,
     ) -> list[CrawledJob]:
         """Search Adzuna by keyword query with retry and exponential backoff.
+
+        Pagination is path-based (``/v1/api/jobs/{country}/search/{page}``)
+        per Adzuna's API convention; a ``page`` query parameter is rejected
+        with HTTP 400. Request volume is bounded by
+        ``ADZUNA_MAX_PAGES_PER_QUERY``.
 
         Retries on transient 503 / connection failures up to
         ``ADZUNA_RETRY_MAX_ATTEMPTS`` times.  Delays between retries follow
@@ -103,12 +115,14 @@ class AdzunaAdapter(BaseCrawler):
             return []
 
         country_code = country or self.country
-        url = (
-            f"{self.api_base.format(country=country_code)}"
-            f"?app_id={self.app_id}&app_key={self.app_key}"
-            f"&what={query}&results_per_page={results_per_page}"
-            f"&content-type=application/json"
-        )
+        url = self.api_base.format(country=country_code, page=max(1, page))
+        params = {
+            "app_id": self.app_id,
+            "app_key": self.app_key,
+            "what": query,
+            "results_per_page": results_per_page,
+            "content-type": "application/json",
+        }
 
         client = self._client or httpx.AsyncClient()
         owned = self._client is None
@@ -116,7 +130,7 @@ class AdzunaAdapter(BaseCrawler):
             last_exc: Exception | None = None
             for attempt in range(1, ADZUNA_RETRY_MAX_ATTEMPTS + 1):
                 try:
-                    response = await client.get(url)
+                    response = await client.get(url, params=params)
                 except httpx.HTTPError as exc:
                     last_exc = exc
                     if attempt < ADZUNA_RETRY_MAX_ATTEMPTS:

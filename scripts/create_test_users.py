@@ -55,14 +55,20 @@ def main() -> None:
         # User may already exist — try to look it up by email.
         print(f"  create_user failed ({exc}); attempting lookup by email")
         listed = supabase.auth.admin.list_users()
+        # supabase-py >= 2.x returns a plain list for list_users().
+        users = listed.users if hasattr(listed, "users") else listed
         user_id = None
-        for u in listed.users:
+        for u in users:
             if u.email == user_email:
                 user_id = u.id
                 break
         if not user_id:
             raise SystemExit(f"Could not create or find test user {user_email}: {exc}")
-        print(f"  Found existing user id: {user_id}")
+        # Existing user: reset the password to match .env so sign-in works.
+        supabase.auth.admin.update_user_by_id(
+            user_id, {"password": user_password}
+        )
+        print(f"  Found existing user id: {user_id} (password reset)")
 
     # Ensure the regular user's profile role is 'user' (idempotent).
     supabase.table("profiles").upsert(
@@ -86,14 +92,20 @@ def main() -> None:
     except Exception as exc:
         print(f"  create_user failed ({exc}); attempting lookup by email")
         listed = supabase.auth.admin.list_users()
+        # supabase-py >= 2.x returns a plain list for list_users().
+        users = listed.users if hasattr(listed, "users") else listed
         admin_id = None
-        for u in listed.users:
+        for u in users:
             if u.email == admin_email:
                 admin_id = u.id
                 break
         if not admin_id:
             raise SystemExit(f"Could not create or find admin user {admin_email}: {exc}")
-        print(f"  Found existing admin id: {admin_id}")
+        # Existing user: reset the password to match .env so sign-in works.
+        supabase.auth.admin.update_user_by_id(
+            admin_id, {"password": admin_password}
+        )
+        print(f"  Found existing admin id: {admin_id} (password reset)")
 
     # Set the admin user's profile role to 'admin' (idempotent).
     supabase.table("profiles").upsert(

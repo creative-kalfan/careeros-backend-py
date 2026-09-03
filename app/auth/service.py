@@ -49,6 +49,7 @@ class AuthContext:
 
     user: AuthUser
     supabase: "AsyncClient"
+    jwt: str
 
 
 class ProfileRow(BaseModel):
@@ -106,31 +107,34 @@ async def _create_authenticated_client(
 async def _verify_jwt(
     supabase: "AsyncClient", jwt: str
 ) -> dict:
-    """Verify the JWT and return the authenticated user dict from Supabase.
+    """Verify the user access token locally via the project's JWKS.
 
-    In gotrue 2.12+, ``auth.get_user(jwt)`` returns a ``UserResponse`` object
-    directly (it does NOT return a result wrapper with an ``.error`` field).
-    On an invalid/expired token it raises an exception instead. We catch both
-    shapes so this works regardless of the installed gotrue version.
+    Previously this called ``supabase.auth.get_user(jwt)``, which performed a
+    server-side round-trip to Supabase Auth (GoTrue) presenting the legacy
+    anon key as the ``apikey`` header. Once the legacy API keys were disabled,
+    GoTrue rejected that request with ``"Legacy API keys are disabled"`` and
+    every authenticated request returned 401.
+
+    Verification is now fully local and asymmetric: the token's ES256
+    signature is checked against the project's published JWKS public keys
+    (selected by ``kid``), and the issuer/audience/expiry claims are validated.
+    The ``sb_secret_...`` API key is never used as a JWT verification secret —
+    it is only used as the Supabase data-API credential when building the
+    RLS-authenticated client.
     """
-    # Calling ``auth.get_user(token)`` forces a round-trip to Supabase Auth and
-    # validates the token signature/expiry server-side.
+    from app.auth.jwt_verify import JWKSVerifier, JWTVerificationError
+
     try:
-        result = await supabase.auth.get_user(jwt)
-        if isinstance(result, dict) and result.get("error"):
-            raise AuthError("Unauthorized", status_code=401)
-        user = getattr(result, "user", None) or result
-        if not user:
-            raise AuthError("Unauthorized", status_code=401)
-    except AuthError:
-        raise
-    except Exception as exc:
+        verifier = JWKSVerifier(get_settings().supabase_url)
+        claims = verifier.verify(jwt)
+    except JWTVerificationError as exc:
         logger.warning("JWT verification failed: %s", exc)
         raise AuthError("Unauthorized", status_code=401) from exc
+
     return {
-        "id": user.id,
-        "email": user.email or "",
-        "user_metadata": getattr(user, "user_metadata", None) or {},
+        "id": claims["sub"],
+        "email": claims.get("email") or "",
+        "user_metadata": claims.get("user_metadata") or {},
     }
 
 
@@ -215,6 +219,7 @@ async def require_authenticated_user(jwt: str) -> AuthContext:
                 role=profile.role,
             ),
             supabase=supabase,
+            jwt=jwt,
         )
     except AuthError:
         raise

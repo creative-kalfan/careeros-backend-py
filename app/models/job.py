@@ -20,6 +20,7 @@ class NormalizedJob(BaseModel):
     """A job normalized into the CareerOS representation."""
 
     # Persisted identity
+    id: Optional[str] = None
     external_job_id: Optional[str] = None
     source_platform: Optional[str] = None
 
@@ -51,6 +52,16 @@ class NormalizedJob(BaseModel):
     responsibilities: Optional[list[str]] = None
     match: Optional[dict[str, float]] = None
     ats_score: Optional[float] = None
+
+    # Source provenance / quality (see app.crawlers.source_quality)
+    source_tier: Optional[int] = None
+    source_provider: Optional[str] = None
+    canonical_url: Optional[str] = None
+    source_verified: Optional[bool] = None
+    source_confidence: Optional[float] = None
+    company_website: Optional[str] = None
+    careers_url: Optional[str] = None
+    logo_url: Optional[str] = None
 
     # Original source payload (for debugging/audit)
     raw: Optional[dict[str, Any]] = Field(default=None, exclude=True)
@@ -102,6 +113,14 @@ class NormalizedJob(BaseModel):
             "is_active",
             "source_platform",
             "external_job_id",
+            "source_tier",
+            "source_provider",
+            "canonical_url",
+            "source_verified",
+            "source_confidence",
+            "company_website",
+            "careers_url",
+            "logo_url",
         }
     )
 
@@ -140,5 +159,13 @@ class NormalizedJob(BaseModel):
             "responsibilities": self.responsibilities or [],
             "experience_level": self.experience_level,
             "ats_score": self.ats_score,
+            "source_tier": self.source_tier,
+            "source_provider": self.source_provider or self.source_platform,
+            "canonical_url": self.canonical_url or self.apply_url,
+            "source_verified": self.source_verified,
+            "source_confidence": self.source_confidence,
+            "company_website": self.company_website,
+            "careers_url": self.careers_url,
+            "logo_url": self.logo_url,
         }
-        return {k: v for k, v in row.items() if k in self._DB_COLUMNS}
+        return {k: v for k, v in row.items() if k in self._DB_COLUMNS and v is not None}

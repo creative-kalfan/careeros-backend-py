@@ -9,12 +9,12 @@ until each feature is confirmed working in Python.
 | Feature | Status |
 |---|---|
 | Project scaffold | ✅ Done |
-| Authentication & session handling | ✅ Done (this feature) |
-| ATS discovery / adapters / aggregators | ⏳ Not started |
-| RoleClassifier / DeadlineExtractor | ⏳ Not started |
-| Crawl runner / job search / recommendations | ⏳ Not started |
-| Notifications / event bus / ATS scoring | ⏳ Not started |
-| Resume parsing / optimizer | ⏳ Not started |
+| Authentication & session handling | ✅ Done |
+| ATS discovery / adapters / aggregators | ✅ Done |
+| RoleClassifier / DeadlineExtractor | ✅ Done |
+| Crawl runner / job search / recommendations | ✅ Done |
+| Notifications / event bus / ATS scoring | ✅ Done |
+| Resume parsing / optimizer | ✅ Done |
 
 ## Why `requirements.txt` (not `pyproject.toml`)
 

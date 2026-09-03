@@ -40,7 +40,7 @@ async def test_upsert_jobs_new_job(job_repo, mock_client):
 
     result = job_repo.upsert_jobs([job])
 
-    assert result == {"inserted": 1, "updated": 0, "skipped": 0}
+    assert result == {"discovered": 1, "inserted": 1, "updated": 0, "unchanged": 0, "deduplicated": 0, "skipped": 0}
     mock_client.table().insert().execute.assert_called_once()
 
 
@@ -64,7 +64,7 @@ async def test_upsert_jobs_existing_job(job_repo, mock_client):
 
     result = job_repo.upsert_jobs([job])
 
-    assert result == {"inserted": 0, "updated": 1, "skipped": 0}
+    assert result == {"discovered": 1, "inserted": 0, "updated": 1, "unchanged": 0, "deduplicated": 0, "skipped": 0}
     mock_client.table().update().eq().execute.assert_called_once()
 
 
@@ -78,7 +78,7 @@ async def test_upsert_jobs_missing_identity(job_repo, mock_client):
 
     result = job_repo.upsert_jobs([job])
 
-    assert result == {"inserted": 0, "updated": 0, "skipped": 1}
+    assert result == {"discovered": 1, "inserted": 0, "updated": 0, "unchanged": 0, "deduplicated": 0, "skipped": 1}
 
 
 @pytest.mark.asyncio

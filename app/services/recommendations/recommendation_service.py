@@ -102,7 +102,7 @@ class RecommendationService:
             # For SAVED, check saved_jobs as alternative
             if status == "SAVED":
                 try:
-                    result = await supabase.table("saved_jobs").select("*, jobs(*)").eq("user_id", user_id).order("created_at", ascending=False).limit(limit).execute()
+                    result = await supabase.table("saved_jobs").select("*, jobs(*)").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
                     rows = result.data or []
                     # Convert saved jobs to recommendation-like shape
                     recs = []

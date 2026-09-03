@@ -126,3 +126,87 @@ async def test_adzuna_adapter_mocked():
     assert job.source_platform == "adzuna"
     assert job.salary == "100000 - 150000 USD"
     assert job.posted_date == "2026-01-01T00:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_adzuna_adapter_pagination_page1():
+    """Test that page=1 fetches the first page of results."""
+    from app.crawlers.aggregators.adzuna import ADZUNA_MAX_PAGES_PER_QUERY
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "results": [
+            {
+                "id": f"test-job-{i}",
+                "title": f"Job {i}",
+                "company": {"display_name": f"Company {i}"},
+                "location": {"display_name": "Location"},
+                "description": f"Description {i}",
+                "salary_min": 100000 + i,
+                "salary_max": 150000 + i,
+                "salary_currency": "USD",
+                "contract_type": "permanent",
+                "created": "2026-01-01T00:00:00Z",
+                "redirect_url": f"https://adzuna.com/jobs/test-job-{i}",
+            }
+            for i in range(3)
+        ]
+    }
+    
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    
+    async with AdzunaAdapter(app_id="test-id", app_key="test-key", client=mock_client) as adapter:
+        # page=1 default: should fetch up to ADZUNA_MAX_PAGES_PER_QUERY pages
+        jobs = await adapter.search_by_query("software engineer", page=1)
+    
+    # With ADZUNA_MAX_PAGES_PER_QUERY=1, should get exactly 3 jobs (one page)
+    assert len(jobs) == 3
+    # Verify request construction: page via URL PATH (Adzuna convention),
+    # query via properly-encoded params.
+    call_args = mock_client.get.call_args
+    assert call_args.args[0].endswith("/search/1")
+    assert call_args.kwargs["params"]["what"] == "software engineer"
+    assert "page" not in call_args.kwargs["params"]
+
+
+@pytest.mark.asyncio
+async def test_adzuna_adapter_pagination_page2():
+    """Test that page=2 fetches a specific page."""
+    from app.crawlers.aggregators.adzuna import ADZUNA_MAX_PAGES_PER_QUERY
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "results": [
+            {
+                "id": f"test-job-{i}",
+                "title": f"Job {i}",
+                "company": {"display_name": f"Company {i}"},
+                "location": {"display_name": "Location"},
+                "description": f"Description {i}",
+                "salary_min": 100000 + i,
+                "salary_max": 150000 + i,
+                "salary_currency": "USD",
+                "contract_type": "permanent",
+                "created": "2026-01-01T00:00:00Z",
+                "redirect_url": f"https://adzuna.com/jobs/test-job-{i}",
+            }
+            for i in range(3)
+        ]
+    }
+    
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_response
+    
+    async with AdzunaAdapter(app_id="test-id", app_key="test-key", client=mock_client) as adapter:
+        # page=2: should fetch only that specific page
+        jobs = await adapter.search_by_query("software engineer", page=2)
+    
+    # With ADZUNA_MAX_PAGES_PER_QUERY=1, page=2 should get 3 jobs
+    assert len(jobs) == 3
+    # Verify request construction: page 2 via URL PATH.
+    call_args = mock_client.get.call_args
+    assert call_args.args[0].endswith("/search/2")
+    assert "page" not in call_args.kwargs["params"]

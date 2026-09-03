@@ -71,9 +71,9 @@ class RecommendationRepository:
                 query = query.gte("match_score", min_score)
             # remote filter requires join; not supported via simple eq on recommendations, skip if needed handled post-filter
             if sort == "newest":
-                query = query.order("created_at", ascending=False)
+                query = query.order("created_at", desc=True)
             else:
-                query = query.order("match_score", ascending=False)
+                query = query.order("match_score", desc=True)
             query = query.limit(min(limit, 100))
             result = await query.execute()
             return result.data or []
@@ -88,7 +88,7 @@ class RecommendationRepository:
         limit: int = 5,
     ) -> Optional[list[dict[str, Any]]]:
         try:
-            result = await supabase.table("recommendations").select("*, jobs(*)").eq("user_id", user_id).gte("match_score", 80).order("match_score", ascending=False).limit(limit).execute()
+            result = await supabase.table("recommendations").select("*, jobs(*)").eq("user_id", user_id).gte("match_score", 80).order("match_score", desc=True).limit(limit).execute()
             return result.data or []
         except Exception as exc:
             logger.debug("get_top_persisted failed: %s", exc)
@@ -97,7 +97,7 @@ class RecommendationRepository:
     async def find_resume_id(self, supabase: Any, user_id: str) -> Optional[str]:
         """Return the most recent resume id for the user, if any."""
         try:
-            result = await supabase.table("resumes").select("id").eq("user_id", user_id).order("created_at", ascending=False).limit(1).execute()
+            result = await supabase.table("resumes").select("id").eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
             rows = result.data or []
             return rows[0]["id"] if rows else None
         except Exception as exc:

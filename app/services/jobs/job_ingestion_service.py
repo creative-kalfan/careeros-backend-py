@@ -2,16 +2,33 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.crawlers.adapters.ashby import AshbyAdapter
 from app.crawlers.adapters.greenhouse import GreenhouseAdapter
 from app.crawlers.adapters.lever import LeverAdapter
 from app.crawlers.adapters.smartrecruiters import SmartRecruitersAdapter
+from app.crawlers.source_quality import classify_source
 from app.crawlers.aggregators.adzuna import AdzunaAdapter
 from app.models.job import NormalizedJob
 from app.repositories.job_repository import JobRepository
 from app.services.jobs.job_service import JobService
+
+# Deterministic broad-query rotation for Adzuna (India-first, bounded).
+# One batch of ADZUNA_BATCH_SIZE queries is exercised per crawl cycle,
+# rotating by date so coverage is deterministic and restart-safe.
+ADZUNA_BROAD_QUERIES = [
+    "software engineer India",
+    "data engineer India",
+    "backend developer India",
+    "full stack developer India",
+    "machine learning engineer India",
+    "product manager India",
+    "data analyst India",
+    "devops engineer India",
+]
+ADZUNA_BATCH_SIZE = 8
 
 
 class JobIngestionService:
@@ -53,6 +70,78 @@ class JobIngestionService:
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         return self.job_repository.upsert_jobs(normalized_jobs)
 
+    def _apply_source_quality(self, job: NormalizedJob, careers_url: Optional[str] = None) -> NormalizedJob:
+        """Attach verified source provenance to a normalized job.
+
+        The URL (not the retrieval mechanism) decides the source tier; see
+        app.crawlers.source_quality.classify_source. Fields are only set on
+        objects that actually carry them (NormalizedJob, not CrawledJob).
+        """
+        provenance = classify_source(
+            job.source_platform,
+            url=job.apply_url,
+            company=job.company,
+            careers_url=careers_url,
+        )
+        model_fields = getattr(type(job), "model_fields", {})
+
+        def _set(name: str, value: Any) -> None:
+            if name in model_fields:
+                setattr(job, name, value)
+
+        _set("source_tier", provenance.tier)
+        _set("source_provider", provenance.provider)
+        _set("source_verified", provenance.verified)
+        _set("source_confidence", provenance.confidence)
+        if careers_url:
+            _set("careers_url", careers_url)
+        return job
+
+    async def ingest_ycombinator_jobs(self) -> dict[str, int]:
+        """Ingest jobs from Y Combinator's Work at a Startup board.
+
+        YC is the discovery layer; each job's apply URL is classified so YC
+        postings that point at a company's own domain or ATS board receive a
+        better source tier (official > YC board), without duplicating rows.
+        """
+        from app.crawlers.adapters.ycombinator import YCAdapter
+
+        async with YCAdapter() as adapter:
+            crawled_jobs = await adapter.discover_jobs()
+
+        normalized_jobs = [
+            self._apply_source_quality(self.job_service.normalize_and_classify(j))
+            for j in crawled_jobs
+        ]
+        return self.job_repository.upsert_jobs(normalized_jobs)
+
+    async def ingest_firecrawl_jobs(
+        self,
+        careers_url: str,
+        company: Optional[str] = None,
+        company_website: Optional[str] = None,
+    ) -> dict[str, int]:
+        """Ingest jobs from a company's official career page via Firecrawl.
+
+        Raises FirecrawlConfigurationError when FIRECRAWL_API_KEY is unset —
+        a missing key must never be reported as a successful crawl.
+        """
+        from app.crawlers.adapters.firecrawl import FirecrawlAdapter
+
+        adapter = FirecrawlAdapter(
+            careers_url=careers_url,
+            company=company,
+            company_website=company_website,
+        )
+        crawled_jobs = await adapter.discover_jobs()
+        normalized_jobs = [
+            self._apply_source_quality(
+                self.job_service.normalize_and_classify(j), careers_url=careers_url
+            )
+            for j in crawled_jobs
+        ]
+        return self.job_repository.upsert_jobs(normalized_jobs)
+
     async def ingest_adzuna_jobs(self, query: str = "software engineer", extra_queries: Optional[list[str]] = None) -> dict[str, int]:
         """Ingest jobs from Adzuna, India-first.
 
@@ -67,24 +156,32 @@ class JobIngestionService:
         adapter = AdzunaAdapter()
         crawled_jobs: list = []
 
-        # Primary: India-scoped search.
+        # Primary: India-scoped search + secondary remote/global so non-India
+        # remote work still shows (India-first, not India-only).
         india_jobs = await adapter.search_by_query(query, country="in")
         crawled_jobs.extend(india_jobs)
-
-        # Secondary: remote/global roles so non-India remote work still shows.
         remote_jobs = await adapter.search_by_query("remote", country="gb")
         crawled_jobs.extend(remote_jobs)
         global_jobs = await adapter.search_by_query(query, country="us")
         crawled_jobs.extend(global_jobs)
 
-        # Tertiary: company-inclusive queries for enterprises without direct
-        # ATS adapters (Workday/custom portals). Adzuna aggregates listings
-        # regardless of the company's internal ATS.
+        # Tertiary: deterministic broad-query rotation (bounded budget).
+        # One batch of ADZUNA_BATCH_SIZE broad queries × 3 countries per run;
+        # the batch rotates by date so every query is exercised over time.
+        ordinal = datetime.utcnow().timetuple().tm_yday
+        batch_start = (ordinal * ADZUNA_BATCH_SIZE) % len(ADZUNA_BROAD_QUERIES)
+        batch = [
+            ADZUNA_BROAD_QUERIES[(batch_start + i) % len(ADZUNA_BROAD_QUERIES)]
+            for i in range(ADZUNA_BATCH_SIZE)
+        ]
+        for broad_query in batch:
+            for country in ("in", "gb", "us"):
+                crawled_jobs.extend(await adapter.search_by_query(broad_query, country=country))
+
+        # Company-inclusive extras for enterprises without direct ATS boards.
         for extra in extra_queries or []:
-            company_jobs_in = await adapter.search_by_query(extra, country="in")
-            crawled_jobs.extend(company_jobs_in)
-            company_jobs_us = await adapter.search_by_query(extra, country="us")
-            crawled_jobs.extend(company_jobs_us)
+            crawled_jobs.extend(await adapter.search_by_query(extra, country="in"))
+            crawled_jobs.extend(await adapter.search_by_query(extra, country="us"))
 
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         return self.job_repository.upsert_jobs(normalized_jobs)

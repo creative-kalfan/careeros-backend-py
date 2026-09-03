@@ -33,7 +33,7 @@ class NotificationRepository:
             supabase.table("notifications")
             .select("*")
             .eq("user_id", user_id)
-            .order("created_at", ascending=False)
+            .order("created_at", desc=True)
             .limit(min(limit, 100))
         )
         if is_read is not None:
@@ -57,7 +57,7 @@ class NotificationRepository:
         """
         try:
             result = (
-                supabase.table("notifications")
+                await supabase.table("notifications")
                 .select("payload_json")
                 .eq("user_id", user_id)
                 .eq("type", type)

@@ -49,5 +49,5 @@ async def update_notification_preferences(
     except ValueError:
         raise HTTPException(status_code=400, detail="No valid fields to update")
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to update preferences: {exc}") from exc
+        raise HTTPException(status_code=400, detail="Failed to update preferences") from exc
     return SuccessResponse(data={"preferences": prefs})

@@ -8,6 +8,7 @@ from typing import Any, Optional
 from app.models.job import NormalizedJob
 from app.models.profile import UserProfile
 from app.services.jobs.personalized_job_service import PersonalizedJobService
+from app.services.jobs.source_priority import combined_rank_score
 from app.services.recommendations.recommendation_reason_generator import RecommendationReasonGenerator
 from app.services.recommendations.recommendation_scorer import RecommendationScorer
 
@@ -124,8 +125,16 @@ class RecommendationEngine:
                 "freshness": match.get("freshness", 0),
             })
 
-        # Sort: recommendation_score DESC, india_score DESC, freshness DESC
-        results.sort(key=lambda r: (r["recommendation_score"], r["india_score"], r["freshness"]), reverse=True)
+        # Sort: source-aware final rank (candidate match + bounded source
+        # quality bonus), then india_score DESC, freshness DESC.
+        results.sort(
+            key=lambda r: (
+                combined_rank_score(r["recommendation_score"], r.get("job")),
+                r["india_score"],
+                r["freshness"],
+            ),
+            reverse=True,
+        )
 
         if limit is not None:
             results = results[:limit]
