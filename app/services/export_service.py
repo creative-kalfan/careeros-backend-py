@@ -24,146 +24,377 @@ def _render_html(content: ResumeContent, template: str = "minimal") -> str:
     personal = profile.personal
     sections: list[str] = []
 
-    sections.append('<div class="header"><h1>{name}</h1><p>{headline}</p></div>'.format(
-        name=personal.full_name or "Candidate",
-        headline=personal.headline or "",
-    ))
-    if personal.email or personal.phone or personal.location:
-        contact = " | ".join(filter(None, [personal.email, personal.phone, personal.location, personal.website, personal.linkedin, personal.github]))
-        sections.append('<div class="contact">{contact}</div>'.format(contact=contact))
+    # Header
+    name = personal.full_name or "Candidate"
+    headline = personal.headline or profile.target_role or ""
+    header_html = f'<div class="header"><h1>{name}</h1>'
+    if headline:
+        header_html += f'<p class="headline">{headline}</p>'
+    header_html += '</div>'
+    sections.append(header_html)
 
+    # Contact info bar
+    contact_items = []
+    if personal.email:
+        contact_items.append(personal.email)
+    if personal.phone:
+        contact_items.append(personal.phone)
+    if personal.location:
+        contact_items.append(personal.location)
+    if personal.linkedin:
+        contact_items.append(personal.linkedin)
+    if personal.github:
+        contact_items.append(personal.github)
+    if personal.website:
+        contact_items.append(personal.website)
+
+    if contact_items:
+        sections.append(f'<div class="contact">{" | ".join(contact_items)}</div>')
+
+    # Professional Summary
     if profile.summary:
-        sections.append('<div class="section"><h2>Professional Summary</h2><p>{text}</p></div>'.format(text=profile.summary))
+        sections.append(
+            f'<div class="section">'
+            f'<h2 class="section-title">Professional Summary</h2>'
+            f'<p class="summary-text">{profile.summary}</p>'
+            f'</div>'
+        )
 
+    # Experience
     if profile.experience:
         items = []
         for exp in profile.experience:
-            header = "{role} at {company}".format(role=exp.role or "", company=exp.company or "")
-            date_range = " — ".join(filter(None, [exp.start_date, exp.end_date if not exp.current else "Present"]))
-            bullets = "<br/>".join(exp.get_all_bullet_texts())
-            items.append('<div class="item"><h3>{header} <span class="date">{date}</span></h3><p>{bullets}</p></div>'.format(
-                header=header, date=date_range, bullets=bullets,
-            ))
-        sections.append('<div class="section"><h2>Experience</h2>{items}</div>'.format(items="".join(items)))
+            role = exp.role or "Role"
+            company = exp.company or ""
+            title_str = f"<strong>{role}</strong>" + (f" at {company}" if company else "")
+            date_range = " — ".join(filter(None, [exp.start_date, "Present" if exp.current else exp.end_date]))
+            meta_parts = [date_range]
+            if exp.location:
+                meta_parts.append(exp.location)
+            meta_str = " | ".join(filter(None, meta_parts))
 
+            bullets_html = ""
+            bullet_texts = exp.get_all_bullet_texts()
+            if bullet_texts:
+                lis = "".join(f"<li>{b}</li>" for b in bullet_texts if b.strip())
+                if lis:
+                    bullets_html = f'<ul class="bullet-list">{lis}</ul>'
+
+            items.append(
+                f'<div class="entry">'
+                f'<div class="entry-header"><span class="entry-title">{title_str}</span><span class="entry-meta">{meta_str}</span></div>'
+                f'{bullets_html}'
+                f'</div>'
+            )
+        sections.append(f'<div class="section"><h2 class="section-title">Experience</h2>{"".join(items)}</div>')
+
+    # Internships
     if profile.internships:
         items = []
         for exp in profile.internships:
-            header = "{role} at {company}".format(role=exp.role or "", company=exp.company or "")
-            date_range = " — ".join(filter(None, [exp.start_date, exp.end_date if not exp.current else "Present"]))
-            bullets = "<br/>".join(exp.get_all_bullet_texts())
-            items.append('<div class="item"><h3>{header} <span class="date">{date}</span></h3><p>{bullets}</p></div>'.format(
-                header=header, date=date_range, bullets=bullets,
-            ))
-        sections.append('<div class="section"><h2>Internships</h2>{items}</div>'.format(items="".join(items)))
+            role = exp.role or "Intern"
+            company = exp.company or ""
+            title_str = f"<strong>{role}</strong>" + (f" at {company}" if company else "")
+            date_range = " — ".join(filter(None, [exp.start_date, "Present" if exp.current else exp.end_date]))
+            meta_parts = [date_range]
+            if exp.location:
+                meta_parts.append(exp.location)
+            meta_str = " | ".join(filter(None, meta_parts))
 
+            bullets_html = ""
+            bullet_texts = exp.get_all_bullet_texts()
+            if bullet_texts:
+                lis = "".join(f"<li>{b}</li>" for b in bullet_texts if b.strip())
+                if lis:
+                    bullets_html = f'<ul class="bullet-list">{lis}</ul>'
+
+            items.append(
+                f'<div class="entry">'
+                f'<div class="entry-header"><span class="entry-title">{title_str}</span><span class="entry-meta">{meta_str}</span></div>'
+                f'{bullets_html}'
+                f'</div>'
+            )
+        sections.append(f'<div class="section"><h2 class="section-title">Internships</h2>{"".join(items)}</div>')
+
+    # Projects
     if profile.projects:
         items = []
         for proj in profile.projects:
-            header = proj.name or "Project"
-            bullets = "<br/>".join(filter(None, [proj.description, proj.problem, proj.contribution, proj.results]))
-            if proj.technologies:
-                bullets += "<br/><em>Technologies: {tech}</em>".format(tech=", ".join(proj.technologies))
-            items.append('<div class="item"><h3>{header}</h3><p>{bullets}</p></div>'.format(header=header, bullets=bullets))
-        sections.append('<div class="section"><h2>Projects</h2>{items}</div>'.format(items="".join(items)))
+            name_str = f"<strong>{proj.name or 'Project'}</strong>"
+            if proj.url:
+                name_str += f' <span class="entry-url">({proj.url})</span>'
+            tech_str = f'<em>Technologies: {", ".join(proj.technologies)}</em>' if proj.technologies else ""
 
+            bullets = []
+            if proj.description:
+                bullets.append(proj.description)
+            if proj.problem:
+                bullets.append(f"Problem: {proj.problem}")
+            if proj.contribution:
+                bullets.append(f"Contribution: {proj.contribution}")
+            if proj.results:
+                bullets.append(f"Results: {proj.results}")
+
+            bullets_html = ""
+            if bullets:
+                lis = "".join(f"<li>{b}</li>" for b in bullets if b.strip())
+                bullets_html = f'<ul class="bullet-list">{lis}</ul>'
+
+            tech_html = f'<p class="project-tech">{tech_str}</p>' if tech_str else ""
+
+            items.append(
+                f'<div class="entry">'
+                f'<div class="entry-header"><span class="entry-title">{name_str}</span></div>'
+                f'{bullets_html}'
+                f'{tech_html}'
+                f'</div>'
+            )
+        sections.append(f'<div class="section"><h2 class="section-title">Projects</h2>{"".join(items)}</div>')
+
+    # Education
     if profile.education:
         items = []
         for edu in profile.education:
-            header = "{degree} in {field}".format(degree=edu.degree or "", field=edu.field or "")
+            degree_str = " in ".join(filter(None, [edu.degree, edu.field])) or "Degree"
+            inst_str = f"<strong>{degree_str}</strong>" + (f" — {edu.institution}" if edu.institution else "")
             date_range = " — ".join(filter(None, [edu.start_date, edu.end_date]))
-            details = ", ".join(filter(None, [edu.institution, edu.gpa]))
-            items.append('<div class="item"><h3>{header} <span class="date">{date}</span></h3><p>{details}</p></div>'.format(
-                header=header, date=date_range, details=details,
-            ))
-        sections.append('<div class="section"><h2>Education</h2>{items}</div>'.format(items="".join(items)))
+            meta_parts = [date_range]
+            if edu.location:
+                meta_parts.append(edu.location)
+            if edu.gpa:
+                meta_parts.append(f"GPA: {edu.gpa}")
+            meta_str = " | ".join(filter(None, meta_parts))
 
-    if profile.skills and any([profile.skills.technical, profile.skills.tools, profile.skills.languages, profile.skills.databases, profile.skills.analytics, profile.skills.soft_skills]):
+            extra_html = ""
+            if edu.coursework:
+                extra_html += f'<p class="edu-detail">Coursework: {", ".join(edu.coursework)}</p>'
+            if edu.achievements:
+                lis = "".join(f"<li>{a}</li>" for a in edu.achievements if a.strip())
+                if lis:
+                    extra_html += f'<ul class="bullet-list">{lis}</ul>'
+
+            items.append(
+                f'<div class="entry">'
+                f'<div class="entry-header"><span class="entry-title">{inst_str}</span><span class="entry-meta">{meta_str}</span></div>'
+                f'{extra_html}'
+                f'</div>'
+            )
+        sections.append(f'<div class="section"><h2 class="section-title">Education</h2>{"".join(items)}</div>')
+
+    # Skills
+    if profile.skills and any([
+        profile.skills.technical,
+        profile.skills.tools,
+        profile.skills.languages,
+        profile.skills.databases,
+        profile.skills.analytics,
+        profile.skills.soft_skills,
+        profile.skills.custom,
+    ]):
         items = []
-        for category, label in [
+        categories = [
             ("technical", "Technical Skills"),
-            ("tools", "Tools"),
+            ("tools", "Tools & Frameworks"),
             ("languages", "Languages"),
             ("databases", "Databases"),
             ("analytics", "Analytics"),
             ("soft_skills", "Soft Skills"),
-        ]:
-            values = getattr(profile.skills, category, [])
-            if values:
-                items.append('<div class="skill-category"><strong>{label}:</strong> {values}</div>'.format(label=label, values=", ".join(values)))
-        sections.append('<div class="section"><h2>Skills</h2>{items}</div>'.format(items="".join(items)))
+        ]
+        for cat_key, cat_label in categories:
+            vals = getattr(profile.skills, cat_key, [])
+            if vals:
+                items.append(
+                    f'<div class="skill-row"><strong>{cat_label}:</strong> {", ".join(vals)}</div>'
+                )
+        if profile.skills.custom:
+            for custom_label, custom_vals in profile.skills.custom.items():
+                if custom_vals:
+                    items.append(
+                        f'<div class="skill-row"><strong>{custom_label}:</strong> {", ".join(custom_vals)}</div>'
+                    )
+        if items:
+            sections.append(f'<div class="section"><h2 class="section-title">Skills</h2>{"".join(items)}</div>')
 
+    # Certifications
     if profile.certifications:
         items = []
         for cert in profile.certifications:
-            header = cert.name or "Certification"
+            name_str = f"<strong>{cert.name or 'Certification'}</strong>"
             details = " | ".join(filter(None, [cert.issuer, cert.date]))
-            items.append('<div class="item"><h3>{header}</h3><p>{details}</p></div>'.format(header=header, details=details))
-        sections.append('<div class="section"><h2>Certifications</h2>{items}</div>'.format(items="".join(items)))
+            items.append(
+                f'<div class="entry">'
+                f'<div class="entry-header"><span class="entry-title">{name_str}</span><span class="entry-meta">{details}</span></div>'
+                f'</div>'
+            )
+        sections.append(f'<div class="section"><h2 class="section-title">Certifications</h2>{"".join(items)}</div>')
 
+    # Achievements
     if profile.achievements:
-        items = "<br/>".join(profile.achievements)
-        sections.append('<div class="section"><h2>Achievements</h2><p>{items}</p></div>'.format(items=items))
+        lis = "".join(f"<li>{ach}</li>" for ach in profile.achievements if ach.strip())
+        if lis:
+            sections.append(f'<div class="section"><h2 class="section-title">Achievements</h2><ul class="bullet-list">{lis}</ul></div>')
 
+    # Leadership
     if profile.leadership:
         items = []
         for lead in profile.leadership:
-            header = "{role} — {org}".format(role=lead.role or "", org=lead.organization or "")
+            header = f"<strong>{lead.role or 'Leader'}</strong>" + (f" — {lead.organization}" if lead.organization else "")
             date_range = " — ".join(filter(None, [lead.start_date, lead.end_date]))
-            details = lead.description or ""
-            items.append('<div class="item"><h3>{header} <span class="date">{date}</span></h3><p>{details}</p></div>'.format(
-                header=header, date=date_range, details=details,
-            ))
-        sections.append('<div class="section"><h2>Leadership</h2>{items}</div>'.format(items="".join(items)))
+            desc = f'<p class="lead-desc">{lead.description}</p>' if lead.description else ""
+            items.append(
+                f'<div class="entry">'
+                f'<div class="entry-header"><span class="entry-title">{header}</span><span class="entry-meta">{date_range}</span></div>'
+                f'{desc}'
+                f'</div>'
+            )
+        sections.append(f'<div class="section"><h2 class="section-title">Leadership</h2>{"".join(items)}</div>')
 
+    # Languages
     if profile.languages:
         items = []
         for lang in profile.languages:
             label = lang.language or ""
             if lang.proficiency:
-                label += " ({prof})".format(prof=lang.proficiency)
-            items.append(label)
-        sections.append('<div class="section"><h2>Languages</h2><p>{items}</p></div>'.format(items=", ".join(items)))
+                label += f" ({lang.proficiency})"
+            if label:
+                items.append(label)
+        if items:
+            sections.append(f'<div class="section"><h2 class="section-title">Languages</h2><p class="languages-list">{", ".join(items)}</p></div>')
 
+    # Links
     if profile.links:
         items = []
         for link in profile.links:
             label = link.label or link.url or ""
-            items.append('{label}: {url}'.format(label=label, url=link.url or ""))
-        sections.append('<div class="section"><h2>Links</h2><p>{items}</p></div>'.format(items="<br/>".join(items)))
+            items.append(f'<div class="link-item"><strong>{label}:</strong> {link.url or ""}</div>')
+        if items:
+            sections.append(f'<div class="section"><h2 class="section-title">Links</h2>{"".join(items)}</div>')
 
+    # Additional
     if profile.additional:
         items = []
         for add in profile.additional:
             if add.title:
-                items.append('<strong>{title}:</strong> {desc}'.format(title=add.title, desc=add.description or ""))
+                items.append(f'<div class="additional-item"><strong>{add.title}:</strong> {add.description or ""}</div>')
             elif add.description:
-                items.append(add.description)
-        sections.append('<div class="section"><h2>Additional Information</h2><p>{items}</p></div>'.format(items="<br/>".join(items)))
+                items.append(f'<div class="additional-item">{add.description}</div>')
+        if items:
+            sections.append(f'<div class="section"><h2 class="section-title">Additional Information</h2>{"".join(items)}</div>')
 
-    html = """<!DOCTYPE html>
+    css = """
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 10pt;
+    line-height: 1.45;
+    color: #1e293b;
+    margin: 0;
+    padding: 32px 36px;
+}
+.header {
+    text-align: center;
+    margin-bottom: 6px;
+}
+.header h1 {
+    font-size: 20pt;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 0 0 2px 0;
+    letter-spacing: -0.01em;
+}
+.headline {
+    font-size: 11pt;
+    font-weight: 500;
+    color: #475569;
+    margin: 2px 0 0 0;
+}
+.contact {
+    text-align: center;
+    font-size: 9pt;
+    color: #64748b;
+    margin-bottom: 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e2e8f0;
+}
+.section {
+    margin-bottom: 12px;
+}
+.section-title {
+    font-size: 10.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #0f172a;
+    border-bottom: 1.5px solid #cbd5e1;
+    padding-bottom: 2px;
+    margin: 10px 0 6px 0;
+}
+.summary-text {
+    font-size: 9.5pt;
+    line-height: 1.5;
+    color: #334155;
+    margin: 3px 0 0 0;
+}
+.entry {
+    margin-bottom: 8px;
+}
+.entry-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 9.5pt;
+    margin-bottom: 2px;
+}
+.entry-title {
+    color: #0f172a;
+}
+.entry-meta {
+    font-size: 9pt;
+    color: #64748b;
+    float: right;
+}
+.bullet-list {
+    margin: 2px 0 4px 0;
+    padding-left: 18px;
+}
+.bullet-list li {
+    font-size: 9.5pt;
+    line-height: 1.45;
+    color: #334155;
+    margin-bottom: 2px;
+}
+.skill-row {
+    font-size: 9.5pt;
+    line-height: 1.5;
+    color: #334155;
+    margin-bottom: 3px;
+}
+.skill-row strong {
+    color: #0f172a;
+}
+.project-tech, .edu-detail, .lead-desc, .languages-list {
+    font-size: 9pt;
+    color: #475569;
+    margin: 2px 0 0 0;
+}
+.link-item, .additional-item {
+    font-size: 9pt;
+    color: #334155;
+    margin-bottom: 2px;
+}
+"""
+
+    html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
 <style>
-body {{ font-family: Arial, sans-serif; font-size: 11pt; line-height: 1.4; color: #222; margin: 0; padding: 40px; }}
-.header {{ text-align: center; margin-bottom: 16px; }}
-.header h1 {{ font-size: 22pt; margin: 0; }}
-.header p {{ font-size: 12pt; color: #555; margin: 4px 0 0; }}
-.contact {{ text-align: center; font-size: 10pt; color: #666; margin-bottom: 16px; }}
-.section {{ margin-bottom: 14px; }}
-.section h2 {{ font-size: 13pt; text-transform: uppercase; border-bottom: 1px solid #ccc; padding-bottom: 2px; margin: 0 0 6px; }}
-.item {{ margin-bottom: 8px; }}
-.item h3 {{ font-size: 11pt; margin: 0; }}
-.item .date {{ font-size: 10pt; color: #666; }}
-.item p {{ margin: 2px 0 0; font-size: 10pt; }}
-.skill-category {{ margin-bottom: 4px; font-size: 10pt; }}
+{css}
 </style>
 </head>
 <body>
-{content}
+{"".join(sections)}
 </body>
-</html>""".format(content="\n".join(sections))
+</html>"""
     return html
 
 

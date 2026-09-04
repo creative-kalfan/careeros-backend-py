@@ -215,10 +215,7 @@ async def set_master_version(
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
-    # Unset existing master
-    repo._client.table("resume_versions").update({"is_master": False}).eq("resume_id", row["resume_id"]).execute()
-    # Set new master
-    updated = repo.update_version(version_id, {"is_master": True})
+    updated = repo.set_master_version(row["resume_id"], version_id)
     return SuccessResponse(data=_to_version_response(updated))
 
 
@@ -271,7 +268,14 @@ async def apply_version_operation(
     scalar_sections = {"summary", "target_role"}
     if section in scalar_sections:
         if operation == "replace":
-            suggested = replacement.get("suggestedText") or replacement.get("suggested_text") or ""
+            suggested = (
+                replacement.get("suggestedText")
+                or replacement.get("suggested_text")
+                or replacement.get("text")
+                or (replacement if isinstance(replacement, str) else "")
+                or body.child_text
+                or ""
+            )
             if not suggested:
                 raise HTTPException(status_code=400, detail="replacement.suggestedText is required for summary replace")
             setattr(profile, section, suggested)
@@ -305,12 +309,19 @@ async def apply_version_operation(
                 raise HTTPException(status_code=404, detail="Version not found")
             return SuccessResponse(data=_to_version_response(updated))
         elif operation == "insert":
-            new_skill = body.child_text or replacement.get("suggestedText") or replacement.get("suggested_text")
+            new_skill = (
+                body.child_text
+                or replacement.get("suggestedText")
+                or replacement.get("suggested_text")
+                or replacement.get("skill")
+            )
             if isinstance(new_skill, str) and new_skill.strip():
                 if not profile.skills:
-                    profile.skills = SkillCategory(technical=[new_skill.strip()])
-                elif new_skill.strip() not in profile.skills.technical:
-                    profile.skills.technical.append(new_skill.strip())
+                    profile.skills = SkillCategory(technical=[])
+                skills_to_add = [s.strip() for s in new_skill.replace("\n", ",").split(",") if s.strip()]
+                for s in skills_to_add:
+                    if s not in profile.skills.technical:
+                        profile.skills.technical.append(s)
             content.profile = profile
             updated = repo.update_version(version_id, {"content": content.to_dict()})
             if not updated:
@@ -333,30 +344,52 @@ async def apply_version_operation(
         if idx is None:
             raise HTTPException(status_code=404, detail=f"Target {target_id} not found in section {section}")
 
-        # Child-level targeting: replace a specific bullet within an experience item
+        # Child-level targeting: replace a specific bullet within an experience or project item
         if body.child_id is not None:
             target_item = target_list[idx]
             responsibilities = getattr(target_item, "responsibilities", None)
-            if responsibilities is None:
-                raise HTTPException(status_code=400, detail=f"Section {section} does not support child targeting")
-            bullet_idx = next((i for i, b in enumerate(responsibilities) if getattr(b, "id", None) == body.child_id), None)
-            if bullet_idx is None:
-                raise HTTPException(status_code=404, detail=f"Bullet {body.child_id} not found in item {target_id}")
-            new_text = body.child_text or replacement.get("suggestedText") or replacement.get("suggested_text") or ""
+            new_text = (
+                body.child_text
+                or replacement.get("suggestedText")
+                or replacement.get("suggested_text")
+                or replacement.get("text")
+                or ""
+            )
             if not new_text:
                 raise HTTPException(status_code=400, detail="child_text or replacement.suggestedText is required for bullet replace")
-            responsibilities[bullet_idx] = BulletItem(id=body.child_id, text=new_text)
+
+            if responsibilities is not None:
+                bullet_idx = next((i for i, b in enumerate(responsibilities) if getattr(b, "id", None) == body.child_id), None)
+                if bullet_idx is None:
+                    # Try currentText matching fallback
+                    curr = (replacement.get("currentText") or replacement.get("current_text") or "").strip()
+                    if curr:
+                        bullet_idx = next((i for i, b in enumerate(responsibilities) if b.text.strip() == curr), None)
+                if bullet_idx is not None:
+                    responsibilities[bullet_idx] = BulletItem(id=responsibilities[bullet_idx].id, text=new_text)
+                else:
+                    responsibilities.append(BulletItem(id=body.child_id, text=new_text))
+            elif hasattr(target_item, "description"):
+                target_item.description = new_text
+            else:
+                raise HTTPException(status_code=400, detail=f"Section {section} does not support child targeting")
         else:
             item = target_list[idx]
+            clean_replacement = dict(replacement)
+            if hasattr(item, "description") and ("suggestedText" in clean_replacement or "suggested_text" in clean_replacement):
+                clean_replacement["description"] = clean_replacement.pop("suggestedText", None) or clean_replacement.pop("suggested_text", None)
             if hasattr(item, "model_copy"):
-                target_list[idx] = item.model_copy(update=replacement)
+                # Filter out keys not in model fields
+                valid_fields = set(item.model_fields.keys())
+                filtered = {k: v for k, v in clean_replacement.items() if k in valid_fields}
+                target_list[idx] = item.model_copy(update=filtered)
             elif isinstance(item, dict):
                 updated_item = dict(item)
-                updated_item.update(replacement)
+                updated_item.update(clean_replacement)
                 target_list[idx] = updated_item
             else:
                 updated_item = dict(item)
-                updated_item.update(replacement)
+                updated_item.update(clean_replacement)
                 target_list[idx] = updated_item
     elif operation == "insert":
         # Child-level insert: append a new bullet to an experience item

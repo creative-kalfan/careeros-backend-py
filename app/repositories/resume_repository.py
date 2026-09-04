@@ -340,6 +340,14 @@ class ResumeRepository:
         )
         return self._coerce_version_row(result.data)
 
+    def set_master_version(self, resume_id: str, version_id: str) -> dict[str, Any]:
+        """Safely unsets existing master version for a resume and sets the target version as master."""
+        self._client.table("resume_versions").update({"is_master": False}).eq("resume_id", resume_id).execute()
+        updated = self.update_version(version_id, {"is_master": True})
+        if not updated:
+            raise ValueError(f"Version {version_id} not found")
+        return updated
+
     def duplicate_version(self, version_id: str, new_name: str | None = None) -> dict[str, Any]:
         source = self.get_version(version_id)
         if not source:

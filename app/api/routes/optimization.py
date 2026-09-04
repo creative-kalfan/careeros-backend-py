@@ -65,14 +65,24 @@ def _apply_suggestion_to_content(
     """Apply an accepted suggestion to a copy of the resume content."""
     content = ResumeContent.from_dict(content.to_dict())
     suggestion_type = suggestion.get("type", "")
-    suggested_text = (edited_text or suggestion.get("suggested_text") or "").strip()
-    current_text = (suggestion.get("current_text") or "").strip()
+    suggested_text = (
+        edited_text
+        or suggestion.get("suggested_text")
+        or suggestion.get("suggestedText")
+        or suggestion.get("skill")
+        or ""
+    ).strip()
+    current_text = (
+        suggestion.get("current_text")
+        or suggestion.get("currentText")
+        or ""
+    ).strip()
 
-    if suggestion_type == "professional_summary":
+    if suggestion_type == "professional_summary" or suggestion.get("section") == "summary":
         if suggested_text:
             content.profile.summary = suggested_text
 
-    elif suggestion_type in ("experience_bullet", "project_bullet"):
+    elif suggestion_type in ("experience_bullet", "project_bullet") or suggestion.get("section") in ("experience", "projects"):
         section = suggestion.get("section") or (
             "experience" if suggestion_type == "experience_bullet" else "projects"
         )
@@ -110,11 +120,31 @@ def _apply_suggestion_to_content(
                         elif suggested_text:
                             entry.responsibilities.append(BulletItem(text=suggested_text))
                 else:
-                    if entry.description == current_text and suggested_text:
+                    if (not current_text or entry.description == current_text) and suggested_text:
+                        entry.description = suggested_text
+                    elif suggested_text:
                         entry.description = suggested_text
                 break
 
-    # skills_alignment and section_prioritization do not mutate content
+    elif suggestion_type in ("skills_alignment", "skills_alignment_llm") or suggestion.get("section") == "skills":
+        from app.models.resume import SkillCategory
+
+        if content.profile.skills is None:
+            content.profile.skills = SkillCategory()
+
+        skill_val = (
+            edited_text
+            or suggestion.get("suggested_text")
+            or suggestion.get("suggestedText")
+            or suggestion.get("skill")
+            or ""
+        ).strip()
+        if skill_val:
+            skills_to_add = [s.strip() for s in skill_val.replace("\n", ",").split(",") if s.strip()]
+            for s in skills_to_add:
+                if s not in content.profile.skills.technical:
+                    content.profile.skills.technical.append(s)
+
     return content
 
 
@@ -187,22 +217,37 @@ async def generate_optimizations(
         stored_suggestions = []
         for sug in result.suggestions:
             sug_id = str(uuid.uuid4())
+            entry_id = sug.get("entry_id") or sug.get("entryId")
+            child_id = sug.get("child_id") or sug.get("childId")
+            current_text = sug.get("current_text") or sug.get("currentText")
+            suggested_text = sug.get("suggested_text") or sug.get("suggestedText") or sug.get("skill")
+            affected_keywords = sug.get("affected_keywords") or sug.get("affectedKeywords", [])
+            priority = sug.get("priority", "medium")
+            action = sug.get("action", "replace")
+            status_val = sug.get("status", "pending")
+
             suggestion_obj = {
                 "id": sug_id,
                 "type": sug.get("type"),
-                "priority": sug.get("priority", "medium"),
+                "priority": priority,
                 "section": sug.get("section"),
-                "entry_id": sug.get("entry_id") or sug.get("entryId"),
-                "current_text": sug.get("currentText"),
-                "suggested_text": sug.get("suggestedText"),
+                "entry_id": entry_id,
+                "child_id": child_id,
+                "entryId": entry_id,
+                "childId": child_id,
+                "current_text": current_text,
+                "currentText": current_text,
+                "suggested_text": suggested_text,
+                "suggestedText": suggested_text,
                 "explanation": sug.get("explanation", ""),
                 "evidence": sug.get("evidence", []),
-                "affected_keywords": sug.get("affectedKeywords", []),
+                "affected_keywords": affected_keywords,
+                "affectedKeywords": affected_keywords,
                 "category": sug.get("category"),
-                "action": sug.get("action"),
+                "action": action,
                 "skill": sug.get("skill"),
                 "similar_in_resume": sug.get("similar_in_resume"),
-                "status": sug.get("status", "pending"),
+                "status": status_val,
                 "evidence_issues": sug.get("evidence_issues", []),
                 "created_at": now,
                 "updated_at": now,

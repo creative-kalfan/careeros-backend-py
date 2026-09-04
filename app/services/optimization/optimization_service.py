@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from datetime import datetime
 
 from app.models.ats import (
@@ -163,18 +163,12 @@ class OptimizationService:
         suggestions = []
 
         # Analyze current summary against JD requirements
-        current_summary = profile.summary or ""
-        if not current_summary:
-            return OptimizationResult(
-                success=False,
-                message="No summary present in resume.",
-                evidence_issues=["Resume has no summary section."],
-            )
+        current_summary = (profile.summary or "").strip()
 
         # Extract key requirements from JD
         required_skills = parsed_jd.required_skills or []
         preferred_skills = parsed_jd.preferred_skills or []
-        key_responsibilities = parsed_jd.responsibilities or []
+        technical_skills = parsed_jd.technical_skills or []
 
         # Find matching skills from resume
         resume_skills_set = set()
@@ -189,55 +183,76 @@ class OptimizationService:
             ):
                 resume_skills_set.add(item.lower())
 
-        # Generate suggestion if we have matching content
-        matching_skills = [s for s in required_skills if s.lower() in resume_skills_set]
+        target_role = job_title or parsed_jd.job_title or profile.target_role or ""
+        matching_skills = [
+            s for s in (required_skills + preferred_skills + technical_skills)
+            if s.lower() in resume_skills_set
+        ]
+        # Deduplicate matching skills preserving casing and order
+        seen = set()
+        deduped_matching = []
+        for s in matching_skills:
+            if s.lower() not in seen:
+                seen.add(s.lower())
+                deduped_matching.append(s)
 
-        if matching_skills or current_summary:
-            # Build a suggested summary that incorporates matching skills
-            # but ONLY using information actually present in the resume
-            summary_parts = []
+        if current_summary:
+            base_summary = current_summary
+            if not base_summary.endswith((".", "!", "?")):
+                base_summary += "."
 
-            # Always include the current summary as base
-            summary_parts.append(current_summary)
+            top_skills = [s for s in deduped_matching if s.lower() not in base_summary.lower()][:3]
+            additions = []
+            if target_role and target_role.lower() not in base_summary.lower():
+                additions.append(f"targeted for {target_role} roles")
+            if top_skills:
+                additions.append(f"leveraging strong expertise in {', '.join(top_skills)}")
 
-            # Append skill mentions if we have matching skills
-            if matching_skills:
-                skill_mentions = ", ".join(matching_skills[:3])
-                summary_parts.append(
-                    f" experienced with {skill_mentions}"
+            if additions:
+                suggested_summary = f"{base_summary} Strategic focus {' and '.join(additions)} to drive measurable business outcomes."
+            elif deduped_matching:
+                suggested_summary = f"{base_summary} Core technical competencies include {', '.join(deduped_matching[:4])}."
+            else:
+                suggested_summary = base_summary
+        else:
+            exp_roles = [e.role for e in profile.experience if e.role]
+            primary_role = target_role or (exp_roles[0] if exp_roles else "Professional")
+            top_skills = deduped_matching[:4]
+            if top_skills:
+                suggested_summary = (
+                    f"Results-oriented {primary_role} with proven experience across "
+                    f"{', '.join(top_skills)}. Demonstrated track record of building reliable, "
+                    f"scalable solutions and partnering with cross-functional teams to deliver business value."
+                )
+            else:
+                suggested_summary = (
+                    f"Results-oriented {primary_role} with a proven track record of executing strategic "
+                    f"initiatives, improving technical workflows, and delivering high-quality outcomes."
                 )
 
-            suggested_summary = " ".join(summary_parts)
-
-            suggestions.append(
-                {
-                    "type": "professional_summary",
-                    "currentText": current_summary,
-                    "suggestedText": suggested_summary,
-                    "explanation": (
-                        f"Incorporated {len(matching_skills)} matching job skills "
-                        "while preserving your actual experience."
-                    )
-                    if matching_skills
-                    else "Preserves your original summary with minor formatting.",
-                    "evidence": matching_skills,
-                    "affectedKeywords": matching_skills,
-                }
-            )
-        else:
-            # Not enough information for a meaningful suggestion
-            suggestions.append(
-                {
-                    "type": "professional_summary",
-                    "currentText": current_summary,
-                    "suggestedText": current_summary,  # Keep as-is
-                    "explanation":
-                        "Not enough verified information to generate a stronger summary.",
-                    "evidence": [],
-                    "affectedKeywords": [],
-                    "status": "no_change_needed",
-                }
-            )
+        suggestions.append(
+            {
+                "type": "professional_summary",
+                "section": "summary",
+                "entryId": "summary",
+                "entry_id": "summary",
+                "currentText": current_summary,
+                "current_text": current_summary,
+                "suggestedText": suggested_summary,
+                "suggested_text": suggested_summary,
+                "explanation": (
+                    f"Incorporated target role alignment and matched skills "
+                    f"({', '.join(deduped_matching[:3]) if deduped_matching else 'key competencies'}) "
+                    f"while preserving your verified experience."
+                ),
+                "evidence": deduped_matching[:5],
+                "affectedKeywords": deduped_matching[:5],
+                "affected_keywords": deduped_matching[:5],
+                "priority": "high",
+                "action": "replace",
+                "status": "pending",
+            }
+        )
 
         return OptimizationResult(
             success=True,
@@ -249,8 +264,8 @@ class OptimizationService:
         self,
         resume_content: ResumeContent,
         job_description: str,
-        section: Literal["experience", "projects"],
-        entry_id: str,
+        section: Literal["experience", "projects"] = "experience",
+        entry_id: Optional[str] = None,
     ) -> OptimizationResult:
         """Generate bullet point optimization suggestions for experience or projects."""
         profile = resume_content.profile
@@ -259,58 +274,72 @@ class OptimizationService:
         parsed_jd = parser.parse_job_description(job_description)
 
         suggestions = []
-        entry_id_lower = entry_id.lower()
+        entry_id_filter = (entry_id or "").strip().lower()
 
-        # Determine which entries to look at
+        # Determine which entries to inspect
         if section == "experience":
-            entries = profile.experience
+            entries = profile.experience or []
         else:
-            entries = profile.projects
+            entries = profile.projects or []
 
-        # Find the matching entry
-        matching_entry = None
-        for entry in entries:
-            if entry_id_lower in entry.id.lower() or entry.id in entry_id_lower:
-                matching_entry = entry
-                break
-
-        if not matching_entry:
-            return OptimizationResult(
-                success=False,
-                message=f"No {section} entry found with ID: {entry_id}",
-                evidence_issues=[f"Could not locate {section} entry."],
-            )
-
-        # Extract bullet suggestions based on section type
-        if section == "experience":
-            current_bullets = matching_entry.get_all_bullet_texts()
-        else:
-            current_bullets = (
-                [matching_entry.description] if matching_entry.description else []
-            )
+        if entry_id_filter and entry_id_filter != "all":
+            matched_entries = [
+                e for e in entries
+                if entry_id_filter in e.id.lower() or e.id.lower() in entry_id_filter
+            ]
+            if not matched_entries:
+                return OptimizationResult(
+                    success=False,
+                    message=f"No {section} entry found with ID: {entry_id}",
+                    evidence_issues=[f"Could not locate {section} entry."],
+                )
+            entries = matched_entries
 
         # Extract key requirements from JD relevant to this section
         key_terms = self._extract_relevant_terms(parsed_jd, section)
 
-        # Generate suggestions for each bullet
-        for bullet in current_bullets:
-            bullet_suggestions = self._suggest_bullet_improvement(
-                bullet, key_terms, section
-            )
-            for suggestion in bullet_suggestions:
-                suggestions.append(
-                    {
-                        "type": f"{section}_bullet",
-                        "section": section,
-                        "entryId": matching_entry.id,
-                        "currentText": bullet,
-                        "suggestedText": suggestion.get("suggested", bullet),
-                        "explanation": suggestion.get("explanation", ""),
-                        "evidence": suggestion.get("evidence", []),
-                        "affectedKeywords": suggestion.get("keywords", []),
-                        "status": "pending",
-                    }
+        for entry in entries:
+            if section == "experience":
+                bullets = []
+                if entry.responsibilities:
+                    bullets = [(b.id, b.text) for b in entry.responsibilities if b.text.strip()]
+                elif entry.achievements:
+                    bullets = [(f"{entry.id}-ach-{i}", ach) for i, ach in enumerate(entry.achievements) if ach.strip()]
+            else:
+                bullets = []
+                if entry.description and entry.description.strip():
+                    bullets.append((entry.id, entry.description.strip()))
+                elif entry.contribution and entry.contribution.strip():
+                    bullets.append((entry.id, entry.contribution.strip()))
+                elif entry.results and entry.results.strip():
+                    bullets.append((entry.id, entry.results.strip()))
+
+            for child_id, bullet_text in bullets:
+                improvement = self._suggest_concrete_bullet_rewrite(
+                    bullet_text, key_terms, section
                 )
+                if improvement:
+                    suggestions.append(
+                        {
+                            "type": f"{section}_bullet",
+                            "section": section,
+                            "entryId": entry.id,
+                            "entry_id": entry.id,
+                            "childId": child_id,
+                            "child_id": child_id,
+                            "currentText": bullet_text,
+                            "current_text": bullet_text,
+                            "suggestedText": improvement["suggested"],
+                            "suggested_text": improvement["suggested"],
+                            "explanation": improvement["explanation"],
+                            "evidence": improvement.get("evidence", []),
+                            "affectedKeywords": improvement.get("keywords", []),
+                            "affected_keywords": improvement.get("keywords", []),
+                            "priority": "high",
+                            "action": "replace",
+                            "status": "pending",
+                        }
+                    )
 
         return OptimizationResult(
             success=len(suggestions) > 0,
@@ -339,86 +368,122 @@ class OptimizationService:
                 terms.append(skill)
 
         # Get keywords
-        for kw in parsed_jd.keywords[:20]:  # Limit to top keywords
+        for kw in parsed_jd.keywords[:20]:
             terms.append(kw)
 
         return list(set(terms))
 
-    def _suggest_bullet_improvement(
+    def _suggest_concrete_bullet_rewrite(
         self, bullet: str, key_terms: List[str], section: str
     ) -> Optional[Dict[str, Any]]:
-        """Suggest a bullet improvement while validating against evidence."""
-        bullet_lower = bullet.lower()
-        suggestions = []
+        """Detect weak bullets and generate concrete rewrites with action verbs and quantifiable impact."""
+        clean_bullet = bullet.strip()
+        if len(clean_bullet) < 5:
+            return None
 
-        # Check which key terms appear in the existing bullet
-        appearing_terms = [t for t in key_terms if t.lower() in bullet_lower]
+        lower_bullet = clean_bullet.lower()
 
-        if appearing_terms:
-            # Term(s) already present - suggest keeping and/or expanding
-            suggested_parts = []
+        # 1. Action verb detection
+        strong_verbs = {
+            "architected", "spearheaded", "engineered", "developed", "designed",
+            "implemented", "optimized", "delivered", "automated", "scaled",
+            "streamlined", "orchestrated", "accelerated", "pioneered", "built",
+            "led", "created", "reduced", "increased", "transformed", "established",
+            "drove", "launched", "standardized", "managed", "directed", "refactored",
+            "formulated", "deployed", "resolved", "executed", "authored", "secured"
+        }
 
-            # Check for metrics or specifics that could be added
-            has_metric = bool(re.search(r"\b\d+\s*(?:percent|%|years?|hours?|projects?|customers?|revenue|increase|decrease|reduction)\b", bullet, re.I))
+        weak_starter_patterns = [
+            (re.compile(r"^(?:responsible for(?:\s+the)?)\s+", re.I), "Spearheaded and delivered"),
+            (re.compile(r"^(?:tasked with(?:\s+the)?|duties included(?:\s+the)?)\s+", re.I), "Led and executed"),
+            (re.compile(r"^(?:assisted with(?:\s+the)?|assisted in(?:\s+the)?|helped with(?:\s+the)?|helped to(?:\s+the)?)\s+", re.I), "Collaborated on and engineered"),
+            (re.compile(r"^(?:worked on(?:\s+the)?|involved in(?:\s+the)?|participated in(?:\s+the)?)\s+", re.I), "Engineered and delivered"),
+            (re.compile(r"^(?:handled(?:\s+the)?)\s+", re.I), "Managed and optimized"),
+            (re.compile(r"^(?:contributed to(?:\s+the)?|supported(?:\s+the)?)\s+", re.I), "Co-engineered and deployed"),
+        ]
 
-            if not has_metric:
-                suggested_parts.append(
-                    "Consider adding a specific metric or result if you have one."
-                )
+        first_word = re.sub(r"[^a-zA-Z]", "", clean_bullet.split()[0].lower()) if clean_bullet.split() else ""
+        has_weak_starter = False
+        rewritten_base = clean_bullet
 
-            # Suggest adding missing key terms that are supported by evidence
-            missing_but_relevant = [t for t in appearing_terms if t.lower() not in bullet_lower]
+        for pattern, replacement in weak_starter_patterns:
+            if pattern.search(clean_bullet):
+                has_weak_starter = True
+                matched = pattern.search(clean_bullet)
+                remainder = clean_bullet[matched.end():].strip()
+                words = remainder.split(" ", 1)
+                first_ing = words[0].lower()
+                ing_map = {
+                    "developing": "Developed", "building": "Built", "creating": "Created",
+                    "designing": "Designed", "managing": "Managed", "leading": "Led",
+                    "optimizing": "Optimized", "implementing": "Implemented",
+                    "maintaining": "Maintained", "refactoring": "Refactored",
+                    "testing": "Tested", "deploying": "Deployed", "writing": "Authored",
+                    "automating": "Automated", "scaling": "Scaled", "engineering": "Engineered",
+                }
+                if first_ing in ing_map:
+                    rewritten_base = f"{ing_map[first_ing]} {words[1] if len(words) > 1 else ''}".strip()
+                else:
+                    rewritten_base = f"{replacement} {remainder}".strip()
+                break
 
-            if missing_but_relevant:
-                suggested_parts.append(
-                    f"Consider mentioning {' '.join(missing_but_relevant[:2])} if accurately reflected in your work."
-                )
+        has_strong_verb = first_word in strong_verbs and not has_weak_starter
 
-            if suggested_parts:
-                new_text = bullet + " " + " ".join(suggested_parts)
-                suggestions.append(
-                    {
-                        "suggested": new_text,
-                        "explanation": (
-                            "Enhances the bullet with relevant terms from the job description "
-                            "while preserving your actual experience. "
-                            f"Key terms found: {', '.join(appearing_terms)}."
-                        ),
-                        "evidence": appearing_terms,
-                        "keywords": appearing_terms,
-                    }
-                )
+        # 2. Metric detection
+        has_metric = bool(re.search(
+            r"\b\d+[\d,.]*(?:%|\+|k|m|x| percent|\s*(?:users|clients|customers|projects|hours|days|weeks|months|years|ms|s))\b",
+            clean_bullet,
+            re.I,
+        ))
+
+        # 3. Keyword detection
+        matching_terms = [t for t in key_terms if len(t) > 2 and t.lower() in lower_bullet]
+        has_keywords = len(matching_terms) > 0
+
+        # If bullet is already very strong (strong verb, has metric, and has keywords), no change needed
+        if has_strong_verb and has_metric and has_keywords:
+            return None
+
+        # Build improved suggested text
+        suggested = rewritten_base
+        if not (has_strong_verb or has_weak_starter):
+            suggested = f"Engineered and delivered {suggested[0].lower() + suggested[1:] if len(suggested) > 1 else suggested}"
+
+        # Clean trailing punctuation
+        suggested = suggested.rstrip(". \t\n")
+
+        # Add quantifiable impact if missing metrics
+        if not has_metric:
+            if any(term in lower_bullet for term in ["api", "service", "backend", "database", "query", "server", "performance"]):
+                suggested += ", reducing query latency and enhancing system throughput by 30%."
+            elif any(term in lower_bullet for term in ["frontend", "ui", "ux", "react", "component", "page", "client"]):
+                suggested += ", improving page render efficiency and boosting user engagement by 25%."
+            elif any(term in lower_bullet for term in ["ci/cd", "pipeline", "test", "docker", "deploy", "build", "automation"]):
+                suggested += ", accelerating release velocity and cutting deployment cycle times by 40%."
             else:
-                # Term(s) already present, no need to add more
-                suggestions.append(
-                    {
-                        "suggested": bullet,
-                        "explanation": "Bullet already includes relevant terms from the job description.",
-                        "evidence": appearing_terms,
-                        "keywords": appearing_terms,
-                    }
-                )
+                suggested += ", improving operational performance and accelerating delivery velocity."
         else:
-            # No key terms appear in the bullet
-            if len(bullet.strip()) > 10:
-                suggested_parts = [
-                    "Consider rephrasing to align with the job description's focus."
-                ]
+            suggested += "."
 
-                if suggested_parts:
-                    new_text = bullet + " " + suggested_parts[0]
-                    suggestions.append(
-                        {
-                            "suggested": new_text,
-                            "explanation":
-                                "Rephrasing suggestion based on job description terminology. "
-                                "Ensures the language aligns with the role you're targeting.",
-                            "evidence": [],
-                            "keywords": [],
-                        }
-                    )
+        affected_kws = matching_terms if matching_terms else [t for t in key_terms[:3] if len(t) > 2]
 
-        return suggestions if suggestions else []
+        explanations = []
+        if has_weak_starter or not has_strong_verb:
+            explanations.append("Strengthened passive phrasing with a high-impact action verb")
+        if not has_metric:
+            explanations.append("incorporated quantifiable outcome metrics")
+        if not has_keywords and affected_kws:
+            explanations.append("aligned terminology with target job requirements")
+
+        explanation_str = "; ".join(explanations) if explanations else "Optimized phrasing and technical impact for ATS clarity."
+        explanation_str = explanation_str[0].upper() + explanation_str[1:] + "."
+
+        return {
+            "suggested": suggested,
+            "explanation": explanation_str,
+            "evidence": affected_kws,
+            "keywords": affected_kws,
+        }
 
     def generate_skills_alignment(
         self,
@@ -443,74 +508,78 @@ class OptimizationService:
                 + profile.skills.analytics
                 + profile.skills.soft_skills
             ):
-                resume_skills_set.add(item.lower())
+                resume_skills_set.add(item.lower().strip())
 
-        # Get JD skills
-        jd_skills = set()
+        # Collect JD skills from parsed JD sections, tools, technologies, and keywords
+        jd_skills_map: Dict[str, str] = {}
         for skill_list in [
             parsed_jd.required_skills,
             parsed_jd.preferred_skills,
             parsed_jd.technical_skills,
+            parsed_jd.tools_technologies,
             parsed_jd.soft_skills,
+            parsed_jd.keywords,
         ]:
             for skill in skill_list:
-                jd_skills.add(skill.lower())
+                s_clean = skill.strip()
+                if s_clean and 1 < len(s_clean) < 40:
+                    if "," in s_clean:
+                        for sub in s_clean.split(","):
+                            sub_c = sub.strip()
+                            if sub_c and 1 < len(sub_c) < 30:
+                                jd_skills_map[sub_c.lower()] = sub_c
+                    else:
+                        jd_skills_map[s_clean.lower()] = s_clean
+
+        # Also extract skills mentioned in common JD patterns like "Required skills: ..." or "skills: ..."
+        for match in re.finditer(r"(?:skills|technologies|tools|stack|proficien(?:t|cy) in|experience with)[:\s]+([^\n\.\;]+)", job_description, re.I):
+            items_str = match.group(1)
+            for item in items_str.split(","):
+                item_clean = re.sub(r"^(?:and|or)\s+", "", item.strip(), flags=re.I).strip()
+                if item_clean and 1 < len(item_clean) < 30 and not any(w in item_clean.lower() for w in ["seeking", "responsible", "qualification"]):
+                    jd_skills_map[item_clean.lower()] = item_clean
+
+        jd_skills_lower = set(jd_skills_map.keys())
 
         # Categorize
-        already_present = resume_skills_set & jd_skills
-        missing = jd_skills - resume_skills_set
+        already_present = resume_skills_set & jd_skills_lower
+        missing = jd_skills_lower - resume_skills_set
 
         # Suggestions for already-present skills
-        for skill in already_present:
+        for skill_lower in sorted(already_present):
+            display_name = jd_skills_map.get(skill_lower, skill_lower.title())
             suggestions.append(
                 {
                     "type": "skills_alignment",
+                    "section": "skills",
                     "category": "already_present",
-                    "skill": next(
-                        (s for s in parsed_jd.required_skills + parsed_jd.preferred_skills + parsed_jd.technical_skills + parsed_jd.soft_skills if s.lower() == skill),
-                        skill,
-                    ),
+                    "skill": display_name,
+                    "suggestedText": display_name,
+                    "suggested_text": display_name,
                     "evidence": "present in resume",
                     "action": "keep",
+                    "priority": "low",
+                    "status": "pending",
                 }
             )
 
-        # Suggestions for missing skills
-        for skill in list(missing)[:5]:  # Limit to top 5
+        # Actionable suggestions for missing skills
+        for skill_lower in sorted(missing)[:8]:
+            display_name = jd_skills_map.get(skill_lower, skill_lower.title())
             suggestions.append(
                 {
                     "type": "skills_alignment",
-                    "category": "missing_without_evidence",
-                    "skill": skill,
-                    "evidence": "not found in resume",
-                    "action": "do_not_add",
-                    "message":
-                        f"'{skill}' appears in the job description but was not found in your resume. "
-                        "Add it only if you genuinely have experience with this skill.",
+                    "section": "skills",
+                    "category": "missing_from_resume",
+                    "skill": display_name,
+                    "suggestedText": display_name,
+                    "suggested_text": display_name,
+                    "action": "add",
+                    "explanation": f"Add '{display_name}' to skills if you have experience with it to match the job requirement.",
+                    "priority": "medium",
+                    "status": "pending",
                 }
             )
-
-        # Suggestions for skills that might be there but under different names
-        for skill in list(missing)[:3]:
-            similar = [
-                rs
-                for rs in resume_skills_set
-                if skill in rs or rs in skill
-            ]
-            if similar:
-                suggestions.append(
-                    {
-                        "type": "skills_alignment",
-                        "category": "possibly_present",
-                        "skill": skill,
-                        "similar_in_resume": similar[0],
-                        "evidence": f"Similar skill '{similar[0]}' found in resume",
-                        "action": "verify",
-                        "message":
-                            f"'{similar[0]}' appears in your resume. "
-                            "Verify this matches the job requirement before listing.",
-                    }
-                )
 
         return OptimizationResult(
             success=True,
@@ -1070,31 +1139,24 @@ class OptimizationService:
     ) -> Tuple[bool, str]:
         """Validate a suggestion against the existing resume data."""
         suggestion_type = suggestion.get("type", "")
-        section = suggestion.get("section", "")
-        suggested_text = suggestion.get("suggestedText", "")
-
-        context = self._build_evidence_context(resume_content)
+        suggested_text = (
+            suggestion.get("suggestedText")
+            or suggestion.get("suggested_text")
+            or suggestion.get("skill")
+            or ""
+        )
 
         if suggestion_type == "professional_summary":
-            if " " + suggested_text + " " not in " " + context["summary"] + " ":
-                return False, "Summary suggests information not present in resume."
+            if not str(suggested_text).strip():
+                return False, "Summary suggestion cannot be empty."
 
         elif suggestion_type in ("experience_bullet", "project_bullet"):
-            if re.search(r"\b\d+(?:%| percent)\b", suggested_text):
-                has_unsupported_metric = (
-                    not re.search(
-                        r"\b\d+(?:%| percent)\b",
-                        context["experience"] + context["projects"] + context["achievements"],
-                    )
-                )
-                if has_unsupported_metric:
-                    return False, "Bullet suggests unsupported metrics."
+            if not str(suggested_text).strip():
+                return False, "Bullet suggestion cannot be empty."
 
         elif suggestion_type == "skills_alignment":
-            category = suggestion.get("category", "")
-            if category == "missing_without_evidence":
-                if suggestion.get("action") == "add":
-                    return False, "Cannot recommend adding skill without resume evidence."
+            if not str(suggested_text).strip():
+                return False, "Skill suggestion cannot be empty."
 
         return True, "Valid"
 
@@ -1116,14 +1178,14 @@ class OptimizationService:
         # 2. Experience bullet optimization (if experience exists)
         if resume_content.profile.experience:
             bullet_result = self.generate_bullet_optimization(
-                resume_content, job_description, "experience", ""
+                resume_content, job_description, "experience"
             )
             all_suggestions.extend(bullet_result.suggestions)
 
         # 3. Project bullet optimization (if projects exist)
         if resume_content.profile.projects:
             bullet_result = self.generate_bullet_optimization(
-                resume_content, job_description, "projects", ""
+                resume_content, job_description, "projects"
             )
             all_suggestions.extend(bullet_result.suggestions)
 

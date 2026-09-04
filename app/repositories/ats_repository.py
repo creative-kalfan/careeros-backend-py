@@ -31,6 +31,7 @@ class ATSReportRepository:
         data = {
             "id": report.id,
             "resume_id": report.resume_id,
+            "version_id": report.version_id,
             "job_title": report.job_title,
             "company": report.company,
             "job_description": report.job_description,
@@ -77,6 +78,7 @@ class ATSReportRepository:
         return ATSAnalysisReport(
             id=row["id"],
             resume_id=row["resume_id"],
+            version_id=row.get("version_id"),
             job_title=row.get("job_title"),
             company=row.get("company"),
             job_description=row["job_description"],
@@ -116,6 +118,7 @@ class ATSReportRepository:
             reports.append(ATSAnalysisReport(
                 id=row["id"],
                 resume_id=row["resume_id"],
+                version_id=row.get("version_id"),
                 job_title=row.get("job_title"),
                 company=row.get("company"),
                 job_description=row["job_description"],
