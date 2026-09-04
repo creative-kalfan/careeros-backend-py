@@ -46,81 +46,138 @@ class PageLayout:
             self.parse_notes = []
 
 
-def detect_columns(blocks: List[DocumentBlock], page_width: float) -> List[Column]:
+def detect_columns(
+    blocks: List[DocumentBlock],
+    page_width: float,
+    page_height: Optional[float] = None,
+) -> List[Column]:
     """
-    Detect column boundaries from block x-positions.
-    
-    Uses block center x-positions to identify distinct vertical columns.
+    Detect column boundaries from block positions.
+
+    Hardened against:
+    - Spanning headers/full-width blocks (width > 0.65 * page_width)
+    - Right-aligned dates and narrow contact pills
+    - False positives requiring >= 2 blocks spanning > 20% vertical space
     """
     if not blocks:
         return []
 
-    # Collect block center x positions
-    x_positions = []
-    for block in blocks:
-        center_x = (block.x0 + block.x1) / 2
-        x_positions.append(center_x)
+    effective_height = page_height or max((b.y1 for b in blocks), default=792.0)
+    spanning_threshold = 0.65 * page_width
 
-    if not x_positions:
-        return []
+    # Filter out spanning blocks from defining columns
+    non_spanning_blocks = [b for b in blocks if (b.x1 - b.x0) <= spanning_threshold]
 
-    # Cluster x-positions using simple threshold
-    # Sort positions
-    x_positions = sorted(set(round(x, 1) for x in x_positions))
-    
-    # Find gaps between clusters
+    # Filter out narrow pills (dates, tags, single-line short snippets)
+    # A block is considered defining if it has multi-line content or substantial width/text
+    def is_defining_block(b: DocumentBlock) -> bool:
+        width = b.x1 - b.x0
+        if len(b.lines) >= 2:
+            return True
+        if width > 0.15 * page_width and len(b.text.strip()) > 20:
+            return True
+        return False
+
+    defining_blocks = [b for b in non_spanning_blocks if is_defining_block(b)]
+
+    # If we don't have enough defining blocks for multiple columns (at least 2 per col)
+    if len(defining_blocks) < 4:
+        min_x0 = min(b.x0 for b in blocks)
+        max_x1 = max(b.x1 for b in blocks)
+        return [Column(x0=max(0.0, min_x0 - 10), x1=min(page_width, max_x1 + 10))]
+
+    # Cluster x-positions (using block left edges x0 with fallback to centers)
+    x0_positions = sorted(set(round(b.x0, 1) for b in defining_blocks))
     clusters = []
-    current_cluster = [x_positions[0]]
-    
-    for i in range(1, len(x_positions)):
-        gap = x_positions[i] - x_positions[i - 1]
-        # If gap is large (> 50 points), it's a new column
-        if gap > 50:
-            clusters.append(current_cluster)
-            current_cluster = [x_positions[i]]
+    curr = [x0_positions[0]]
+    for i in range(1, len(x0_positions)):
+        gap = x0_positions[i] - x0_positions[i - 1]
+        if gap > 60:
+            clusters.append(curr)
+            curr = [x0_positions[i]]
         else:
-            current_cluster.append(x_positions[i])
-    
-    if current_cluster:
-        clusters.append(current_cluster)
+            curr.append(x0_positions[i])
+    if curr:
+        clusters.append(curr)
 
-    # Convert clusters to columns - use min/max of block bounds for column bounds
-    columns = []
+    # Fallback to center-x clustering if x0 clustering produced only 1 cluster
+    if len(clusters) < 2:
+        centers = sorted(set(round((b.x0 + b.x1) / 2, 1) for b in defining_blocks))
+        clusters = []
+        curr = [centers[0]]
+        for i in range(1, len(centers)):
+            gap = centers[i] - centers[i - 1]
+            if gap > 60:
+                clusters.append(curr)
+                curr = [centers[i]]
+            else:
+                curr.append(centers[i])
+        if curr:
+            clusters.append(curr)
+
+    if len(clusters) < 2:
+        min_x0 = min(b.x0 for b in blocks)
+        max_x1 = max(b.x1 for b in blocks)
+        return [Column(x0=max(0.0, min_x0 - 10), x1=min(page_width, max_x1 + 10))]
+
+    # Validate candidate columns: require >= 2 blocks spanning > 20% vertical space
+    candidate_cols = []
     for cluster in clusters:
-        # Find blocks whose centers fall in this cluster (with rounding)
-        cluster_blocks = []
-        for b in blocks:
-            center_x = round((b.x0 + b.x1) / 2, 1)
-            if center_x in cluster:
-                cluster_blocks.append(b)
+        cluster_blocks = [
+            b for b in defining_blocks
+            if round(b.x0, 1) in cluster or round((b.x0 + b.x1) / 2, 1) in cluster
+        ]
         if not cluster_blocks:
             continue
-        x0 = min(b.x0 for b in cluster_blocks)
-        x1 = max(b.x1 for b in cluster_blocks)
-        # Add some padding
-        x0 = max(0, x0 - 10)
-        x1 = min(page_width, x1 + 10)
-        columns.append(Column(x0=x0, x1=x1))
+        col_x0 = max(0.0, min(b.x0 for b in cluster_blocks) - 10)
+        col_x1 = min(page_width, max(b.x1 for b in cluster_blocks) + 10)
+        v_span = max(b.y1 for b in cluster_blocks) - min(b.y0 for b in cluster_blocks)
 
-    # Filter out very narrow columns (likely artifacts)
-    columns = [c for c in columns if c.width > 80]
+        if len(cluster_blocks) >= 2 and v_span >= 0.20 * effective_height and (col_x1 - col_x0) > 80:
+            candidate_cols.append(Column(x0=col_x0, x1=col_x1))
 
-    return columns
+    # Multi-column classification requires at least 2 valid columns
+    if len(candidate_cols) >= 2:
+        candidate_cols.sort(key=lambda c: c.x0)
+        return candidate_cols
+
+    # Fallback to single column
+    min_x0 = min(b.x0 for b in blocks)
+    max_x1 = max(b.x1 for b in blocks)
+    return [Column(x0=max(0.0, min_x0 - 10), x1=min(page_width, max_x1 + 10))]
 
 
 def assign_blocks_to_columns(blocks: List[DocumentBlock], columns: List[Column]) -> List[Column]:
-    """Assign blocks to their respective columns based on x-position."""
+    """Assign blocks to their respective columns based on position."""
+    if not columns:
+        return []
+
+    # Reset existing blocks
+    for col in columns:
+        col.blocks = []
+
+    # If single column, assign all blocks sorted top-to-bottom
+    if len(columns) == 1:
+        columns[0].blocks = sorted(blocks, key=lambda b: (b.y0, b.x0))
+        return columns
+
+    # Multi-column: assign each block to best column
     for block in blocks:
+        block_width = block.x1 - block.x0
         block_center_x = (block.x0 + block.x1) / 2
+
+        # Spanning blocks assigned to first column so they remain at top/proper order
+        if block_width > 0.65 * (columns[-1].x1 - columns[0].x0):
+            columns[0].blocks.append(block)
+            continue
+
         best_column = None
         best_distance = float("inf")
 
         for col in columns:
-            # Check if block center falls within column
             if col.x0 <= block_center_x <= col.x1:
                 best_column = col
                 break
-            # Otherwise find closest column
             dist = min(abs(block_center_x - col.x0), abs(block_center_x - col.x1))
             if dist < best_distance:
                 best_distance = dist
@@ -131,7 +188,7 @@ def assign_blocks_to_columns(blocks: List[DocumentBlock], columns: List[Column])
 
     # Sort blocks within each column by y-position (top to bottom)
     for col in columns:
-        col.blocks.sort(key=lambda b: b.y0)
+        col.blocks.sort(key=lambda b: (b.y0, b.x0))
 
     return columns
 
@@ -166,8 +223,8 @@ def detect_page_layout(
         font_sizes.sort()
         body_font_size = font_sizes[len(font_sizes) // 2]
 
-    # Detect columns
-    columns = detect_columns(blocks, page_width)
+    # Detect columns with hardened vertical space checks
+    columns = detect_columns(blocks, page_width, page_height)
     columns = assign_blocks_to_columns(blocks, columns)
 
     is_multi_column = len(columns) > 1
@@ -212,50 +269,80 @@ def reconstruct_reading_order(page_layout: PageLayout) -> List[DocumentBlock]:
     return ordered_blocks
 
 
-def extract_spans_from_pdf(page) -> List[DocumentSpan]:
-    """Extract spans from a PDF page using get_text('dict')."""
-    spans = []
+def extract_blocks_from_pdf_page(page) -> Tuple[List[DocumentSpan], List[DocumentBlock]]:
+    """Extract spans and structured blocks directly from PyMuPDF's get_text('dict')."""
+    spans: List[DocumentSpan] = []
+    blocks: List[DocumentBlock] = []
     text_dict = page.get_text("dict")
-    
-    for block in text_dict.get("blocks", []):
-        if "lines" not in block:
+
+    for b_dict in text_dict.get("blocks", []):
+        if "lines" not in b_dict:
             continue
-        for line in block["lines"]:
-            for span in line.get("spans", []):
-                text = span.get("text", "")
+        block_lines: List[DocumentLine] = []
+        for l_dict in b_dict["lines"]:
+            line_spans: List[DocumentSpan] = []
+            for s_dict in l_dict.get("spans", []):
+                text = s_dict.get("text", "")
                 if not text.strip():
                     continue
-                
-                bbox = span.get("bbox", [0, 0, 0, 0])
-                font_size = span.get("size", 0)
-                flags = span.get("flags", 0)
-                font_name = span.get("font", "")
-                color = span.get("color", 0)
-                
-                # Check bold flag (bit 16 = 2^4 = 16)
-                bold = bool(flags & 16)
-                # Check italic flag (bit 2 = 2^1 = 2) 
-                italic = bool(flags & 2)
-                
-                spans.append(DocumentSpan(
+                bbox = s_dict.get("bbox", [0, 0, 0, 0])
+                flags = s_dict.get("flags", 0)
+                origin = s_dict.get("origin", None)
+                span = DocumentSpan(
                     text=text,
                     page=page.number,
                     x0=bbox[0],
                     y0=bbox[1],
                     x1=bbox[2],
                     y1=bbox[3],
-                    font_size=font_size,
-                    bold=bold,
-                    italic=italic,
-                    font_name=font_name,
-                    color=color,
-                ))
-    
+                    font_size=s_dict.get("size", 0),
+                    bold=bool(flags & 16),
+                    italic=bool(flags & 2),
+                    font_name=s_dict.get("font", ""),
+                    color=s_dict.get("color", 0),
+                    flags=flags,
+                    origin=list(origin) if origin else None,
+                )
+                line_spans.append(span)
+                spans.append(span)
+
+            if line_spans:
+                line_spans.sort(key=lambda s: s.x0)
+                block_lines.append(
+                    DocumentLine(
+                        spans=line_spans,
+                        page=page.number,
+                        x0=min(s.x0 for s in line_spans),
+                        y0=min(s.y0 for s in line_spans),
+                        x1=max(s.x1 for s in line_spans),
+                        y1=max(s.y1 for s in line_spans),
+                    )
+                )
+
+        if block_lines:
+            block_lines.sort(key=lambda l: l.y0)
+            blocks.append(
+                DocumentBlock(
+                    lines=block_lines,
+                    page=page.number,
+                    x0=min(l.x0 for l in block_lines),
+                    y0=min(l.y0 for l in block_lines),
+                    x1=max(l.x1 for l in block_lines),
+                    y1=max(l.y1 for l in block_lines),
+                )
+            )
+
+    return spans, blocks
+
+
+def extract_spans_from_pdf(page) -> List[DocumentSpan]:
+    """Extract spans from a PDF page using get_text('dict')."""
+    spans, _ = extract_blocks_from_pdf_page(page)
     return spans
 
 
 def group_spans_into_lines(spans: List[DocumentSpan], y_tolerance: float = 3.0) -> List[DocumentLine]:
-    """Group spans into lines based on y-position."""
+    """Group spans into lines based on y-position and horizontal continuity."""
     if not spans:
         return []
 
@@ -267,8 +354,13 @@ def group_spans_into_lines(spans: List[DocumentSpan], y_tolerance: float = 3.0) 
     current_y = spans[0].y0
 
     for span in spans[1:]:
-        # Check if on same page and similar y-position
-        if span.page == current_line_spans[0].page and abs(span.y0 - current_y) <= y_tolerance:
+        h_gap = span.x0 - current_line_spans[-1].x1
+        # Same line requires same page, close vertical position, and reasonable horizontal continuity
+        if (
+            span.page == current_line_spans[0].page
+            and abs(span.y0 - current_y) <= y_tolerance
+            and -2.0 <= h_gap <= 25.0
+        ):
             current_line_spans.append(span)
         else:
             # Finalize current line

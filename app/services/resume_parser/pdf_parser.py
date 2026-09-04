@@ -12,6 +12,7 @@ from .layout import (
     DocumentBlock,
     PageLayout,
     detect_page_layout,
+    extract_blocks_from_pdf_page,
     extract_spans_from_pdf,
     group_lines_into_blocks,
     group_spans_into_lines,
@@ -33,6 +34,7 @@ class PDFParser:
         """Parse a PDF file and return structured resume data."""
         self.parse_notes = []
         
+        doc = None
         try:
             doc = fitz.open(file_path)
             logger.info("PDF opened: %s pages", len(doc))
@@ -42,19 +44,11 @@ class PDFParser:
             raw_text_parts: List[str] = []
 
             for page in doc:
-                # Extract spans with position/style info
-                spans = extract_spans_from_pdf(page)
-                
+                # Extract spans and structured blocks with layout awareness
+                spans, blocks = extract_blocks_from_pdf_page(page)
+
                 if self.debug:
                     self.parse_notes.append(f"Page {page.number + 1}: extracted {len(spans)} spans")
-
-                # Group into lines
-                lines = group_spans_into_lines(spans)
-                
-                # Group into blocks
-                blocks = group_lines_into_blocks(lines)
-                
-                if self.debug:
                     self.parse_notes.append(f"Page {page.number + 1}: {len(blocks)} blocks")
 
                 # Detect page layout
@@ -74,8 +68,6 @@ class PDFParser:
                 # Also get simple text for fallback
                 raw_text_parts.append(page.get_text())
 
-            doc.close()
-
             raw_text = "\n".join(raw_text_parts)
 
             if not all_blocks:
@@ -86,14 +78,39 @@ class PDFParser:
                     debug_info={"parse_notes": self.parse_notes} if self.debug else None,
                 )
 
+            # Detect sections
+            from .geometry import extract_document_geometry
+            from .section_detector import detect_sections
+
+            sections, section_notes = detect_sections(all_blocks, page_layouts)
+            self.parse_notes.extend(section_notes)
+
+            # Extract document geometry
+            geometry_map = extract_document_geometry(
+                doc=doc,
+                all_blocks=all_blocks,
+                page_layouts=page_layouts,
+                detected_sections=sections,
+            )
+            geometry_dict = geometry_map.to_dict()
+
             # Parse structured content
-            parsed = self._parse_structured(all_blocks, page_layouts, raw_text)
+            parsed = self._parse_structured(
+                blocks=all_blocks,
+                page_layouts=page_layouts,
+                raw_text=raw_text,
+                sections=sections,
+            )
+
+            debug_info = {"parse_notes": self.parse_notes} if self.debug else {}
+            debug_info["geometry"] = geometry_dict
 
             return ParseResult(
                 status="completed",
                 parsed=parsed,
                 raw_text=raw_text,
-                debug_info={"parse_notes": self.parse_notes} if self.debug else None,
+                debug_info=debug_info,
+                geometry=geometry_dict,
             )
 
         except Exception as e:
@@ -104,12 +121,19 @@ class PDFParser:
                 raw_text="",
                 debug_info={"parse_notes": self.parse_notes} if self.debug else None,
             )
+        finally:
+            if doc is not None:
+                try:
+                    doc.close()
+                except Exception:
+                    pass
 
     def _parse_structured(
         self,
         blocks: List[DocumentBlock],
         page_layouts: List[PageLayout],
         raw_text: str,
+        sections: Optional[List[Any]] = None,
     ) -> ParsedResume:
         """Parse structured content from blocks."""
         from .section_detector import detect_sections, get_section_blocks
@@ -126,9 +150,10 @@ class PDFParser:
             parse_summary,
         )
 
-        # Detect sections
-        sections, section_notes = detect_sections(blocks, page_layouts)
-        self.parse_notes.extend(section_notes)
+        # Detect sections if not already provided
+        if sections is None:
+            sections, section_notes = detect_sections(blocks, page_layouts)
+            self.parse_notes.extend(section_notes)
 
         # Extract contact from header area (first page, top blocks)
         contact = extract_contact_from_blocks(blocks)

@@ -35,6 +35,7 @@ class ParseResult:
     content: dict[str, Any]
     extracted: dict[str, int]
     error: Optional[str] = None
+    geometry: Optional[dict[str, Any]] = None
 
 
 class ResumeParsingService:
@@ -61,7 +62,13 @@ class ResumeParsingService:
             )
 
         # Convert to ResumeContent (existing schema)
-        resume_content = self.parser.parse_to_resume_content(file_path, filename)
+        from .resume_parser.adapters import parsed_resume_to_resume_content
+
+        resume_content = (
+            parsed_resume_to_resume_content(result.parsed)
+            if result.parsed
+            else self.parser.parse_to_resume_content(file_path, filename)
+        )
         
         # Count extracted items
         extracted = self._count_extracted(resume_content)
@@ -72,6 +79,7 @@ class ResumeParsingService:
             status="completed",
             content=resume_content.to_dict(),
             extracted=extracted,
+            geometry=result.geometry,
         )
 
     def _count_extracted(self, content: ResumeContent) -> dict[str, int]:

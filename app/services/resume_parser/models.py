@@ -21,6 +21,8 @@ class DocumentSpan:
     italic: bool = False
     font_name: str = ""
     color: int = 0
+    flags: int = 0
+    origin: Optional[list[float]] = None
 
 
 @dataclass
@@ -191,3 +193,4 @@ class ParseResult:
     error: Optional[str] = None
     raw_text: str = ""
     debug_info: Optional[dict[str, Any]] = None
+    geometry: Optional[dict[str, Any]] = None

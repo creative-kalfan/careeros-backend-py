@@ -102,12 +102,16 @@ async def parse_resume_job(
         parse_result: ParseResult = await parser.parse_file(temp_path, filename)
 
         if parse_result.status == "completed":
+            meta_payload: dict[str, Any] = {"parse_error": None}
+            if parse_result.geometry:
+                meta_payload["geometry"] = parse_result.geometry
+
             repo.update_resume(
                 user_id,
                 resume_id,
                 {
                     "content": parse_result.content,
-                    "meta": {"parse_error": None},
+                    "meta": meta_payload,
                     "parse_status": "completed",
                 },
             )
@@ -116,6 +120,7 @@ async def parse_resume_job(
                 content=parse_result.content,
                 version_name="v1",
                 source="upload_parse",
+                meta={"geometry": parse_result.geometry} if parse_result.geometry else {},
             )
             logger.info("PARSE JOB COMPLETED resume_id=%s", resume_id)
         else:
