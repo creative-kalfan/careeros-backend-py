@@ -268,21 +268,44 @@ def _compute_char_limit(block: DocumentBlock, style: GeometryStyle) -> int:
 
 def extract_document_geometry(
     doc: Any,  # fitz.Document
-    all_blocks: List[DocumentBlock],
-    page_layouts: List[PageLayout],
-    detected_sections: List[DetectedSection],
+    all_blocks: Optional[List[DocumentBlock]] = None,
+    page_layouts: Optional[List[PageLayout]] = None,
+    detected_sections: Optional[List[DetectedSection]] = None,
 ) -> DocumentGeometryMap:
     """Extract full document geometry map from parsed document and layout structures.
 
     Args:
         doc: PyMuPDF Document instance.
-        all_blocks: Flattened list of DocumentBlock instances across all pages.
-        page_layouts: List of PageLayout instances for each page.
-        detected_sections: List of DetectedSection instances from section detector.
+        all_blocks: Flattened list of DocumentBlock instances across all pages (optional).
+        page_layouts: List of PageLayout instances for each page (optional).
+        detected_sections: List of DetectedSection instances from section detector (optional).
 
     Returns:
         DocumentGeometryMap containing pages, columns, blocks, lines, spans, styles.
     """
+    if all_blocks is None or page_layouts is None:
+        from .layout import detect_page_layout, extract_blocks_from_pdf_page, reconstruct_reading_order
+
+        all_blocks = []
+        page_layouts = []
+        if doc is not None:
+            for page in doc:
+                _, blocks = extract_blocks_from_pdf_page(page)
+                layout = detect_page_layout(
+                    blocks,
+                    page_num=page.number,
+                    page_width=page.rect.width,
+                    page_height=page.rect.height,
+                )
+                page_layouts.append(layout)
+                ordered_blocks = reconstruct_reading_order(layout)
+                all_blocks.extend(ordered_blocks)
+
+    if detected_sections is None:
+        from .section_detector import detect_sections
+
+        detected_sections, _ = detect_sections(all_blocks, page_layouts)
+
     # 1. Map blocks to detected sections
     block_section_map: Dict[int, str] = {}
     for sec in detected_sections:

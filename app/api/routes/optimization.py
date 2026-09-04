@@ -715,8 +715,9 @@ async def accept_suggestion(
         if version_id:
             repo.update_version(version_id, {"content": updated_content.to_dict()})
         else:
-            repo.update_resume(
-                current_user.user.id, session["resume_id"], {"content": updated_content.to_dict()}
+            logger.info(
+                "Master resume is immutable (AGENTS.md Section 5.5); skipping update_resume for resume_id=%s",
+                session.get("resume_id"),
             )
 
         # Update session counters using the authenticated (RLS) client.

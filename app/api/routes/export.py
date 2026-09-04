@@ -43,11 +43,27 @@ async def export_version_pdf(
     content = ResumeContent.from_dict(version.get("content") or {})
     template = version.get("template", "minimal")
 
-    try:
-        pdf_bytes = export_service.export_pdf(content, template)
-    except Exception as exc:
-        logger.error("PDF export failed: %s", exc)
-        raise HTTPException(status_code=500, detail="Unable to generate your resume.") from exc
+    storage_path = (version.get("meta") or {}).get("storage_path") or resume.get("storage_path")
+    pdf_bytes = None
+
+    if storage_path:
+        try:
+            from app.db.supabase import get_authenticated_client, get_service_client
+            try:
+                storage_client = get_authenticated_client(auth.jwt)
+                pdf_bytes = storage_client.storage.from_("resumes").download(storage_path)
+            except Exception:
+                storage_client = get_service_client()
+                pdf_bytes = storage_client.storage.from_("resumes").download(storage_path)
+        except Exception as exc:
+            logger.warning("Failed to fetch PDF from storage %s: %s; falling back to template renderer", storage_path, exc)
+
+    if not pdf_bytes:
+        try:
+            pdf_bytes = export_service.export_pdf(content, template)
+        except Exception as exc:
+            logger.error("PDF export failed: %s", exc)
+            raise HTTPException(status_code=500, detail="Unable to generate your resume.") from exc
 
     name = _sanitize_filename(version.get("version_name") or resume.get("title", "resume"))
     filename = "{name}.pdf".format(name=name)

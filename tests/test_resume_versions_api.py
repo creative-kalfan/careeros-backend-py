@@ -264,3 +264,64 @@ def test_ats_repository_version_id_handling():
     assert len(reports) == 1
     assert reports[0].version_id == "ver-42"
 
+
+def test_mutate_pdf_api_success(client):
+    """Verify POST /api/resumes/{resume_id}/versions/{version_id}/mutate-pdf calls PDFMutationEngine and derives version."""
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_textbox(fitz.Rect(54, 50, 400, 80), "ALEX MORGAN", fontsize=16, fontname="helv")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    mock_resume = {
+        "id": TEST_RESUME_ID,
+        "user_id": TEST_USER_ID,
+        "title": "Master Resume",
+        "storage_path": f"{TEST_USER_ID}/master.pdf",
+        "content": {"profile": {"personal": {"full_name": "ALEX MORGAN"}}},
+    }
+    mock_version = {
+        "id": TEST_VERSION_ID,
+        "resume_id": TEST_RESUME_ID,
+        "version_name": "Initial Version",
+        "source": "manual",
+        "content": {"profile": {"personal": {"full_name": "ALEX MORGAN"}}},
+        "meta": {"storage_path": f"{TEST_USER_ID}/master.pdf"},
+    }
+    mock_created_version = {
+        "id": "new-version-uuid",
+        "resume_id": TEST_RESUME_ID,
+        "version_name": "Initial Version (Edited)",
+        "source": "pdf_edit",
+        "content": {"profile": {"personal": {"full_name": "JORDAN TAYLOR"}}},
+        "meta": {"storage_path": f"{TEST_USER_ID}/versions/new-vid.pdf"},
+    }
+
+    mock_storage = MagicMock()
+    mock_bucket = MagicMock()
+    mock_bucket.download.return_value = pdf_bytes
+    mock_bucket.upload.return_value = MagicMock()
+    mock_storage.storage.from_.return_value = mock_bucket
+
+    with patch.object(ResumeRepository, "get_resume", return_value=mock_resume), \
+         patch.object(ResumeRepository, "get_version", return_value=mock_version), \
+         patch.object(ResumeRepository, "create_version", return_value=mock_created_version), \
+         patch("app.db.supabase.get_authenticated_client", return_value=mock_storage):
+
+        response = client.post(
+            f"/api/resumes/{TEST_RESUME_ID}/versions/{TEST_VERSION_ID}/mutate-pdf",
+            json={
+                "page_index": 0,
+                "bbox": [54, 50, 400, 80],
+                "replacement_text": "JORDAN TAYLOR",
+                "section": "summary",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["source"] == "pdf_edit"
+        assert mock_bucket.upload.called
+
+

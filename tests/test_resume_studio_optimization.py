@@ -401,3 +401,108 @@ def test_generate_optimizations_api_response_fields(sample_resume_content, sampl
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
+
+def test_apply_version_operation_blocks_master_version(sample_resume_content):
+    from unittest.mock import MagicMock, patch
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.auth.service import AuthContext, AuthUser
+    from app.dependencies import get_current_user
+    from app.repositories.resume_repository import ResumeRepository
+
+    user = AuthUser(id="test-user-1", email="test@example.com")
+    auth_ctx = AuthContext(user=user, supabase=MagicMock(), jwt="fake-jwt")
+    app.dependency_overrides[get_current_user] = lambda: auth_ctx
+
+    client = TestClient(app)
+    try:
+        mock_master_version = {
+            "id": "ver-master",
+            "resume_id": "res-123",
+            "version_name": "Master Resume",
+            "is_master": True,
+            "content": sample_resume_content.to_dict(),
+            "created_at": "2026-09-04T12:00:00Z",
+            "updated_at": "2026-09-04T12:00:00Z",
+        }
+        mock_resume = {"id": "res-123", "user_id": "test-user-1", "content": sample_resume_content.to_dict()}
+
+        with patch.object(ResumeRepository, "get_version", return_value=mock_master_version), \
+             patch.object(ResumeRepository, "get_resume", return_value=mock_resume):
+
+            resp = client.post(
+                "/api/resumes/versions/ver-master/apply-operation",
+                json={
+                    "operation": "replace",
+                    "section": "summary",
+                    "replacement": {"suggestedText": "Should fail on master."},
+                },
+            )
+            assert resp.status_code == 400
+            err_msg = resp.json().get("error", {}).get("message", "")
+            assert "Cannot modify master version directly" in err_msg
+
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_accept_suggestion_does_not_mutate_master_resume(sample_resume_content):
+    from unittest.mock import MagicMock, patch
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.auth.service import AuthContext, AuthUser
+    from app.dependencies import get_current_user
+    from app.api.routes.optimization import get_auth_token
+    from app.repositories.resume_repository import ResumeRepository
+    from app.repositories.optimization_repository import OptimizationRepository
+
+    user = AuthUser(id="test-user-1", email="test@example.com")
+    auth_ctx = AuthContext(user=user, supabase=MagicMock(), jwt="fake-jwt")
+    app.dependency_overrides[get_current_user] = lambda: auth_ctx
+    app.dependency_overrides[get_auth_token] = lambda: "fake-jwt"
+
+    client = TestClient(app)
+    try:
+        mock_resume = {"id": "res-123", "user_id": "test-user-1", "content": sample_resume_content.to_dict()}
+        mock_session = {"id": "sess-123", "resume_id": "res-123", "version_id": None}
+        mock_suggestion_rec = {
+            "id": "sug-1",
+            "session_id": "sess-123",
+            "suggestion": {
+                "id": "sug-1",
+                "type": "summary_tailoring",
+                "section": "summary",
+                "suggested_text": "Tailored master test",
+            },
+        }
+
+        mock_update_resume = MagicMock()
+        mock_update_sug = MagicMock()
+        mock_update_sess = MagicMock()
+
+        with patch.object(OptimizationRepository, "get_suggestion", return_value=mock_suggestion_rec), \
+             patch.object(OptimizationRepository, "get_session", return_value=mock_session), \
+             patch.object(ResumeRepository, "get_resume", return_value=mock_resume), \
+             patch.object(ResumeRepository, "update_resume", mock_update_resume), \
+             patch.object(OptimizationRepository, "update_suggestion", mock_update_sug), \
+             patch.object(OptimizationRepository, "list_suggestions_for_session", return_value=[mock_suggestion_rec]), \
+             patch.object(OptimizationRepository, "update_session", mock_update_sess):
+
+            resp = client.post(
+                "/api/optimization/suggestions/accept",
+                json={"session_id": "sess-123", "suggestion_id": "sug-1"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["success"] is True
+            # Invariant: Master resume must NOT be modified
+            mock_update_resume.assert_not_called()
+            # Suggestion record and session counters MUST be updated
+            mock_update_sug.assert_called_once()
+            mock_update_sess.assert_called_once()
+
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_auth_token, None)
+
+

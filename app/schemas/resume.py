@@ -86,6 +86,28 @@ class ApplyVersionOperationRequest(BaseModel):
     child_text: str | None = None
 
 
+class MutatePdfRequest(BaseModel):
+    page_index: int = 0
+    block_id: Optional[str] = None
+    bbox: Optional[list[float]] = None
+    replacement_text: str = ""
+    section: Optional[str] = None
+    item_id: Optional[str] = None
+    child_id: Optional[str] = None
+    font_name: Optional[str] = None
+    font_size: Optional[float] = None
+    is_bold: Optional[bool] = None
+    is_italic: Optional[bool] = None
+    text_color: Optional[Any] = None
+
+
+class MutatePdfResponse(BaseModel):
+    version: ResumeVersionResponse
+    storage_path: str
+    geometry: dict[str, Any]
+
+
+
 class RegisterResumeRequest(BaseModel):
     storage_path: str = Field(..., min_length=5, max_length=500)
 
