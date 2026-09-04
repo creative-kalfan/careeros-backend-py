@@ -2,9 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps for pymupdf and reportlab
+# System deps for pymupdf, docx compilation, and headless LibreOffice
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libffi-dev && \
+    gcc libffi-dev libreoffice-writer-nogui default-jre-headless && \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

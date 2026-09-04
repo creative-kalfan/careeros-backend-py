@@ -711,9 +711,32 @@ async def accept_suggestion(
             jwt=token,
         )
 
-        # Persist resume/version content using authenticated client
+        # Persist resume/version content and compile version artifacts using authenticated client
         if version_id:
-            repo.update_version(version_id, {"content": updated_content.to_dict()})
+            update_payload: dict[str, Any] = {"content": updated_content.to_dict()}
+            try:
+                from app.services.resumes.compiler_service import resume_compiler_service
+                geom_map = (version.get("meta") or {}).get("geometry") or (owned_resume.get("meta") or {}).get("geometry")
+                comp_res = resume_compiler_service.compile_and_persist(
+                    user_id=current_user.user.id,
+                    version_id=version_id,
+                    content=updated_content,
+                    geometry_map=geom_map,
+                    jwt=token,
+                )
+                if comp_res.get("storage_path"):
+                    meta = dict(version.get("meta") or {})
+                    meta["storage_path"] = comp_res["storage_path"]
+                    if comp_res.get("docx_storage_path"):
+                        meta["docx_storage_path"] = comp_res["docx_storage_path"]
+                    if comp_res.get("geometry"):
+                        meta["geometry"] = comp_res["geometry"]
+                    meta["compilation_strategy"] = comp_res.get("strategy", "document_compiler")
+                    update_payload["meta"] = meta
+                    update_payload["source"] = comp_res.get("strategy", "document_compiler")
+            except Exception as c_err:
+                logger.warning("Auto compilation on suggestion accept failed: %s", c_err)
+            repo.update_version(version_id, update_payload)
         else:
             logger.info(
                 "Master resume is immutable (AGENTS.md Section 5.5); skipping update_resume for resume_id=%s",

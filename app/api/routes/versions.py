@@ -430,10 +430,11 @@ async def apply_version_operation(
     content.profile = profile
     update_data: dict[str, Any] = {"content": content.to_dict()}
 
-    new_storage_path, updated_geom = _attempt_pdf_mutation_on_operation(
+    new_storage_path, updated_geom, new_docx_path, strategy = _attempt_pdf_mutation_on_operation(
         row=row,
         resume=resume,
         auth=auth,
+        version_id=version_id,
         section=section,
         target_id=target_id,
         child_id=body.child_id,
@@ -441,12 +442,28 @@ async def apply_version_operation(
         child_text=body.child_text,
         content=content,
     )
-    if new_storage_path and updated_geom:
+    if new_storage_path:
         meta = dict(row.get("meta") or {})
         meta["storage_path"] = new_storage_path
-        meta["geometry"] = updated_geom
+        if new_docx_path:
+            meta["docx_storage_path"] = new_docx_path
+        if updated_geom:
+            meta["geometry"] = updated_geom
+        meta["compilation_strategy"] = strategy
         update_data["meta"] = meta
-        update_data["source"] = "pdf_edit"
+        update_data["source"] = strategy or "compiled"
+
+    # Closed-loop ATS re-analysis: if version or resume has job description, recompute score
+    jd = row.get("job_description") or resume.get("job_description")
+    target_role = row.get("target_job_title") or resume.get("title")
+    if jd and jd.strip():
+        try:
+            from app.services.ats.ats_analyzer import ATSAnalyzer
+            ats_report = analyzer.analyze_resume(content, jd, job_title=target_role)
+            update_data["last_ats_score"] = ats_report.overall_score
+            update_data["last_analyzed_at"] = datetime.utcnow().isoformat()
+        except Exception as ats_err:
+            logger.warning("ATS re-analysis in operation failed: %s", ats_err)
 
     updated = repo.update_version(version_id, update_data)
     if not updated:
@@ -516,80 +533,45 @@ def _attempt_pdf_mutation_on_operation(
     row: dict[str, Any],
     resume: dict[str, Any],
     auth: AuthContext,
+    version_id: str,
     section: str,
     target_id: Optional[str],
     child_id: Optional[str],
     replacement: Optional[dict[str, Any]],
     child_text: Optional[str],
     content: Optional[ResumeContent] = None,
-) -> tuple[Optional[str], Optional[dict[str, Any]]]:
-    """Helper to synchronously mutate PDF and upload when storage_path and geometry exist."""
-    from app.services.resumes.pdf_mutation import PDFMutationEngine
-    from app.services.export_service import export_service
-    from app.services.resume_parser.geometry import extract_document_geometry
-    from app.services.resumes.visual_verification import VisualVerificationEngine
-    from app.db.supabase import get_authenticated_client, get_service_client
-    import fitz
+) -> tuple[Optional[str], Optional[dict[str, Any]], Optional[str], str]:
+    """Helper to compile and persist verified PDF and editable DOCX artifacts.
+
+    Chooses between:
+      1. Direct PDF Mutation (Pipeline A): for single-block inline modifications
+      2. Document Compiler (Pipeline B): for multi-line, reflow, summary, skills, or bullet structural additions
+    """
+    from app.services.resumes.compiler_service import resume_compiler_service
+
+    if not content:
+        return None, None, None, "none"
 
     source_storage_path = (row.get("meta") or {}).get("storage_path") or resume.get("storage_path")
     geom_map = (row.get("meta") or {}).get("geometry") or (resume.get("meta") or {}).get("geometry")
 
-    def _compile_and_upload(res_content: ResumeContent) -> tuple[Optional[str], Optional[dict[str, Any]]]:
-        try:
-            template = row.get("template", "minimal")
-            compiled_bytes = export_service.export_pdf(res_content, template=template)
-            adj_bytes, _ = VisualVerificationEngine.auto_adjust_if_needed(compiled_bytes)
-            adj_doc = fitz.open(stream=adj_bytes, filetype="pdf")
-            compiled_geom = extract_document_geometry(adj_doc).to_dict()
-            adj_doc.close()
-            new_vid = str(uuid.uuid4())
-            new_path = f"{auth.user.id}/versions/{new_vid}.pdf"
-            try:
-                sc = get_authenticated_client(auth.jwt)
-                sc.storage.from_("resumes").upload(
-                    new_path,
-                    adj_bytes,
-                    file_options={"content-type": "application/pdf", "upsert": "true"},
-                )
-            except Exception:
-                sc = get_service_client()
-                sc.storage.from_("resumes").upload(
-                    new_path,
-                    adj_bytes,
-                    file_options={"content-type": "application/pdf", "upsert": "true"},
-                )
-            return new_path, compiled_geom
-        except Exception as c_exc:
-            logger.warning("Compilation fallback failed: %s", c_exc)
-            return None, None
+    curr_text = ""
+    suggested_text = ""
+    if replacement:
+        curr_text = replacement.get("currentText") or replacement.get("current_text") or ""
+        suggested_text = (
+            replacement.get("suggestedText")
+            or replacement.get("suggested_text")
+            or replacement.get("text")
+            or ""
+        )
+    if not suggested_text and child_text:
+        suggested_text = child_text
 
-    if not source_storage_path or not geom_map:
-        if content:
-            return _compile_and_upload(content)
-        return None, None
-
-    try:
-        curr_text = ""
-        suggested_text = ""
-        if replacement:
-            curr_text = replacement.get("currentText") or replacement.get("current_text") or ""
-            suggested_text = (
-                replacement.get("suggestedText")
-                or replacement.get("suggested_text")
-                or replacement.get("text")
-                or ""
-            )
-        if not suggested_text and child_text:
-            suggested_text = child_text
-
-        if not suggested_text:
-            if content:
-                return _compile_and_upload(content)
-            return None, None
-
-        # Search for matching block
-        matched_block = None
-        pages = geom_map.get("pages", []) if isinstance(geom_map, dict) else []
+    # Search for matching geometry block
+    matched_block = None
+    if geom_map and isinstance(geom_map, dict):
+        pages = geom_map.get("pages", [])
         for p in pages:
             for b in p.get("blocks", []):
                 if child_id and b.get("item_id") == child_id:
@@ -609,53 +591,51 @@ def _attempt_pdf_mutation_on_operation(
             if matched_block:
                 break
 
-        if not matched_block:
-            if content:
-                return _compile_and_upload(content)
-            return None, None
+    # Decide strategy: Direct mutation only if single bullet/line edit and fits reasonably
+    prefer_mutation = False
+    mutation_params = None
+    if (
+        matched_block
+        and source_storage_path
+        and suggested_text
+        and section not in ("summary", "skills")  # Summary and skills require full reflow
+    ):
+        orig_len = max(1, len(matched_block.get("text", "")))
+        new_len = len(suggested_text)
+        # Only use direct PDF mutation if text length is comparable (within 30%)
+        if abs(new_len - orig_len) / orig_len <= 0.35:
+            prefer_mutation = True
+            mutation_params = {
+                "page_index": matched_block.get("page", 0),
+                "bbox": matched_block.get("bbox", []),
+                "replacement_text": suggested_text,
+                "font_name": matched_block.get("style", {}).get("font_name"),
+                "font_size": matched_block.get("style", {}).get("font_size"),
+                "is_bold": matched_block.get("style", {}).get("bold", False),
+                "is_italic": matched_block.get("style", {}).get("italic", False),
+                "text_color": matched_block.get("style", {}).get("color", 0),
+            }
 
-        # Download PDF bytes
-        try:
-            storage_client = get_authenticated_client(auth.jwt)
-            pdf_bytes = storage_client.storage.from_("resumes").download(source_storage_path)
-        except Exception:
-            storage_client = get_service_client()
-            pdf_bytes = storage_client.storage.from_("resumes").download(source_storage_path)
-
-        mutated_bytes, updated_geom = PDFMutationEngine.mutate(
-            pdf_bytes=pdf_bytes,
-            page_index=matched_block.get("page", 0),
-            bbox=matched_block.get("bbox"),
-            replacement_text=suggested_text,
-            font_name=matched_block.get("style", {}).get("font_name"),
-            font_size=matched_block.get("style", {}).get("font_size"),
-            is_bold=matched_block.get("style", {}).get("bold", False),
-            is_italic=matched_block.get("style", {}).get("italic", False),
-            text_color=matched_block.get("style", {}).get("color", 0),
+    try:
+        res = resume_compiler_service.compile_and_persist(
+            user_id=auth.user.id,
+            version_id=version_id,
+            content=content,
+            geometry_map=geom_map,
+            jwt=auth.jwt,
+            prefer_direct_mutation=prefer_mutation,
+            mutation_source_path=source_storage_path,
+            mutation_params=mutation_params,
         )
-
-        new_vid = str(uuid.uuid4())
-        new_storage_path = f"{auth.user.id}/versions/{new_vid}.pdf"
-        try:
-            storage_client = get_authenticated_client(auth.jwt)
-            storage_client.storage.from_("resumes").upload(
-                new_storage_path,
-                mutated_bytes,
-                file_options={"content-type": "application/pdf", "upsert": "true"},
-            )
-        except Exception:
-            storage_client = get_service_client()
-            storage_client.storage.from_("resumes").upload(
-                new_storage_path,
-                mutated_bytes,
-                file_options={"content-type": "application/pdf", "upsert": "true"},
-            )
-        return new_storage_path, updated_geom
+        return (
+            res.get("storage_path"),
+            res.get("geometry"),
+            res.get("docx_storage_path"),
+            res.get("strategy", "document_compiler"),
+        )
     except Exception as exc:
-        logger.warning("PDF mutation in operation skipped/failed: %s", exc)
-        if content:
-            return _compile_and_upload(content)
-        return None, None
+        logger.error("Compiler service failed in operation: %s", exc, exc_info=True)
+        return None, None, None, "failed"
 
 
 @router.post(

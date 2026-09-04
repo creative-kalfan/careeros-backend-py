@@ -94,11 +94,35 @@ async def export_version_docx(
     content = ResumeContent.from_dict(version.get("content") or {})
     template = version.get("template", "minimal")
 
-    try:
-        docx_bytes = export_service.export_docx(content, template)
-    except Exception as exc:
-        logger.error("DOCX export failed: %s", exc)
-        raise HTTPException(status_code=500, detail="Unable to generate your resume.") from exc
+    docx_storage_path = (version.get("meta") or {}).get("docx_storage_path")
+    docx_bytes = None
+
+    if docx_storage_path:
+        try:
+            from app.db.supabase import get_authenticated_client, get_service_client
+            try:
+                storage_client = get_authenticated_client(auth.jwt)
+                docx_bytes = storage_client.storage.from_("resumes").download(docx_storage_path)
+            except Exception:
+                storage_client = get_service_client()
+                docx_bytes = storage_client.storage.from_("resumes").download(docx_storage_path)
+        except Exception as exc:
+            logger.warning("Failed to fetch DOCX from storage %s: %s; falling back to compiler", docx_storage_path, exc)
+
+    if not docx_bytes:
+        try:
+            from app.services.resumes.document_model import build_document_model
+            from app.services.resumes.docx_compiler import docx_compiler
+            geom_map = (version.get("meta") or {}).get("geometry") or (resume.get("meta") or {}).get("geometry")
+            doc_model = build_document_model(content, geom_map)
+            docx_bytes = docx_compiler.compile(doc_model)
+        except Exception as c_exc:
+            logger.warning("DocxCompiler failed (%s); falling back to export_service", c_exc)
+            try:
+                docx_bytes = export_service.export_docx(content, template)
+            except Exception as exc:
+                logger.error("DOCX export failed: %s", exc)
+                raise HTTPException(status_code=500, detail="Unable to generate your resume.") from exc
 
     name = _sanitize_filename(version.get("version_name") or resume.get("title", "resume"))
     filename = "{name}.docx".format(name=name)

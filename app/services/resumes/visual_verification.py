@@ -228,7 +228,9 @@ class VisualVerificationEngine:
                     r2 = fitz.Rect(w2[0], w2[1], w2[2], w2[3])
                     intersection = r1 & r2
                     if intersection.is_valid and not intersection.is_empty:
-                        if intersection.width > 2.0 and intersection.height > 2.0:
+                        min_h = min(r1.height, r2.height)
+                        # Detect collision if significant horizontal AND vertical overlap (> 45% of line height)
+                        if intersection.width > 3.0 and intersection.height > (min_h * 0.45):
                             issues.append(
                                 VisualVerificationIssue(
                                     code="TEXT_COLLISION",
