@@ -1,18 +1,28 @@
-"""Applications API routes."""
+"""Applications API routes for Application Tracking / Mission Control.
+
+Routes are kept thin: all business logic (lifecycle transitions, timeline
+events, job → application bridging, statistics, notifications, ownership) is
+handled by :class:`ApplicationService`. Repositories own persistence.
+
+ROUTE ORDERING: fixed-path routes (``/applications/stats``) are declared BEFORE
+parameterized ``/{application_id}`` routes so ``stats`` is never captured as an
+application id.
+"""
 
 from __future__ import annotations
 
 from typing import Annotated, Optional
 
-from datetime import datetime
-
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.auth.service import AuthContext
 from app.dependencies import get_current_user
 from app.schemas.common import ErrorResponse, SuccessResponse, build_meta
+from app.services.applications import ApplicationService
 
 router = APIRouter(prefix="/applications", tags=["applications"])
+
+SERVICE = ApplicationService()
 
 
 # ── Fixed-path routes MUST come before /{application_id} parameterized routes ──
@@ -26,37 +36,17 @@ router = APIRouter(prefix="/applications", tags=["applications"])
 async def list_applications(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
-    status: Optional[str] = None,
-    search: Optional[str] = None,
+    status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[list[dict]]:
-    """List all applications for the authenticated user."""
-    query = (
-        auth.supabase.table("applications")
-        .select("*", count="exact")
-        .eq("user_id", auth.user.id)
+    """List all applications for the authenticated user (enriched with children)."""
+    result = await SERVICE.list(
+        auth, page=page, page_size=page_size, status=status, search=search
     )
-
-    if status:
-        query = query.eq("status", status)
-
-    if search:
-        search_term = f"%{search}%"
-        query = query.or_(
-            f"job_title.ilike.{search_term},company_name.ilike.{search_term}"
-        )
-
-    query = query.order("application_date", desc=True)
-    offset = (page - 1) * page_size
-    query = query.range(offset, offset + page_size - 1)
-
-    result = await query.execute()
-
-    total = result.count if hasattr(result, "count") and result.count is not None else len(result.data or [])
-
     return SuccessResponse(
-        data=result.data or [],
-        meta=build_meta(page, page_size, total),
+        data=result["applications"],
+        meta=build_meta(page, page_size, result["total"]),
     )
 
 
@@ -69,85 +59,25 @@ async def get_application_stats(
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[dict]:
     """Get aggregate statistics for the authenticated user's applications."""
-    result = await (
-        auth.supabase.table("applications")
-        .select("id, status, application_date")
-        .eq("user_id", auth.user.id)
-        .execute()
-    )
-
-    applications = result.data or []
-    total = len(applications)
-
-    by_status: dict[str, int] = {
-        "applied": 0,
-        "assessment": 0,
-        "interview": 0,
-        "offer": 0,
-        "rejected": 0,
-    }
-
-    for app in applications:
-        status = app.get("status", "")
-        if status in by_status:
-            by_status[status] += 1
-
-    with_interviews = by_status["interview"] + by_status["offer"]
-    with_offers = by_status["offer"]
-    active_count = total - by_status["rejected"]
-    success_rate = round((active_count / total) * 100) if total > 0 and active_count > 0 else None
-    interview_rate = round((with_interviews / total) * 100) if total > 0 else 0
-    offer_rate = round((with_offers / with_interviews) * 100) if with_interviews > 0 else 0
-
-    stats = {
-        "total": total,
-        "byStatus": by_status,
-        "applied": by_status["applied"],
-        "assessment": by_status["assessment"],
-        "interview": by_status["interview"],
-        "offer": by_status["offer"],
-        "rejected": by_status["rejected"],
-        "successRate": success_rate,
-        "interviewRate": interview_rate,
-        "offerRate": offer_rate,
-        "averageResponseDays": None,
-    }
-
-    return SuccessResponse(data=stats)
+    return SuccessResponse(data=await SERVICE.stats(auth))
 
 
 @router.post(
     "",
     response_model=SuccessResponse[dict],
-    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+    responses={
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+    },
 )
 async def create_application(
     body: dict,
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[dict]:
-    """Create a new application."""
-    job_title = body.get("job_title")
-    company_name = body.get("company_name")
-    notes = body.get("notes")
-
-    if not job_title or not company_name:
-        raise HTTPException(status_code=400, detail="job_title and company_name are required")
-
-    result = await (
-        auth.supabase.table("applications")
-        .insert({
-            "user_id": auth.user.id,
-            "job_title": job_title,
-            "company_name": company_name,
-            "notes": notes,
-            "status": "applied",
-            "application_date": datetime.utcnow().isoformat(),
-        })
-        .execute()
-    )
-    rows = result.data or []
-    data = rows[0] if isinstance(rows, list) and rows else (result.data or {})
-    return SuccessResponse(data=data, status_code=201)
+    """Create a new application (manual 'Add Application' flow)."""
+    app = await SERVICE.create(auth, body)
+    return SuccessResponse(data=app, status_code=201)
 
 
 # ── Parameterized /{application_id} routes below ──
@@ -162,48 +92,47 @@ async def get_application(
     application_id: str,
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[dict]:
-    """Get a single application by ID."""
-    result = await (
-        auth.supabase.table("applications")
-        .select("*")
-        .eq("id", application_id)
-        .eq("user_id", auth.user.id)
-        .execute()
-    )
-    rows = result.data or []
-    if not rows:
-        raise HTTPException(status_code=404, detail="Application not found")
-
-    return SuccessResponse(data=rows[0] if isinstance(rows, list) else result.data)
+    """Get a single application (enriched with children)."""
+    return SuccessResponse(data=await SERVICE.detail(auth, application_id))
 
 
 @router.patch(
     "/{application_id}",
     response_model=SuccessResponse[dict],
-    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+    responses={
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+    },
 )
 async def update_application(
     application_id: str,
     body: dict,
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[dict]:
-    """Update an application."""
-    updates = {k: v for k, v in body.items() if k in {"status", "notes", "job_title", "company_name"}}
-    if not updates:
-        raise HTTPException(status_code=400, detail="No valid fields to update")
+    """Update application fields (notes, location, salary, favorite, archived...)."""
+    return SuccessResponse(data=await SERVICE.update(auth, application_id, body))
 
-    result = await (
-        auth.supabase.table("applications")
-        .update(updates)
-        .eq("id", application_id)
-        .eq("user_id", auth.user.id)
-        .execute()
-    )
-    rows = result.data or []
-    if not rows:
-        raise HTTPException(status_code=404, detail="Application not found")
 
-    return SuccessResponse(data=rows[0] if isinstance(rows, list) else result.data)
+@router.patch(
+    "/{application_id}/status",
+    response_model=SuccessResponse[dict],
+    responses={
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+    },
+)
+async def update_application_status(
+    application_id: str,
+    body: dict,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[dict]:
+    """Change the application stage (validated lifecycle transition)."""
+    new_status = (body or {}).get("status")
+    if not new_status:
+        raise HTTPException(status_code=400, detail="status is required")
+    return SuccessResponse(data=await SERVICE.change_status(auth, application_id, new_status))
 
 
 @router.delete(
@@ -215,12 +144,114 @@ async def delete_application(
     application_id: str,
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[dict]:
-    """Delete an application."""
-    result = await (
-        auth.supabase.table("applications")
-        .delete()
-        .eq("id", application_id)
-        .eq("user_id", auth.user.id)
-        .execute()
-    )
+    """Delete an application (and, via CASCADE, all its children/events)."""
+    await SERVICE.delete(auth, application_id)
     return SuccessResponse(data={"id": application_id, "deleted": True})
+@router.post(
+    "/{application_id}/favorite",
+    response_model=SuccessResponse[dict],
+    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+async def favorite_application(
+    application_id: str,
+    body: dict,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[dict]:
+    value = bool((body or {}).get("favorite", True))
+    return SuccessResponse(data=await SERVICE.set_favorite(auth, application_id, value))
+
+
+@router.post(
+    "/{application_id}/archive",
+    response_model=SuccessResponse[dict],
+    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+async def archive_application(
+    application_id: str,
+    body: dict,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[dict]:
+    value = bool((body or {}).get("archived", True))
+    return SuccessResponse(data=await SERVICE.set_archived(auth, application_id, value))
+
+
+@router.get(
+    "/{application_id}/events",
+    response_model=SuccessResponse[list[dict]],
+    responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+async def list_application_events(
+    application_id: str,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[list[dict]]:
+    """Return the persisted application timeline."""
+    return SuccessResponse(data=await SERVICE.list_events(auth, application_id))
+
+
+# ── Child entity routes (interviews / assessments / contacts / follow-ups / attachments) ──
+
+_CHILD_ROUTES = {
+    "interviews": "interviews",
+    "assessments": "assessments",
+    "contacts": "contacts",
+    "follow-ups": "follow_ups",
+    "attachments": "attachments",
+}
+
+
+def _register_child_routes() -> None:
+    """Register thin CRUD routes for each child entity type."""
+    for path_segment, service_key in _CHILD_ROUTES.items():
+
+        @router.post(
+            f"/{{application_id}}/{path_segment}",
+            response_model=SuccessResponse[dict],
+            responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+            include_in_schema=False,
+        )
+        async def add_child(
+            application_id: str,
+            body: dict,
+            auth: AuthContext = Depends(get_current_user),
+            _key: str = service_key,
+        ) -> SuccessResponse[dict]:
+            return SuccessResponse(
+                data=await SERVICE.add_child(auth, application_id, _key, body),
+                status_code=201,
+            )
+
+        @router.patch(
+            f"/{{application_id}}/{path_segment}/{{child_id}}",
+            response_model=SuccessResponse[dict],
+            responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+            include_in_schema=False,
+        )
+        async def update_child(
+            application_id: str,
+            child_id: str,
+            body: dict,
+            auth: AuthContext = Depends(get_current_user),
+            _key: str = service_key,
+        ) -> SuccessResponse[dict]:
+            return SuccessResponse(
+                data=await SERVICE.update_child(auth, application_id, _key, child_id, body)
+            )
+
+        @router.delete(
+            f"/{{application_id}}/{path_segment}/{{child_id}}",
+            response_model=SuccessResponse[dict],
+            responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+            include_in_schema=False,
+        )
+        async def delete_child(
+            application_id: str,
+            child_id: str,
+            auth: AuthContext = Depends(get_current_user),
+            _key: str = service_key,
+        ) -> SuccessResponse[dict]:
+            return SuccessResponse(
+                data=await SERVICE.delete_child(auth, application_id, _key, child_id)
+            )
+
+
+_register_child_routes()

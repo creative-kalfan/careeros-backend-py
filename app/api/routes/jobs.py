@@ -330,3 +330,37 @@ async def get_job_intelligence(
     if not intelligence:
         return SuccessResponse(data={"job_id": job_id, "status": "not_analyzed"})
     return SuccessResponse(data=intelligence)
+@router.post(
+    "/{job_id}/apply",
+    response_model=SuccessResponse[dict],
+    responses={
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+    },
+)
+async def apply_to_job(
+    job_id: str,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[dict]:
+    """Track a real job as an application (Job → Application bridge).
+
+    Verifies the job exists, prevents accidental duplicates, populates job
+    metadata (title, company, location, salary, source URL, match score) and
+    returns the persisted application — now visible in Mission Control.
+    """
+    from app.services.applications import ApplicationService
+
+    job = JobRepository().get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    service = ApplicationService()
+    app = await service.create_from_job(auth, job)
+    if app.get("duplicate"):
+        raise HTTPException(
+            status_code=409,
+            detail="This job is already tracked as an application",
+        )
+    return SuccessResponse(data=app, status_code=201)
