@@ -13,6 +13,7 @@ from app.services.recommendations.recommendation_reason_generator import Recomme
 from app.services.recommendations.recommendation_scorer import RecommendationScorer
 
 # India tokens mirror job_relevance_service._INDIA_TOKENS
+_BANGALORE_TOKENS = ["bengaluru", "bangalore"]
 _INDIA_TOKENS = [
     "india", "bengaluru", "bangalore", "hyderabad", "mumbai", "pune",
     "chennai", "delhi", "gurgaon", "gurugram", "noida", "kolkata",
@@ -23,9 +24,15 @@ _INDIA_TOKENS = [
 
 def _india_first_score(job: NormalizedJob) -> int:
     location = (job.location or "").lower()
-    if any(t in location for t in _INDIA_TOKENS):
+    title = (job.title or "").lower()
+    url = (job.url or "").lower()
+    text = f"{location} {title} {url}"
+
+    if any(token in text for token in _BANGALORE_TOKENS):
+        return 3
+    if any(token in text for token in _INDIA_TOKENS):
         return 2
-    if job.remote or "remote" in location:
+    if job.remote or "remote" in text:
         return 1
     return 0
 

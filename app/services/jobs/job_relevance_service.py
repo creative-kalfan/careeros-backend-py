@@ -9,11 +9,12 @@ from app.models.profile import UserProfile
 from app.repositories.job_repository import JobRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.services.jobs.personalized_job_service import PersonalizedJobService
-from app.services.jobs.source_priority import combined_rank_score
+from app.services.jobs.source_priority import combined_rank_score, source_quality_bonus
 
 # India-indicative location tokens used for the India-first ranking boost.
 # Matches city names, "India", "Remote - India", etc. so India-based roles
 # rank higher without hiding global/remote roles entirely.
+_BANGALORE_TOKENS = ["bengaluru", "bangalore"]
 _INDIA_TOKENS = [
     "india",
     "bengaluru",
@@ -39,15 +40,23 @@ _INDIA_TOKENS = [
 
 
 def _india_first_score(job: NormalizedJob) -> int:
-    """Return a 0-2 India-first ranking score for a job.
+    """Return a 0-3 India-first ranking score for a job.
 
-    2 = explicitly India-based location, 1 = remote (global/remote roles
-    still rank above non-India on-site), 0 = non-India on-site.
+    3 = Bangalore / Bengaluru (premier tech hub),
+    2 = other explicitly India-based location,
+    1 = remote (global/remote roles still rank above non-India on-site),
+    0 = non-India on-site.
     """
     location = (job.location or "").lower()
-    if any(token in location for token in _INDIA_TOKENS):
+    title = (job.title or "").lower()
+    url = (job.url or "").lower()
+    text = f"{location} {title} {url}"
+
+    if any(token in text for token in _BANGALORE_TOKENS):
+        return 3
+    if any(token in text for token in _INDIA_TOKENS):
         return 2
-    if job.remote or "remote" in location:
+    if job.remote or "remote" in text:
         return 1
     return 0
 
@@ -158,24 +167,17 @@ class JobRelevanceService:
         # Get the user's profile if available
         profile = self.profile_repository.get_profile(user_id) if user_id else None
 
-        # Determine the role category filter (if desired_role is set)
-        role_category = None
-        if profile and profile.desired_role:
-            from app.parsing.role_classifier import classify
-            role_category = classify(profile.desired_role)
-            if role_category == "Other":
-                role_category = None
-
-        # Get ALL matching jobs (no pagination at the DB layer) so the
+        # Get ALL active candidate jobs (no pagination at the DB layer) so the
         # Python-side sort (match score + source-quality + India-first boost)
-        # can operate across the full result set. Pagination is applied AFTER
-        # sorting/filtering.
+        # can operate across the full result set. Profile preferences act as
+        # ranking signals (Stage 2), not hard SQL candidate exclusions (Stage 1).
+        # Pagination is applied AFTER sorting/filtering.
         db_rows, _total = self.job_repository.list_jobs(
             page=1,
             page_size=100000,
             role=role,
             location=location,
-            role_category=role_category,
+            role_category=None,
             company=company,
             remote=remote,
             employment_type=employment_type,
@@ -191,41 +193,54 @@ class JobRelevanceService:
         jobs = self._python_filter(
             jobs, company, skills, remote, employment_type, experience
         )
-        total = len(jobs)
 
         # If no profile, apply India-first / dynamic ordering.
         if profile is None:
+            total = len(jobs)
             if sort in ("newest", "oldest", "salary"):
                 self._sort_jobs(jobs, sort)
             else:
                 # India-first without match scores; recent first as a
                 # deterministic tiebreak.
                 jobs.sort(
-                    key=lambda j: (_india_first_score(j),),
+                    key=lambda j: (
+                        _india_first_score(j),
+                        source_quality_bonus(j),
+                        j.posted_date or "",
+                    ),
                     reverse=True,
                 )
             start = (page - 1) * page_size
             return jobs[start : start + page_size], total
 
-        # Filter and calculate match scores
-        filtered_jobs = self.personalized_service.filter_jobs(jobs, profile)
+        # Stage 1 Candidate Retrieval: broad candidate pool, not strictly filtered by role category
+        try:
+            filtered_jobs = self.personalized_service.filter_jobs(jobs, profile, strict=False)
+        except TypeError:
+            filtered_jobs = self.personalized_service.filter_jobs(jobs, profile)
         for job in filtered_jobs:
             job.match = self.personalized_service.calculate_match_score(job, profile)
+
+        total = len(filtered_jobs)
 
         if sort in ("newest", "oldest", "salary"):
             self._sort_jobs(filtered_jobs, sort)
         else:
-            # STRICT sort: candidate match + bounded source-quality bonus
-            # first (official company career postings get a small deliberate
-            # boost, see source_priority), with india_first_score as a
-            # tiebreaker/boost. Weak matches still sink in the SAME list.
-            filtered_jobs.sort(
-                key=lambda j: (
-                    combined_rank_score(j.match.get("overall", 0) if j.match else 0, j),
-                    _india_first_score(j),
-                ),
-                reverse=True,
-            )
+            # Stage 2 Ranking: match score + source-quality bonus + India/Bangalore boost.
+            # Bounded India boost strongly prioritizes India and Bangalore tech hubs
+            # for comparable matches without hiding high-relevance global roles.
+            def _rank_key(j: NormalizedJob) -> tuple:
+                match_overall = j.match.get("overall", 0) if j.match else 0
+                ind = _india_first_score(j)
+                ind_boost = {3: 6.0, 2: 4.0, 1: 2.0, 0: 0.0}.get(ind, 0.0)
+                score = combined_rank_score(match_overall, j) + ind_boost
+                return (
+                    score,
+                    ind,
+                    j.posted_date or "",
+                )
+
+            filtered_jobs.sort(key=_rank_key, reverse=True)
 
         # Paginate AFTER sorting.
         start = (page - 1) * page_size

@@ -25,12 +25,14 @@ class PersonalizedJobService:
         self,
         jobs: list[NormalizedJob],
         profile: Optional[UserProfile] = None,
+        strict: bool = True,
     ) -> list[NormalizedJob]:
         """Filter jobs based on user profile preferences.
 
-        If no profile is provided, returns all jobs.
+        If no profile is provided or strict is False, returns all jobs.
+        When strict=True, filters strictly by primary category and related canonical roles.
         """
-        if not profile:
+        if not profile or not strict:
             return jobs
 
         if not profile.desired_role:
@@ -282,9 +284,11 @@ class PersonalizedJobService:
             # quality so the score varies by job instead of collapsing to 0.
             if is_remote:
                 return 80.0
-            india_keywords = ["bangalore", "bengaluru", "hyderabad", "mumbai", "pune", "chennai", "delhi", "gurgaon", "india"]
+            if any(k in job_location for k in ("bangalore", "bengaluru")):
+                return 80.0
+            india_keywords = ["hyderabad", "mumbai", "pune", "chennai", "delhi", "gurgaon", "gurugram", "noida", "kolkata", "india"]
             if any(k in job_location for k in india_keywords):
-                return 60.0
+                return 65.0
             return 40.0
 
         if is_remote:

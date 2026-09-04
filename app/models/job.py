@@ -42,6 +42,7 @@ class NormalizedJob(BaseModel):
     # DB column is "url"; expose as "url" for DB round-trip, alias to apply_url
     url: Optional[str] = None
     posted_date: Optional[str] = None
+    posted_at: Optional[str] = None
     expires_date: Optional[str] = None
     experience_level: Optional[str] = None
 
@@ -66,13 +67,52 @@ class NormalizedJob(BaseModel):
     # Original source payload (for debugging/audit)
     raw: Optional[dict[str, Any]] = Field(default=None, exclude=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _map_db_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Sync posted_at and posted_date
+            if data.get("posted_at") and not data.get("posted_date"):
+                data["posted_date"] = data["posted_at"]
+            elif data.get("posted_date") and not data.get("posted_at"):
+                data["posted_at"] = data["posted_date"]
+
+            # Enrich missing location from title/url
+            if not data.get("location"):
+                title = str(data.get("title") or "")
+                url = str(data.get("url") or data.get("canonical_url") or "")
+                text = f"{title} {url}".lower()
+                if "bengaluru" in text or "bangalore" in text:
+                    data["location"] = "Bangalore, India"
+                elif "hyderabad" in text:
+                    data["location"] = "Hyderabad, India"
+                elif "mumbai" in text:
+                    data["location"] = "Mumbai, India"
+                elif "pune" in text:
+                    data["location"] = "Pune, India"
+                elif "chennai" in text:
+                    data["location"] = "Chennai, India"
+                elif any(t in text for t in ("delhi", "noida", "gurgaon", "gurugram")):
+                    data["location"] = "Delhi NCR, India"
+                elif "india" in text:
+                    data["location"] = "India"
+                elif "remote" in text:
+                    data["location"] = "Remote"
+                    if data.get("remote") is None:
+                        data["remote"] = True
+        return data
+
     @model_validator(mode="after")
     def _sync_url_apply_url(self) -> "NormalizedJob":
-        """Keep url and apply_url in sync for DB round-trip."""
+        """Keep url and apply_url, and posted_at/posted_date in sync for DB round-trip."""
         if self.url is not None and self.apply_url is None:
             self.apply_url = self.url
         elif self.apply_url is not None and self.url is None:
             self.url = self.apply_url
+        if self.posted_at is not None and self.posted_date is None:
+            self.posted_date = self.posted_at
+        elif self.posted_date is not None and self.posted_at is None:
+            self.posted_at = self.posted_date
         return self
 
     def _is_stale(self) -> bool:

@@ -399,9 +399,53 @@ class JobRepository:
         else:
             query = query.order("created_at", desc=True)
 
-        query = query.range(offset, offset + page_size - 1)
-        result = query.execute()
-        return (result.data or []), (result.count or 0)
+        if page_size <= 1000:
+            query = query.range(offset, offset + page_size - 1)
+            result = query.execute()
+            return (result.data or []), (result.count or 0)
+
+        # PostgREST caps single queries at 1,000 rows.
+        # When page_size > 1000, fetch in 1000-row chunks up to min(page_size, total_count).
+        batch_res = query.range(offset, offset + 999).execute()
+        total_count = batch_res.count or 0
+        rows = list(batch_res.data or [])
+
+        while len(rows) < min(page_size, total_count):
+            start = offset + len(rows)
+            end = min(offset + page_size, offset + len(rows) + 1000) - 1
+            chunk_query = self._client.table("jobs").select("*").eq("is_active", True)
+            if role:
+                chunk_query = chunk_query.ilike("title", f"%{role}%")
+            if location:
+                chunk_query = chunk_query.ilike("location", f"%{location}%")
+            if role_category:
+                chunk_query = chunk_query.eq("role_category", role_category)
+            if company:
+                chunk_query = chunk_query.ilike("company", f"%{company}%")
+            if remote is True:
+                chunk_query = chunk_query.ilike("location", "%remote%")
+            elif remote is False:
+                chunk_query = chunk_query.not_.ilike("location", "%remote%")
+            if employment_type:
+                chunk_query = chunk_query.ilike("employment_type", f"%{employment_type}%")
+            if experience:
+                chunk_query = chunk_query.eq("experience_level", experience)
+
+            if sort == "newest":
+                chunk_query = chunk_query.order("posted_at", desc=True)
+            elif sort == "oldest":
+                chunk_query = chunk_query.order("posted_at", desc=False)
+            elif sort == "salary":
+                chunk_query = chunk_query.order("salary_max", desc=True)
+            else:
+                chunk_query = chunk_query.order("created_at", desc=True)
+
+            chunk_res = chunk_query.range(start, end).execute()
+            if not chunk_res.data:
+                break
+            rows.extend(chunk_res.data)
+
+        return rows, total_count
 
     def get_job(self, job_id: str) -> Optional[dict[str, Any]]:
         """Return a single job by its primary key id or external_job_id."""
