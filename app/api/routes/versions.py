@@ -459,6 +459,7 @@ async def apply_version_operation(
     if jd and jd.strip():
         try:
             from app.services.ats.ats_analyzer import ATSAnalyzer
+            analyzer = ATSAnalyzer()
             ats_report = analyzer.analyze_resume(content, jd, job_title=target_role)
             update_data["last_ats_score"] = ats_report.overall_score
             update_data["last_analyzed_at"] = datetime.utcnow().isoformat()

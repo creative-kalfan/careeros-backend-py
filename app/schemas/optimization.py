@@ -72,8 +72,7 @@ class OptimizationSuggestionSchema(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OptimizationSessionSchema(BaseModel):
@@ -96,8 +95,7 @@ class OptimizationSessionSchema(BaseModel):
     target_job_title: Optional[str] = None
     target_company: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OptimizationSuggestionRecordSchema(BaseModel):
@@ -111,8 +109,7 @@ class OptimizationSuggestionRecordSchema(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OptimizeResumeRequest(BaseModel):
@@ -249,8 +246,7 @@ class OptimizationHistoryItemSchema(BaseModel):
     created_at: datetime
     status: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ListOptimizationHistoryResponse(BaseModel):
