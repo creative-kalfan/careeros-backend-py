@@ -19,6 +19,7 @@ from app.schemas.resume import (
     ResumeVersionCreate,
     ResumeVersionResponse,
     ResumeVersionUpdate,
+    SaveVersionContentRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -458,6 +459,34 @@ async def apply_version_operation(
         child_text=body.child_text,
         content=content,
     )
+    # TRUTHFULNESS GATE: an operation is only successful when its content change
+    # was turned into a real document artifact. If artifact regeneration failed we
+    # must NOT persist the JSON-only update (that is the classic "Suggestion applied
+    # to resume" while the PDF stays unchanged failure) and must NOT report success.
+    if strategy == "failed":
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Document artifact regeneration failed. The operation was NOT applied and no content change was persisted.",
+        )
+    _apply_compiled_artifact(row, resume, content, update_data, new_storage_path, updated_geom, new_docx_path, strategy)
+
+    updated = repo.update_version(version_id, update_data)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Version not found")
+    return SuccessResponse(data=_to_version_response(updated))
+
+
+def _apply_compiled_artifact(
+    row: dict[str, Any],
+    resume: dict[str, Any],
+    content: Any,
+    update_data: dict[str, Any],
+    new_storage_path: Any,
+    updated_geom: Any,
+    new_docx_path: Any,
+    strategy: str,
+) -> None:
+    """Attach compiled artifact paths/geometry + closed-loop ATS score to update_data."""
     if new_storage_path:
         meta = dict(row.get("meta") or {})
         meta["storage_path"] = new_storage_path
@@ -481,6 +510,81 @@ async def apply_version_operation(
             update_data["last_analyzed_at"] = datetime.utcnow().isoformat()
         except Exception as ats_err:
             logger.warning("ATS re-analysis in operation failed: %s", ats_err)
+
+
+@router.post(
+    "/versions/{version_id}/save-content",
+    response_model=SuccessResponse[ResumeVersionResponse],
+    responses={
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        400: {"model": ErrorResponse},
+    },
+)
+async def save_version_content(
+    version_id: str,
+    body: SaveVersionContentRequest,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[ResumeVersionResponse]:
+    """Manual-editor Save path: full-profile replace + real artifact recompilation.
+
+    Replaces the version's ResumeContent, recompiles PDF/DOCX via the canonical
+    compiler, and persists only when the artifact exists in storage. Master
+    versions are immutable — callers must derive first. Mirrors the
+    apply-operation truthfulness gate: compile failure -> 500, nothing persisted.
+    """
+    from app.models.resume import ResumeContent
+
+    repo = ResumeRepository(jwt=auth.jwt)
+    row = repo.get_version(version_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if row.get("is_master"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot modify master version directly. Please create a derived version before saving.",
+        )
+    resume = repo.get_resume(auth.user.id, row["resume_id"])
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    content = ResumeContent.from_dict(body.content or {})
+    update_data: dict[str, Any] = {"content": content.to_dict()}
+
+    geom_map = (row.get("meta") or {}).get("geometry") or (resume.get("meta") or {}).get("geometry")
+    try:
+        from app.services.resumes.compiler_service import resume_compiler_service
+
+        res = resume_compiler_service.compile_and_persist(
+            user_id=auth.user.id,
+            version_id=version_id,
+            content=content,
+            geometry_map=geom_map,
+            jwt=auth.jwt,
+        )
+    except Exception as exc:
+        logger.error("Manual save compilation failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Document artifact regeneration failed. The operation was NOT applied and no content change was persisted.",
+        ) from exc
+
+    new_storage_path = res.get("storage_path")
+    if not new_storage_path:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Document artifact regeneration failed. The operation was NOT applied and no content change was persisted.",
+        )
+    _apply_compiled_artifact(
+        row,
+        resume,
+        content,
+        update_data,
+        new_storage_path,
+        res.get("geometry"),
+        res.get("docx_storage_path"),
+        res.get("strategy", "document_compiler"),
+    )
 
     updated = repo.update_version(version_id, update_data)
     if not updated:

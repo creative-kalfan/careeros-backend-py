@@ -52,7 +52,11 @@ async def test_legitimate_user_can_accept_own_suggestion():
     """Own-resume: session belongs to user-A, caller is user-A → success."""
     mock_repo = MagicMock()
     mock_repo.get_suggestion.return_value = _record("sess-A")
-    mock_repo.get_session.return_value = {"id": "sess-A", "resume_id": "resume-A", "version_id": None}
+    mock_repo.get_session.return_value = {
+        "id": "sess-A",
+        "resume_id": "resume-A",
+        "version_id": "ver-A",
+    }
     mock_repo.update_suggestion.return_value = True
     mock_repo.list_suggestions_for_session.return_value = []
     mock_repo.update_session.return_value = True
@@ -62,6 +66,12 @@ async def test_legitimate_user_can_accept_own_suggestion():
         "id": "resume-A",
         "user_id": "user-A",
         "content": ResumeContent().to_dict(),
+    }
+    mock_resume_cls.return_value.get_version.return_value = {
+        "id": "ver-A",
+        "resume_id": "resume-A",
+        "content": ResumeContent().to_dict(),
+        "meta": {},
     }
 
     payload = AcceptSuggestionRequest(session_id="sess-A", suggestion_id="sug-1")
@@ -73,11 +83,27 @@ async def test_legitimate_user_can_accept_own_suggestion():
 
     with patch("app.api.routes.optimization.optimization_repo", mock_repo), patch(
         "app.api.routes.optimization.ResumeRepository", mock_resume_cls
-    ), patch("app.api.routes.optimization._apply_suggestion_to_content", fake_apply):
+    ), patch(
+        "app.api.routes.optimization._apply_suggestion_to_content", fake_apply
+    ), patch(
+        "app.services.resumes.compiler_service.resume_compiler_service.compile_and_persist",
+        return_value={
+            "storage_path": "user-A/versions/ver-A.pdf",
+            "docx_storage_path": "user-A/versions/ver-A.docx",
+            "geometry": {"pages": []},
+            "strategy": "document_compiler",
+        },
+    ):
         result = await accept_suggestion(payload, _ctx("user-A", "jwt-A"), "jwt-A")
 
     assert result.success is True
     assert result.status in ("accepted", "edited")
+    # The accepted suggestion must have produced a real artifact update.
+    version_update = mock_resume_cls.return_value.update_version.call_args
+    assert version_update is not None
+    update_data = version_update.args[1]
+    assert update_data["meta"]["storage_path"] == "user-A/versions/ver-A.pdf"
+    assert update_data["content"]["profile"]["summary"] == "Improved summary"
     # All suggestion/session writes went through the authenticated RLS client.
     assert mock_repo.get_suggestion.call_args.kwargs == {"jwt": "jwt-A"}
     assert mock_repo.get_session.call_args.kwargs == {"jwt": "jwt-A"}
@@ -91,16 +117,23 @@ async def test_accept_error_does_not_leak_internal_details():
     """A backend exception must yield a safe generic message, not internal text."""
     mock_repo = MagicMock()
     mock_repo.get_suggestion.return_value = _record("sess-A")
-    mock_repo.get_session.return_value = {"id": "sess-A", "resume_id": "resume-A", "version_id": None}
-    mock_repo.update_suggestion.side_effect = RuntimeError(
-        "psycopg error: connection refused at /var/lib/postgresql/data (secret-detail)"
-    )
+    mock_repo.get_session.return_value = {
+        "id": "sess-A",
+        "resume_id": "resume-A",
+        "version_id": "ver-A",
+    }
 
     mock_resume_cls = MagicMock()
     mock_resume_cls.return_value.get_resume.return_value = {
         "id": "resume-A",
         "user_id": "user-A",
         "content": ResumeContent().to_dict(),
+    }
+    mock_resume_cls.return_value.get_version.return_value = {
+        "id": "ver-A",
+        "resume_id": "resume-A",
+        "content": ResumeContent().to_dict(),
+        "meta": {},
     }
 
     payload = AcceptSuggestionRequest(session_id="sess-A", suggestion_id="sug-1")
@@ -112,16 +145,26 @@ async def test_accept_error_does_not_leak_internal_details():
         lambda c, s, edited_text=None: ResumeContent.from_dict(
             {"profile": {"summary": "Ignored here"}}
         ),
+    ), patch(
+        "app.services.resumes.compiler_service.resume_compiler_service.compile_and_persist",
+        side_effect=RuntimeError(
+            "psycopg error: connection refused at /var/lib/postgresql/data (secret-detail)"
+        ),
     ):
         with pytest.raises(HTTPException) as excinfo:
             await accept_suggestion(payload, _ctx("user-A", "jwt-A"), "jwt-A")
 
     assert excinfo.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert excinfo.value.detail == "Failed to accept suggestion"
+    # Safe generic message: the artifact pipeline failed but no internals leaked.
+    assert "artifact" in excinfo.value.detail.lower()
+    assert "NOT applied" in excinfo.value.detail
     # Ensure no internal path / DB / exception text leaks into the response.
     assert "/var/lib" not in str(excinfo.value.detail)
     assert "secret" not in str(excinfo.value.detail)
     assert "connection refused" not in str(excinfo.value.detail)
+    # The suggestion must NOT be marked accepted when no artifact was produced.
+    mock_repo.update_suggestion.assert_not_called()
+    mock_resume_cls.return_value.update_version.assert_not_called()
 
 
 @pytest.mark.asyncio

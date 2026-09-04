@@ -492,14 +492,17 @@ def test_accept_suggestion_does_not_mutate_master_resume(sample_resume_content):
                 "/api/optimization/suggestions/accept",
                 json={"session_id": "sess-123", "suggestion_id": "sug-1"},
             )
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["success"] is True
+            # Master-immutability contract: accepting a suggestion with no derived
+            # version must FAIL truthfully (400), never report fake success while
+            # producing no real document artifact.
+            assert resp.status_code == 400
+            err_msg = (resp.json().get("error") or {}).get("message", "") or resp.json().get("detail", "")
+            assert "immutable" in err_msg.lower() or "derived version" in err_msg.lower()
             # Invariant: Master resume must NOT be modified
             mock_update_resume.assert_not_called()
-            # Suggestion record and session counters MUST be updated
-            mock_update_sug.assert_called_once()
-            mock_update_sess.assert_called_once()
+            # Invariant: the suggestion must NOT be marked accepted/applied
+            mock_update_sug.assert_not_called()
+            mock_update_sess.assert_not_called()
 
     finally:
         app.dependency_overrides.pop(get_current_user, None)

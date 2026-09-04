@@ -105,15 +105,20 @@ class ResumeCompilerService:
                     doc_model = build_document_model(content, updated_geom or geometry_map)
                     docx_bytes = docx_compiler.compile(doc_model)
 
-                    _upload_to_storage(new_pdf_path, mutated_pdf, "application/pdf", jwt=jwt)
-                    _upload_to_storage(new_docx_path, docx_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", jwt=jwt)
-
-                    return {
-                        "storage_path": new_pdf_path,
-                        "docx_storage_path": new_docx_path,
-                        "geometry": updated_geom,
-                        "strategy": "direct_pdf_mutation",
-                    }
+                    pdf_ok = _upload_to_storage(new_pdf_path, mutated_pdf, "application/pdf", jwt=jwt)
+                    docx_ok = _upload_to_storage(new_docx_path, docx_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", jwt=jwt)
+                    if pdf_ok and docx_ok:
+                        return {
+                            "storage_path": new_pdf_path,
+                            "docx_storage_path": new_docx_path,
+                            "geometry": updated_geom,
+                            "strategy": "direct_pdf_mutation",
+                        }
+                    logger.error(
+                        "Direct mutation artifacts failed to upload (pdf_ok=%s docx_ok=%s); falling back to Document Compiler",
+                        pdf_ok,
+                        docx_ok,
+                    )
             except Exception as e:
                 logger.warning("Direct PDF mutation failed (%s); falling back to Document Compiler", e)
 
@@ -131,12 +136,17 @@ class ResumeCompilerService:
         compiled_geometry = extract_document_geometry(pdf_doc).to_dict()
         pdf_doc.close()
 
-        # Persist artifacts to storage
+        # Persist artifacts to storage; a success response must NEVER be returned
+        # while the artifact itself is missing from storage.
         new_pdf_path = f"{user_id}/versions/{version_id}.pdf"
         new_docx_path = f"{user_id}/versions/{version_id}.docx"
 
-        _upload_to_storage(new_pdf_path, pdf_bytes, "application/pdf", jwt=jwt)
-        _upload_to_storage(new_docx_path, docx_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", jwt=jwt)
+        pdf_ok = _upload_to_storage(new_pdf_path, pdf_bytes, "application/pdf", jwt=jwt)
+        docx_ok = _upload_to_storage(new_docx_path, docx_bytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", jwt=jwt)
+        if not (pdf_ok and docx_ok):
+            raise RuntimeError(
+                f"Failed to persist compiled artifacts to storage (pdf_ok={pdf_ok}, docx_ok={docx_ok})"
+            )
 
         return {
             "storage_path": new_pdf_path,

@@ -101,6 +101,12 @@ class MutatePdfRequest(BaseModel):
     text_color: Optional[Any] = None
 
 
+class SaveVersionContentRequest(BaseModel):
+    """Full-profile manual save. Replaces version content and recompiles artifacts."""
+
+    content: dict[str, Any]
+
+
 class MutatePdfResponse(BaseModel):
     version: ResumeVersionResponse
     storage_path: str

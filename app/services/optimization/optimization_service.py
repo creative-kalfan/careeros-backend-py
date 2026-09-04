@@ -558,6 +558,7 @@ class OptimizationService:
                     "suggestedText": display_name,
                     "suggested_text": display_name,
                     "evidence": "present in resume",
+                    "explanation": f"Skill '{display_name}' is already present in your resume and matches JD requirement.",
                     "action": "keep",
                     "priority": "low",
                     "status": "pending",
@@ -1130,6 +1131,7 @@ class OptimizationService:
                             "sectionName": section_name,
                             "recommended": True,
                             "evidence": f"{section_name} section present",
+                            "explanation": f"Prioritize the {section_name} section for optimal layout and ATS readability.",
                         }
                     )
 

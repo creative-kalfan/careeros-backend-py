@@ -691,16 +691,66 @@ async def accept_suggestion(
             base_content = owned_resume.get("content") or {}
 
         edited_text = payload.edited_text
+
+        # DOCUMENT CHANGE CONTRACT: a suggestion is only "accepted" when its
+        # content change produced a REAL document artifact on a derived version.
+        # The master resume is immutable - accepting against it would mutate only
+        # JSON state while the visible PDF stays unchanged (fake success).
+        if not version_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "The master resume is immutable. Run optimization against a derived "
+                    "version so an accepted suggestion can produce a real document artifact."
+                ),
+            )
+
         updated_content = _apply_suggestion_to_content(
             ResumeContent.from_dict(base_content), suggestion, edited_text
         )
-
-        # Update suggestion record using the authenticated (RLS) client.
         updated_suggestion = dict(suggestion)
         updated_suggestion["status"] = "edited" if edited_text else "accepted"
         if edited_text:
             updated_suggestion["suggested_text"] = edited_text
 
+        # Compile and persist the artifact BEFORE recording acceptance. Any failure
+        # aborts the operation: no version content change, no "accepted" marker.
+        from app.services.resumes.compiler_service import resume_compiler_service
+
+        geom_map = (version.get("meta") or {}).get("geometry") or (owned_resume.get("meta") or {}).get("geometry")
+        update_payload: dict[str, Any] = {"content": updated_content.to_dict()}
+        try:
+            comp_res = resume_compiler_service.compile_and_persist(
+                user_id=current_user.user.id,
+                version_id=version_id,
+                content=updated_content,
+                geometry_map=geom_map,
+                jwt=token,
+            )
+        except Exception as c_err:
+            logger.error("Artifact compilation on suggestion accept failed: %s", c_err, exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Document artifact regeneration failed. The suggestion was NOT applied and no content change was persisted.",
+            ) from c_err
+        if not comp_res.get("storage_path"):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Document artifact regeneration failed. The suggestion was NOT applied and no content change was persisted.",
+            )
+
+        meta = dict(version.get("meta") or {})
+        meta["storage_path"] = comp_res["storage_path"]
+        if comp_res.get("docx_storage_path"):
+            meta["docx_storage_path"] = comp_res["docx_storage_path"]
+        if comp_res.get("geometry"):
+            meta["geometry"] = comp_res["geometry"]
+        meta["compilation_strategy"] = comp_res.get("strategy", "document_compiler")
+        update_payload["meta"] = meta
+        update_payload["source"] = comp_res.get("strategy", "document_compiler")
+        repo.update_version(version_id, update_payload)
+
+        # Record acceptance only after the full artifact pipeline succeeded.
         optimization_repo.update_suggestion(
             payload.suggestion_id,
             {
@@ -710,38 +760,6 @@ async def accept_suggestion(
             },
             jwt=token,
         )
-
-        # Persist resume/version content and compile version artifacts using authenticated client
-        if version_id:
-            update_payload: dict[str, Any] = {"content": updated_content.to_dict()}
-            try:
-                from app.services.resumes.compiler_service import resume_compiler_service
-                geom_map = (version.get("meta") or {}).get("geometry") or (owned_resume.get("meta") or {}).get("geometry")
-                comp_res = resume_compiler_service.compile_and_persist(
-                    user_id=current_user.user.id,
-                    version_id=version_id,
-                    content=updated_content,
-                    geometry_map=geom_map,
-                    jwt=token,
-                )
-                if comp_res.get("storage_path"):
-                    meta = dict(version.get("meta") or {})
-                    meta["storage_path"] = comp_res["storage_path"]
-                    if comp_res.get("docx_storage_path"):
-                        meta["docx_storage_path"] = comp_res["docx_storage_path"]
-                    if comp_res.get("geometry"):
-                        meta["geometry"] = comp_res["geometry"]
-                    meta["compilation_strategy"] = comp_res.get("strategy", "document_compiler")
-                    update_payload["meta"] = meta
-                    update_payload["source"] = comp_res.get("strategy", "document_compiler")
-            except Exception as c_err:
-                logger.warning("Auto compilation on suggestion accept failed: %s", c_err)
-            repo.update_version(version_id, update_payload)
-        else:
-            logger.info(
-                "Master resume is immutable (AGENTS.md Section 5.5); skipping update_resume for resume_id=%s",
-                session.get("resume_id"),
-            )
 
         # Update session counters using the authenticated (RLS) client.
         suggestions = optimization_repo.list_suggestions_for_session(payload.session_id, jwt=token)
@@ -905,9 +923,21 @@ async def reanalyze(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found")
 
         session = optimization_repo.get_session(payload.session_id, jwt=token)
+        if not session:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
         previous_score = float(session.get("current_ats_score") or 0)
 
-        resume_content = ResumeContent.from_dict(resume.get("content"))
+        # Closed-loop ATS: analyze the ACTUAL changed content. When the session
+        # targets a derived version, score that version's content - never the
+        # (immutable) master resume the user may no longer be editing.
+        session_version_id = session.get("version_id")
+        if session_version_id:
+            version = repo.get_version(session_version_id)
+            if not version or version.get("resume_id") != payload.resume_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
+            resume_content = ResumeContent.from_dict(version.get("content") or {})
+        else:
+            resume_content = ResumeContent.from_dict(resume.get("content"))
         analysis_result = analyzer.analyze_resume(
             resume_content=resume_content,
             job_description=payload.job_description,
