@@ -253,3 +253,9 @@ app.include_router(templates_router)
 async def health() -> dict[str, str]:
     """Simple liveness probe."""
     return {"status": "ok"}
+
+
+@app.get("/version")
+async def version() -> dict[str, str]:
+    """Version probe to verify deployment."""
+    return {"version": "jobs-perf-fix-v1"}
