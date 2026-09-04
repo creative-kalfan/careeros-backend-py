@@ -167,14 +167,14 @@ class JobRelevanceService:
         # Get the user's profile if available
         profile = self.profile_repository.get_profile(user_id) if user_id else None
 
-        # Get ALL active candidate jobs (no pagination at the DB layer) so the
-        # Python-side sort (match score + source-quality + India-first boost)
-        # can operate across the full result set. Profile preferences act as
-        # ranking signals (Stage 2), not hard SQL candidate exclusions (Stage 1).
-        # Pagination is applied AFTER sorting/filtering.
-        db_rows, _total = self.job_repository.list_jobs(
+        # Stage 1: Candidate retrieval. Retrieve a bounded candidate pool
+        # (PostgREST single-query max 1000) so the multi-stage ranker
+        # (match score + source-quality + India-first boost) operates in a single
+        # database round-trip without multi-chunk statement timeouts.
+        CANDIDATE_POOL_LIMIT = 1000
+        db_rows, db_total = self.job_repository.list_jobs(
             page=1,
-            page_size=100000,
+            page_size=CANDIDATE_POOL_LIMIT,
             role=role,
             location=location,
             role_category=None,
@@ -194,9 +194,11 @@ class JobRelevanceService:
             jobs, company, skills, remote, employment_type, experience
         )
 
+        has_python_filter = bool(company or skills or remote is not None or employment_type or experience)
+
         # If no profile, apply India-first / dynamic ordering.
         if profile is None:
-            total = len(jobs)
+            total = len(jobs) if has_python_filter else db_total
             if sort in ("newest", "oldest", "salary"):
                 self._sort_jobs(jobs, sort)
             else:
@@ -221,7 +223,7 @@ class JobRelevanceService:
         for job in filtered_jobs:
             job.match = self.personalized_service.calculate_match_score(job, profile)
 
-        total = len(filtered_jobs)
+        total = len(filtered_jobs) if has_python_filter else db_total
 
         if sort in ("newest", "oldest", "salary"):
             self._sort_jobs(filtered_jobs, sort)

@@ -126,7 +126,7 @@ def test_get_relevant_jobs_without_profile(relevance_service, mock_job_repositor
     assert jobs[0].title == "Software Engineer"
     mock_job_repository.list_jobs.assert_called_once_with(
         page=1,
-        page_size=100000,
+        page_size=1000,
         role="engineer",
         location="remote",
         role_category=None,

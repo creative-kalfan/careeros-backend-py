@@ -152,6 +152,10 @@ _ALL_CATEGORIES: list[RoleCategory] = [
 ]
 
 
+from functools import lru_cache
+
+
+@lru_cache(maxsize=4096)
 def classify(text: str | None) -> str:
     """Classify a job title or user free-text target-role input into a role_category.
 

@@ -440,10 +440,14 @@ class JobRepository:
             else:
                 chunk_query = chunk_query.order("created_at", desc=True)
 
-            chunk_res = chunk_query.range(start, end).execute()
-            if not chunk_res.data:
+            try:
+                chunk_res = chunk_query.range(start, end).execute()
+                if not chunk_res.data:
+                    break
+                rows.extend(chunk_res.data)
+            except Exception:
+                logger.warning("list_jobs: chunk fetch failed at offset %d, returning %d partial rows", start, len(rows), exc_info=True)
                 break
-            rows.extend(chunk_res.data)
 
         return rows, total_count
 

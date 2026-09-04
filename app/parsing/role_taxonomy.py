@@ -980,31 +980,39 @@ for category, families in _ROLE_TAXONOMY.items():
         _CANONICAL_TO_RELATED[canonical] = related
 
 
+import re
+from functools import lru_cache
+
+# Precompiled alias patterns sorted descending by alias length for greedy first-match
+_COMPILED_ALIAS_PATTERNS: list[tuple[re.Pattern[str], str, int]] = [
+    (re.compile(r'\b' + re.escape(alias) + r'\b'), canonical, len(alias))
+    for alias, canonical in _CANONICAL_FOR_ALIAS.items()
+]
+_COMPILED_ALIAS_PATTERNS.sort(key=lambda x: x[2], reverse=True)
+
+
+@lru_cache(maxsize=4096)
 def normalize_role(text: str | None) -> str | None:
     """Normalize free-text role input to a canonical role, or None if unknown.
 
     Uses longest-prefix alias matching with word-boundary awareness so
     "Senior Data Analyst at Risk" correctly maps to "Data Analyst" via the
-    "data analyst" alias.
+    "data analyst" alias. Memoized with lru_cache for fast candidate ranking.
     """
     if not text or not isinstance(text, str):
         return None
     normalized = text.lower().strip()
-    
-    # Try exact match first.
+
+    # Try exact match first (O(1)).
     if normalized in _CANONICAL_FOR_ALIAS:
         return _CANONICAL_FOR_ALIAS[normalized]
-    
-    # Try longest substring alias match with word boundaries.
-    import re
-    best_match: str | None = None
-    best_len = 0
-    for alias, canonical in _CANONICAL_FOR_ALIAS.items():
-        pattern = r'\b' + re.escape(alias) + r'\b'
-        if re.search(pattern, normalized) and len(alias) > best_len:
-            best_match = canonical
-            best_len = len(alias)
-    return best_match
+
+    # Try longest substring alias match with precompiled word boundaries.
+    # Patterns are pre-sorted descending by length so first match is longest.
+    for pattern, canonical, _ in _COMPILED_ALIAS_PATTERNS:
+        if pattern.search(normalized):
+            return canonical
+    return None
 
 
 def get_category_for_role(canonical_role: str | None) -> str | None:
