@@ -89,6 +89,22 @@ async def create_version(
     if not content:
         content = resume.get("content") or {}
 
+    meta = body.model_dump(exclude_none=True)
+    if body.parent_version_id:
+        parent = repo.get_version(body.parent_version_id)
+        if parent:
+            parent_meta = parent.get("meta") or {}
+            if "storage_path" in parent_meta and "storage_path" not in meta:
+                meta["storage_path"] = parent_meta["storage_path"]
+            if "docx_storage_path" in parent_meta and "docx_storage_path" not in meta:
+                meta["docx_storage_path"] = parent_meta["docx_storage_path"]
+            if "geometry" in parent_meta and "geometry" not in meta:
+                meta["geometry"] = parent_meta["geometry"]
+    if "storage_path" not in meta and resume.get("storage_path"):
+        meta["storage_path"] = resume["storage_path"]
+    if "geometry" not in meta and (resume.get("meta") or {}).get("geometry"):
+        meta["geometry"] = (resume.get("meta") or {})["geometry"]
+
     row = repo.create_version(
         resume_id=resume_id,
         content=content,
@@ -103,7 +119,7 @@ async def create_version(
         job_description=body.job_description,
         template=body.template,
         sections_config=body.sections_config,
-        meta=body.model_dump(exclude_none=True),
+        meta=meta,
     )
     return SuccessResponse(data=_to_version_response(row))
 

@@ -409,8 +409,10 @@ async def parse_resume(
         )
 
     # Parse
+    import tempfile
     parser = ResumeParsingService()
-    temp_path = f"/tmp/{uuid.uuid4().hex}{Path(original_filename).suffix}"
+    temp_dir = tempfile.gettempdir()
+    temp_path = os.path.join(temp_dir, f"{uuid.uuid4().hex}{Path(original_filename).suffix}")
     try:
         with open(temp_path, "wb") as f:
             f.write(file_data)

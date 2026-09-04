@@ -359,6 +359,7 @@ class ResumeRepository:
             version_name=new_name,
             source="manual",
             is_master=False,
+            parent_version_id=version_id,
             target_job_title=source.get("target_job_title"),
             target_company=source.get("target_company"),
             target_job_id=source.get("target_job_id"),

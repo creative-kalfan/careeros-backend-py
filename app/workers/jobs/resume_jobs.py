@@ -92,9 +92,11 @@ async def parse_resume_job(
             "error": "file_too_large",
         }
 
+    import tempfile
     parser = ResumeParsingService()
     filename = Path(storage_path).name
-    temp_path = f"/tmp/{uuid.uuid4().hex}{Path(storage_path).suffix}"
+    temp_dir = tempfile.gettempdir()
+    temp_path = os.path.join(temp_dir, f"{uuid.uuid4().hex}{Path(storage_path).suffix}")
     try:
         with open(temp_path, "wb") as f:
             f.write(file_data)
