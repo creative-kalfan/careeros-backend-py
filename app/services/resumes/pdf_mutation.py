@@ -100,11 +100,12 @@ def fit_font_size(
     text: str,
     initial_font_size: float,
     font_code: str,
+    max_y1: Optional[float] = None,
 ) -> Tuple[float, fitz.Rect]:
     """Iteratively scale down font_size by 0.5pt down to max(6.5, font_size * 0.75) if text overflows.
 
     If text still overflows at the soft limit, continues scaling down to 6.5pt.
-    If it still overflows at 6.5pt, slightly expands rect height to guarantee text insertion.
+    If it still overflows at 6.5pt, expands rect height into available whitespace up to max_y1 without overlapping obstacles.
     Returns (fitted_font_size, effective_rect).
     """
     if not text.strip():
@@ -116,7 +117,7 @@ def fit_font_size(
 
     tmp_doc = fitz.open()
     try:
-        tmp_page = tmp_doc.new_page(width=rect.width + 100, height=rect.height + 200)
+        tmp_page = tmp_doc.new_page(width=rect.width + 100, height=rect.height + 400)
 
         # Phase 1: Try scaling down to soft_min (75% of original font size)
         curr = font_size
@@ -133,13 +134,14 @@ def fit_font_size(
                 return round(curr, 2), rect
             curr -= 0.5
 
-        # Phase 3: At 6.5pt, expand rect height by remaining overflow if needed
+        # Phase 3: At 6.5pt, expand rect height into available whitespace up to max_y1 if needed
         rc = tmp_page.insert_textbox(rect, text, fontsize=hard_min, fontname=font_code)
-        effective_rect = (
-            fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1 + abs(rc) + 4.0)
-            if rc < 0
-            else rect
-        )
+        if rc < 0:
+            desired_y1 = rect.y1 + abs(rc) + 4.0
+            expanded_y1 = min(desired_y1, max_y1) if max_y1 is not None else desired_y1
+            effective_rect = fitz.Rect(rect.x0, rect.y0, rect.x1, max(rect.y1, expanded_y1))
+        else:
+            effective_rect = rect
         return hard_min, effective_rect
     finally:
         tmp_doc.close()
@@ -231,11 +233,18 @@ class PDFMutationEngine:
             raise IndexError(f"Page index {page_index} out of range [0, {total_pages - 1}]")
 
         page = doc[page_index]
-
-        # 1. Redact target rectangle
         rect = fitz.Rect(bbox[0], bbox[1], bbox[2], bbox[3])
-        page.add_redact_annot(rect, fill=(1.0, 1.0, 1.0))
-        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+
+        # Find next obstacle block below target rect in the same column to prevent overlap
+        page_blocks = page.get_text("blocks")
+        obstacles_below = [
+            b[1]
+            for b in page_blocks
+            if b[1] >= rect.y1 - 1.0
+            and min(b[2], rect.x1) - max(b[0], rect.x0) > 10.0
+        ]
+        max_allowed_y1 = min(obstacles_below) - 2.0 if obstacles_below else (page.rect.height - 36.0)
+        max_allowed_y1 = max(rect.y1, max_allowed_y1)
 
         # 2. Map font & color
         effective_font_name = font_name or "Helvetica"
@@ -248,8 +257,14 @@ class PDFMutationEngine:
 
         # 3. Dynamic typography fitting and insertion
         if replacement_text and replacement_text.strip():
-            fitted_font_size, target_rect = fit_font_size(rect, replacement_text, effective_font_size, font_code)
-            page.insert_textbox(
+            fitted_font_size, target_rect = fit_font_size(
+                rect, replacement_text, effective_font_size, font_code, max_y1=max_allowed_y1
+            )
+            # Redact the full target_rect area
+            page.add_redact_annot(target_rect, fill=(1.0, 1.0, 1.0))
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+
+            rc = page.insert_textbox(
                 target_rect,
                 replacement_text,
                 fontsize=fitted_font_size,
@@ -257,6 +272,36 @@ class PDFMutationEngine:
                 color=text_color_rgb,
                 align=fitz.TEXT_ALIGN_LEFT,
             )
+            # If text overflows even at hard minimum (rc < 0), insert maximum fitting prefix
+            if rc < 0:
+                words = replacement_text.split()
+                low, high = 1, len(words)
+                best_text = ""
+                while low <= high:
+                    mid = (low + high) // 2
+                    cand = " ".join(words[:mid])
+                    tmp = fitz.open()
+                    tp = tmp.new_page(width=target_rect.width + 100, height=target_rect.height + 100)
+                    c_rc = tp.insert_textbox(target_rect, cand, fontsize=fitted_font_size, fontname=font_code)
+                    tmp.close()
+                    if c_rc >= 0:
+                        best_text = cand
+                        low = mid + 1
+                    else:
+                        high = mid - 1
+                if best_text:
+                    page.insert_textbox(
+                        target_rect,
+                        best_text,
+                        fontsize=fitted_font_size,
+                        fontname=font_code,
+                        color=text_color_rgb,
+                        align=fitz.TEXT_ALIGN_LEFT,
+                    )
+        else:
+            # Empty or whitespace: redact the original rect
+            page.add_redact_annot(rect, fill=(1.0, 1.0, 1.0))
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
         # 4. Re-extract updated geometry map
         updated_geometry = extract_document_geometry(doc)
