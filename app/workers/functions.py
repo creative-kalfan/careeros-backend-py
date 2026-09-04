@@ -179,12 +179,18 @@ async def parse_resume_job(
                     "parse_status": "completed",
                 },
             )
+            v1_meta: dict[str, Any] = {}
+            if storage_path:
+                v1_meta["storage_path"] = storage_path
+            if parse_result.geometry:
+                v1_meta["geometry"] = parse_result.geometry
             repo.create_version(
                 resume_id=resume_id,
                 content=parse_result.content,
                 version_name="v1",
                 source="upload_parse",
-                meta={"geometry": parse_result.geometry} if parse_result.geometry else {},
+                is_master=True,
+                meta=v1_meta,
             )
             duration_ms = int((time.monotonic() - job_start) * 1000)
             job_logger.completed(duration_ms=duration_ms, status="completed")

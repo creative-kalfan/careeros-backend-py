@@ -429,12 +429,18 @@ async def parse_resume(
             meta_payload["geometry"] = result.geometry
         meta_update = {"meta": meta_payload}
         repo.update_resume(auth.user.id, resume_id, {**content_update, **meta_update})
+        v1_meta: dict[str, Any] = {}
+        if storage_path:
+            v1_meta["storage_path"] = storage_path
+        if result.geometry:
+            v1_meta["geometry"] = result.geometry
         version = repo.create_version(
             resume_id=resume_id,
             content=result.content,
             version_name="v1",
             source="upload_parse",
-            meta={"geometry": result.geometry} if result.geometry else {},
+            is_master=True,
+            meta=v1_meta,
         )
         version_id = version.get("id")
         repo.update_resume(auth.user.id, resume_id, {"parse_status": "completed"})

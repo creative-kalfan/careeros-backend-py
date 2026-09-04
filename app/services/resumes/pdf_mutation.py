@@ -308,4 +308,13 @@ class PDFMutationEngine:
         mutated_pdf_bytes = doc.tobytes(deflate=True)
         doc.close()
 
+        # 5. Visual Verification Pass
+        from app.services.resumes.visual_verification import VisualVerificationEngine
+        adjusted_bytes, v_result = VisualVerificationEngine.auto_adjust_if_needed(mutated_pdf_bytes)
+        if v_result.auto_adjusted:
+            mutated_pdf_bytes = adjusted_bytes
+            adj_doc = fitz.open(stream=mutated_pdf_bytes, filetype="pdf")
+            updated_geometry = extract_document_geometry(adj_doc)
+            adj_doc.close()
+
         return mutated_pdf_bytes, updated_geometry.to_dict()

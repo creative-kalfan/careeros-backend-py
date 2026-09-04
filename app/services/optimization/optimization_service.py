@@ -24,6 +24,7 @@ from app.services.ats.job_description_parser import JobDescriptionParser
 from app.services.ats.ats_analyzer import ATSAnalyzer
 from app.llm.gateway import get_llm_gateway
 from app.llm.types import LLMRequest, LLMTask, LLMProviderError, ResumeSectionSuggestion
+from app.services.resumes.system_prompt import get_resume_intelligence_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -638,14 +639,16 @@ class OptimizationService:
         ]
         prompt = "\n".join(context_parts)
 
-        system_instruction = (
-            "You are a resume optimization assistant. "
-            "Generate a structured skills-section suggestion for the candidate. "
-            "Do NOT invent skills the candidate does not have. "
-            "Do NOT claim a skill is present merely because the JD requests it. "
-            "If a skill is missing but relevant, label it as a recommendation, not as existing. "
-            "Return ONLY a JSON object with fields: section, operation, original_content, "
-            "suggested_content, rationale, confidence."
+        system_instruction = get_resume_intelligence_system_prompt(
+            section="skills",
+            custom_instructions=(
+                "Generate a structured skills-section suggestion for the candidate.\n"
+                "Do NOT invent skills the candidate does not have.\n"
+                "Do NOT claim a skill is present merely because the JD requests it.\n"
+                "If a skill is missing but relevant, label it as a recommendation, not as existing.\n"
+                "Return ONLY a JSON object with fields: section, operation, original_content, "
+                "suggested_content, rationale, confidence."
+            ),
         )
 
         try:
@@ -802,25 +805,27 @@ class OptimizationService:
         ]
         prompt = "\n".join(context_parts)
 
-        system_instruction = (
-            "You are a resume optimization assistant specializing in professional summaries. "
-            "Generate a concise, targeted professional summary for the candidate's resume. "
-            "CRITICAL RULES FOR FACTUAL GROUNDING:\n"
-            "- ONLY use information explicitly provided in the candidate context above.\n"
-            "- NEVER invent years of experience, employers, job titles, technologies, "
-            "certifications, degrees, achievements, metrics, or responsibilities.\n"
-            "- If information is absent from the context, OMIT it entirely.\n"
-            "- Do NOT fabricate statistics or metrics not present in the resume.\n"
-            "- The summary must be grounded in the candidate's actual experience.\n"
-            "QUALITY RULES:\n"
-            "- Write in concise, professional resume language.\n"
-            "- Use ATS-friendly terminology relevant to the target role.\n"
-            "- Align the summary with the target job's requirements.\n"
-            "- Naturally incorporate relevant keywords from the JD.\n"
-            "- Avoid keyword stuffing, generic buzzwords, and excessive adjectives.\n"
-            "- The summary should sound like a professional resume, not an AI response.\n"
-            "Return ONLY a JSON object with fields: section, operation, original_content, "
-            "suggested_content, rationale, confidence."
+        system_instruction = get_resume_intelligence_system_prompt(
+            section="summary",
+            custom_instructions=(
+                "Generate a concise, targeted professional summary for the candidate's resume.\n"
+                "CRITICAL RULES FOR FACTUAL GROUNDING:\n"
+                "- ONLY use information explicitly provided in the candidate context above.\n"
+                "- NEVER invent years of experience, employers, job titles, technologies, "
+                "certifications, degrees, achievements, metrics, or responsibilities.\n"
+                "- If information is absent from the context, OMIT it entirely.\n"
+                "- Do NOT fabricate statistics or metrics not present in the resume.\n"
+                "- The summary must be grounded in the candidate's actual experience.\n"
+                "QUALITY RULES:\n"
+                "- Write in concise, professional resume language.\n"
+                "- Use ATS-friendly terminology relevant to the target role.\n"
+                "- Align the summary with the target job's requirements.\n"
+                "- Naturally incorporate relevant keywords from the JD.\n"
+                "- Avoid keyword stuffing, generic buzzwords, and excessive adjectives.\n"
+                "- The summary should sound like a professional resume, not an AI response.\n"
+                "Return ONLY a JSON object with fields: section, operation, original_content, "
+                "suggested_content, rationale, confidence."
+            ),
         )
 
         try:
@@ -965,24 +970,26 @@ class OptimizationService:
         ]
         prompt = "\n".join(context_parts)
 
-        system_instruction = (
-            "You are a resume optimization assistant specializing in experience bullet points. "
-            "Rewrite the given bullet to be more impactful, specific, and ATS-friendly. "
-            "CRITICAL RULES FOR FACTUAL GROUNDING:\n"
-            "- ONLY use information explicitly provided in the candidate context above.\n"
-            "- NEVER invent employers, job titles, technologies, certifications, "
-            "degrees, achievements, metrics, or responsibilities.\n"
-            "- If information is absent from the context, OMIT it entirely.\n"
-            "- Do NOT fabricate statistics or metrics not present in the original bullet.\n"
-            "QUALITY RULES:\n"
-            "- Use strong action verbs at the start of the bullet.\n"
-            "- Quantify impact where the original bullet already implies measurable outcomes.\n"
-            "- Align the bullet with the target job's requirements.\n"
-            "- Use ATS-friendly terminology relevant to the target role.\n"
-            "- Keep the bullet concise (1-2 lines max).\n"
-            "- Do NOT change the fundamental meaning or responsibilities described.\n"
-            "Return ONLY a JSON object with fields: section, operation, original_content, "
-            "suggested_content, rationale, confidence."
+        system_instruction = get_resume_intelligence_system_prompt(
+            section="experience",
+            custom_instructions=(
+                "Rewrite the given bullet to be more impactful, specific, and ATS-friendly.\n"
+                "CRITICAL RULES FOR FACTUAL GROUNDING:\n"
+                "- ONLY use information explicitly provided in the candidate context above.\n"
+                "- NEVER invent employers, job titles, technologies, certifications, "
+                "degrees, achievements, metrics, or responsibilities.\n"
+                "- If information is absent from the context, OMIT it entirely.\n"
+                "- Do NOT fabricate statistics or metrics not present in the original bullet.\n"
+                "QUALITY RULES:\n"
+                "- Use strong action verbs at the start of the bullet.\n"
+                "- Quantify impact where the original bullet already implies measurable outcomes.\n"
+                "- Align the bullet with the target job's requirements.\n"
+                "- Use ATS-friendly terminology relevant to the target role.\n"
+                "- Keep the bullet concise (1-2 lines max).\n"
+                "- Do NOT change the fundamental meaning or responsibilities described.\n"
+                "Return ONLY a JSON object with fields: section, operation, original_content, "
+                "suggested_content, rationale, confidence."
+            ),
         )
 
         try:

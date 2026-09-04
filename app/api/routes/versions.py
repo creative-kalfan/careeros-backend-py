@@ -439,6 +439,7 @@ async def apply_version_operation(
         child_id=body.child_id,
         replacement=replacement,
         child_text=body.child_text,
+        content=content,
     )
     if new_storage_path and updated_geom:
         meta = dict(row.get("meta") or {})
@@ -520,15 +521,51 @@ def _attempt_pdf_mutation_on_operation(
     child_id: Optional[str],
     replacement: Optional[dict[str, Any]],
     child_text: Optional[str],
+    content: Optional[ResumeContent] = None,
 ) -> tuple[Optional[str], Optional[dict[str, Any]]]:
     """Helper to synchronously mutate PDF and upload when storage_path and geometry exist."""
     from app.services.resumes.pdf_mutation import PDFMutationEngine
+    from app.services.export_service import export_service
+    from app.services.resume_parser.geometry import extract_document_geometry
+    from app.services.resumes.visual_verification import VisualVerificationEngine
     from app.db.supabase import get_authenticated_client, get_service_client
+    import fitz
 
     source_storage_path = (row.get("meta") or {}).get("storage_path") or resume.get("storage_path")
     geom_map = (row.get("meta") or {}).get("geometry") or (resume.get("meta") or {}).get("geometry")
 
+    def _compile_and_upload(res_content: ResumeContent) -> tuple[Optional[str], Optional[dict[str, Any]]]:
+        try:
+            template = row.get("template", "minimal")
+            compiled_bytes = export_service.export_pdf(res_content, template=template)
+            adj_bytes, _ = VisualVerificationEngine.auto_adjust_if_needed(compiled_bytes)
+            adj_doc = fitz.open(stream=adj_bytes, filetype="pdf")
+            compiled_geom = extract_document_geometry(adj_doc).to_dict()
+            adj_doc.close()
+            new_vid = str(uuid.uuid4())
+            new_path = f"{auth.user.id}/versions/{new_vid}.pdf"
+            try:
+                sc = get_authenticated_client(auth.jwt)
+                sc.storage.from_("resumes").upload(
+                    new_path,
+                    adj_bytes,
+                    file_options={"content-type": "application/pdf", "upsert": "true"},
+                )
+            except Exception:
+                sc = get_service_client()
+                sc.storage.from_("resumes").upload(
+                    new_path,
+                    adj_bytes,
+                    file_options={"content-type": "application/pdf", "upsert": "true"},
+                )
+            return new_path, compiled_geom
+        except Exception as c_exc:
+            logger.warning("Compilation fallback failed: %s", c_exc)
+            return None, None
+
     if not source_storage_path or not geom_map:
+        if content:
+            return _compile_and_upload(content)
         return None, None
 
     try:
@@ -546,6 +583,8 @@ def _attempt_pdf_mutation_on_operation(
             suggested_text = child_text
 
         if not suggested_text:
+            if content:
+                return _compile_and_upload(content)
             return None, None
 
         # Search for matching block
@@ -571,6 +610,8 @@ def _attempt_pdf_mutation_on_operation(
                 break
 
         if not matched_block:
+            if content:
+                return _compile_and_upload(content)
             return None, None
 
         # Download PDF bytes
@@ -612,6 +653,8 @@ def _attempt_pdf_mutation_on_operation(
         return new_storage_path, updated_geom
     except Exception as exc:
         logger.warning("PDF mutation in operation skipped/failed: %s", exc)
+        if content:
+            return _compile_and_upload(content)
         return None, None
 
 
