@@ -453,16 +453,16 @@ class OptimizationService:
         # Clean trailing punctuation
         suggested = suggested.rstrip(". \t\n")
 
-        # Add quantifiable impact if missing metrics
+        # Add high-impact technical outcome without fabricating artificial numeric metrics
         if not has_metric:
             if any(term in lower_bullet for term in ["api", "service", "backend", "database", "query", "server", "performance"]):
-                suggested += ", reducing query latency and enhancing system throughput by 30%."
+                suggested += ", reducing query latency and enhancing system throughput."
             elif any(term in lower_bullet for term in ["frontend", "ui", "ux", "react", "component", "page", "client"]):
-                suggested += ", improving page render efficiency and boosting user engagement by 25%."
+                suggested += ", improving page render efficiency and user engagement."
             elif any(term in lower_bullet for term in ["ci/cd", "pipeline", "test", "docker", "deploy", "build", "automation"]):
-                suggested += ", accelerating release velocity and cutting deployment cycle times by 40%."
+                suggested += ", accelerating release velocity and deployment cycles."
             else:
-                suggested += ", improving operational performance and accelerating delivery velocity."
+                suggested += ", improving operational performance and delivery velocity."
         else:
             suggested += "."
 
@@ -472,7 +472,7 @@ class OptimizationService:
         if has_weak_starter or not has_strong_verb:
             explanations.append("Strengthened passive phrasing with a high-impact action verb")
         if not has_metric:
-            explanations.append("incorporated quantifiable outcome metrics")
+            explanations.append("emphasized technical impact and system outcomes")
         if not has_keywords and affected_kws:
             explanations.append("aligned terminology with target job requirements")
 
