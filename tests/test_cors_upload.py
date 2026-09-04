@@ -165,3 +165,106 @@ def test_cors_preflight_allows_known_headers_and_methods(client: TestClient) -> 
     allowed_headers = (resp.headers.get("access-control-allow-headers") or "").lower()
     assert "authorization" in allowed_headers
     assert "content-type" in allowed_headers
+
+
+PRODUCTION_ORIGIN = "https://careeros-frontend-three.vercel.app"
+
+
+def test_production_frontend_preflight_allows_sentry_and_auth_headers(
+    client: TestClient,
+) -> None:
+    """Production preflight with Sentry distributed tracing headers must succeed (200)."""
+    resp = client.options(
+        "/api/profile/me",
+        headers={
+            "Origin": PRODUCTION_ORIGIN,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization,sentry-trace,baggage",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == PRODUCTION_ORIGIN
+    assert resp.headers["access-control-allow-credentials"] == "true"
+    assert "GET" in resp.headers["access-control-allow-methods"]
+    allowed_headers = (resp.headers.get("access-control-allow-headers") or "").lower()
+    assert "authorization" in allowed_headers
+    assert "sentry-trace" in allowed_headers
+    assert "baggage" in allowed_headers
+
+
+def test_production_frontend_preflight_rejects_untrusted_origin(
+    client: TestClient,
+) -> None:
+    """Untrusted origins must be rejected with 400 Bad Request."""
+    resp = client.options(
+        "/api/profile/me",
+        headers={
+            "Origin": "https://malicious-origin.com",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization,sentry-trace,baggage",
+        },
+    )
+    assert resp.status_code == 400
+    assert "Disallowed CORS origin" in resp.text
+
+
+def test_production_frontend_profile_me_flow(client: TestClient) -> None:
+    """Verify complete preflight OPTIONS -> authenticated GET /api/profile/me flow."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from app.dependencies import get_current_user
+    from app.auth.service import AuthContext, AuthUser
+    from app.models.profile import UserProfile
+
+    # 1. Preflight OPTIONS
+    opt_resp = client.options(
+        "/api/profile/me",
+        headers={
+            "Origin": PRODUCTION_ORIGIN,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization,sentry-trace,baggage",
+        },
+    )
+    assert opt_resp.status_code == 200
+    assert opt_resp.headers["access-control-allow-origin"] == PRODUCTION_ORIGIN
+
+    # 2. Authenticated GET
+    mock_auth = AuthContext(
+        user=AuthUser(id="usr-123", email="user@example.com", role="user"),
+        supabase=MagicMock(),
+        jwt="test-jwt-token",
+    )
+    mock_profile = UserProfile.from_db_row(
+        {
+            "id": "usr-123",
+            "email": "user@example.com",
+            "full_name": "Test User",
+            "role": "user",
+            "onboarding_completed": True,
+            "onboarding_step": 10,
+        }
+    )
+
+    app.dependency_overrides[get_current_user] = lambda: mock_auth
+    try:
+        with patch("app.api.routes.profile.ProfileRepository") as mock_repo_cls:
+            instance = mock_repo_cls.return_value
+            instance.aget_profile = AsyncMock(return_value=mock_profile)
+
+            get_resp = client.get(
+                "/api/profile/me",
+                headers={
+                    "Origin": PRODUCTION_ORIGIN,
+                    "Authorization": "Bearer test-jwt-token",
+                    "sentry-trace": "trace-123",
+                    "baggage": "sentry-release=1.0",
+                },
+            )
+            assert get_resp.status_code == 200
+            assert get_resp.headers["access-control-allow-origin"] == PRODUCTION_ORIGIN
+            data = get_resp.json()
+            assert data["success"] is True
+            assert data["data"]["id"] == "usr-123"
+            assert data["data"]["onboarding_completed"] is True
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+

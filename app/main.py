@@ -112,19 +112,32 @@ def _scrub_pii(event: dict, hint: dict) -> dict:
     return event
 
 
+DEFAULT_CORS_ORIGINS = [
+    "https://careeros-frontend-three.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+]
+
+
 def _get_cors_origins() -> list[str]:
-    """Build CORS origins from env or fall back to dev defaults."""
+    """Build CORS origins from env or fall back to canonical defaults.
+
+    Normalizes whitespace and trailing slashes so slight env var
+    discrepancies (e.g. trailing slash on Vercel domain) never cause
+    silent preflight 400 rejections.
+    """
     settings = get_settings()
+    origins = [o.rstrip("/") for o in DEFAULT_CORS_ORIGINS]
     if settings.cors_allowed_origins:
-        return [o.strip() for o in settings.cors_allowed_origins.split(",") if o.strip()]
-    return [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-    ]
+        for origin in settings.cors_allowed_origins.split(","):
+            cleaned = origin.strip().rstrip("/")
+            if cleaned and cleaned not in origins:
+                origins.append(cleaned)
+    return origins
 
 
 @asynccontextmanager
@@ -155,9 +168,14 @@ app.add_middleware(ExceptionEnvelopeMiddleware)
 # Explicit, safe CORS allowlist. We never use wildcard `*` for methods/headers:
 # a wildcard combined with ``allow_credentials=True`` is rejected by browsers
 # and is too permissive anyway. We allow only the HTTP methods and request
-# headers the CareerOS frontend actually sends (JSON API + Bearer auth).
+# headers the CareerOS frontend actually sends (JSON API + Bearer auth + Sentry distributed tracing).
 ALLOWED_CORS_METHODS = ["GET", "POST", "PATCH", "DELETE", "OPTIONS"]
-ALLOWED_CORS_HEADERS = ["Authorization", "Content-Type"]
+ALLOWED_CORS_HEADERS = [
+    "Authorization",
+    "Content-Type",
+    "sentry-trace",
+    "baggage",
+]
 
 app.add_middleware(
     CORSMiddleware,
