@@ -92,12 +92,20 @@ def detect_sections(
 
             # Signal 1: Header lexicon match
             section_key = match_section_header(line_text)
+            if not section_key and line_idx == 0:
+                from .entry_detector import ROLE_KEYWORDS, COMPANY_SUFFIXES
+                dates = extract_simple_dates(line_text)
+                has_role = any(r in line_text.lower() for r in ROLE_KEYWORDS)
+                has_company = any(s in line_text.lower() for s in COMPANY_SUFFIXES)
+                if dates and (has_role or has_company):
+                    section_key = "experience"
+
             if section_key:
                 candidates.append(SectionCandidate(
                     block=block,
                     section_key=section_key,
                     confidence=0.95,
-                    signals=["lexicon_match"],
+                    signals=["lexicon_match" if match_section_header(line_text) else "entry_header"],
                 ))
                 continue
 
@@ -150,6 +158,7 @@ def detect_sections(
     # - All caps
     # - Larger font
     seen: Dict[Tuple[int, str], SectionCandidate] = {}
+    seen_scores: Dict[Tuple[int, str], float] = {}
     for cand in candidates:
         key = (cand.block.page, cand.section_key)
         
@@ -176,10 +185,9 @@ def detect_sections(
         
         total_score = cand.confidence * 100 + quality_score
         
-        if key not in seen or total_score > (seen[key].confidence * 100 + 
-                                              (10 if id(seen[key].block) == id(block) and 
-                                               any(match_section_header(l.text.strip()) for l in seen[key].block.lines[:1]) else 0)):
+        if key not in seen or total_score > seen_scores[key]:
             seen[key] = cand
+            seen_scores[key] = total_score
 
     unique_candidates = list(seen.values())
     unique_candidates.sort(key=lambda c: (c.block.page, c.block.y0))

@@ -37,16 +37,21 @@ def extract_contact_from_blocks(blocks: List[DocumentBlock]) -> ParsedContact:
     if not blocks:
         return ParsedContact()
 
-    # Focus on first page, top 30% of content
-    first_page_blocks = [b for b in blocks if b.page == 0]
-    if not first_page_blocks:
-        first_page_blocks = blocks[:5]
-
-    # Sort by y-position (top to bottom)
+    # Focus on actual header blocks (top of first page, strictly above any section headers)
+    from .header_lexicon import match_section_header
+    first_page_blocks = [b for b in blocks if b.page == 0] or blocks[:5]
     first_page_blocks.sort(key=lambda b: b.y0)
+    top_blocks = []
+    for b in first_page_blocks:
+        if b.lines and match_section_header(b.lines[0].text.strip()):
+            break
+        if b.y0 < 120:
+            top_blocks.append(b)
+    if not top_blocks:
+        top_blocks = first_page_blocks[:1]
 
-    # Combine text from top blocks
-    header_text = "\n".join(b.text for b in first_page_blocks[:8])
+    # Combine text from top header blocks only
+    header_text = "\n".join(b.text for b in top_blocks)
 
     contact = ParsedContact()
 
@@ -83,20 +88,33 @@ def extract_contact_from_blocks(blocks: List[DocumentBlock]) -> ParsedContact:
 
     # Extract name - strongest candidate from first few lines
     name_candidates = []
-    for block in first_page_blocks[:5]:
+    candidate_blocks = top_blocks if top_blocks else first_page_blocks[:3]
+    for block in candidate_blocks:
         for line in block.lines:
             line_text = line.text.strip()
             if not line_text:
                 continue
             
+            # Never treat section headers as names
+            if match_section_header(line_text):
+                continue
+
             # Skip lines with contact info
             if (EMAIL_RE.search(line_text) or PHONE_RE.search(line_text) or
                 LINKEDIN_RE.search(line_text) or GITHUB_RE.search(line_text) or
                 URL_RE.search(line_text)):
                 continue
             
-            # Check if looks like a name
+            # Check if line or prefix before delimiter (e.g. "NAME — TITLE") looks like a name
+            name_candidate_text = None
             if is_likely_name(line_text):
+                name_candidate_text = line_text
+            else:
+                parts = re.split(r"\s*[—–\-|]\s*", line_text)
+                if parts and is_likely_name(parts[0]):
+                    name_candidate_text = parts[0]
+
+            if name_candidate_text:
                 # Higher confidence for larger font, bold, top position
                 conf = 0.5
                 if line.font_size > 14:
@@ -105,7 +123,7 @@ def extract_contact_from_blocks(blocks: List[DocumentBlock]) -> ParsedContact:
                     conf += 0.2
                 if block.y0 < 100:  # Near top
                     conf += 0.1
-                name_candidates.append((line_text, conf, block))
+                name_candidates.append((name_candidate_text, conf, block))
 
     if name_candidates:
         # Sort by confidence, take highest

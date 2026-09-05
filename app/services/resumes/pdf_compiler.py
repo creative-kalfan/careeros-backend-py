@@ -278,13 +278,16 @@ def _render_plain_textbox_fallback(doc_model: ResumeDocumentModel, style) -> byt
     text = "\n".join(lines) or "Resume"
     doc = fitz.open()
     page = doc.new_page(width=style.page_width_pt, height=style.page_height_pt)
+    # Embed font buffer to ensure unicode glyphs (•, —) are preserved without substitution
+    helv_font = fitz.Font("helv")
+    page.insert_font(fontname="f_fallback", fontbuffer=helv_font.buffer)
     rect = fitz.Rect(
         style.margin_left_pt,
         style.margin_top_pt,
         style.page_width_pt - style.margin_right_pt,
         style.page_height_pt - style.margin_bottom_pt,
     )
-    page.insert_textbox(rect, text, fontsize=style.body_size_pt, fontname="helv")
+    page.insert_textbox(rect, text, fontsize=style.body_size_pt, fontname="f_fallback")
     out = doc.tobytes(deflate=True)
     doc.close()
     return out

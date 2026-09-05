@@ -1,7 +1,7 @@
 """Resume export service for PDF and DOCX generation (Step 6)."""
 
 from __future__ import annotations
-
+from app.services.resume_parser.skills_parser import partition_soft_skills
 import io
 import logging
 import re
@@ -192,6 +192,10 @@ def _render_html(content: ResumeContent, template: str = "minimal") -> str:
         profile.skills.custom,
     ]):
         items = []
+        # ponytail: raw export path bypasses document_model — reclassify here
+        # so technical terms in soft_skills never render as "Soft Skills:".
+        _tech_like, _genuine_soft = partition_soft_skills(list(profile.skills.soft_skills or []))
+        _extra_tech = [s for s in _tech_like if s not in (profile.skills.technical or [])]
         categories = [
             ("technical", "Technical Skills"),
             ("tools", "Tools & Frameworks"),
@@ -202,6 +206,10 @@ def _render_html(content: ResumeContent, template: str = "minimal") -> str:
         ]
         for cat_key, cat_label in categories:
             vals = getattr(profile.skills, cat_key, [])
+            if cat_key == "technical":
+                vals = [*(vals or []), *_extra_tech]
+            elif cat_key == "soft_skills":
+                vals = _genuine_soft
             if vals:
                 items.append(
                     f'<div class="skill-row"><strong>{cat_label}:</strong> {", ".join(vals)}</div>'
@@ -509,11 +517,17 @@ class ExportService:
 
         if profile.skills and any([profile.skills.technical, profile.skills.tools, profile.skills.languages, profile.skills.databases, profile.skills.analytics, profile.skills.soft_skills]):
             doc.add_heading("Skills", level=1)
+            _tech_like, _genuine_soft = partition_soft_skills(list(profile.skills.soft_skills or []))
+            _extra_tech = [s for s in _tech_like if s not in (profile.skills.technical or [])]
             for category, label in [
                 ("technical", "Technical"), ("tools", "Tools"), ("languages", "Languages"),
                 ("databases", "Databases"), ("analytics", "Analytics"), ("soft_skills", "Soft Skills"),
             ]:
                 values = getattr(profile.skills, category, [])
+                if category == "technical":
+                    values = [*(values or []), *_extra_tech]
+                elif category == "soft_skills":
+                    values = _genuine_soft
                 if values:
                     doc.add_paragraph("{label}: {values}".format(label=label, values=", ".join(values)))
 

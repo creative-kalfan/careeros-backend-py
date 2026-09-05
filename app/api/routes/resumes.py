@@ -436,15 +436,22 @@ async def parse_resume(
             v1_meta["storage_path"] = storage_path
         if result.geometry:
             v1_meta["geometry"] = result.geometry
-        version = repo.create_version(
-            resume_id=resume_id,
-            content=result.content,
-            version_name="v1",
-            source="upload_parse",
-            is_master=True,
-            meta=v1_meta,
-        )
-        version_id = version.get("id")
+        existing_master = repo.get_master_version(resume_id)
+        if existing_master:
+            version = repo.update_version(
+                existing_master["id"],
+                {"content": result.content, "meta": {**existing_master.get("meta", {}), **v1_meta}},
+            )
+        else:
+            version = repo.create_version(
+                resume_id=resume_id,
+                content=result.content,
+                version_name="v1",
+                source="upload_parse",
+                is_master=True,
+                meta=v1_meta,
+            )
+        version_id = version.get("id") if version else None
         repo.update_resume(auth.user.id, resume_id, {"parse_status": "completed"})
     else:
         repo.update_resume(

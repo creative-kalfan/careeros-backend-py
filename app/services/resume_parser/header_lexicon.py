@@ -153,6 +153,12 @@ def match_section_header(text: str) -> str | None:
     if not normalized:
         return None
 
+    # Section headers are concise titles (e.g. "Work Experience", "Core Skills"),
+    # not full sentences or job entries. Body lines containing keywords must not match.
+    words = normalized.split()
+    if len(words) > 5:
+        return None
+
     # Direct match
     for section, keywords in HEADER_LEXICON.items():
         for kw in keywords:

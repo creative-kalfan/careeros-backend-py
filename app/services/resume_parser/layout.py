@@ -62,11 +62,21 @@ def detect_columns(
     if not blocks:
         return []
 
-    effective_height = page_height or max((b.y1 for b in blocks), default=792.0)
+    # Detect top header blocks that sit entirely above side-by-side columns
+    def is_top_header_block(b: DocumentBlock) -> bool:
+        if b.y0 < 120:
+            overlaps_h = [o for o in blocks if o != b and max(b.y0, o.y0) < min(b.y1, o.y1)]
+            if not overlaps_h:
+                return True
+        return False
+
+    body_blocks = [b for b in blocks if not is_top_header_block(b)] or blocks
+    content_height = max((b.y1 for b in body_blocks), default=792.0) - min((b.y0 for b in body_blocks), default=0.0)
+    effective_height = max(100.0, content_height)
     spanning_threshold = 0.65 * page_width
 
     # Filter out spanning blocks from defining columns
-    non_spanning_blocks = [b for b in blocks if (b.x1 - b.x0) <= spanning_threshold]
+    non_spanning_blocks = [b for b in body_blocks if (b.x1 - b.x0) <= spanning_threshold]
 
     # Filter out narrow pills (dates, tags, single-line short snippets)
     # A block is considered defining if it has multi-line content or substantial width/text
@@ -133,7 +143,7 @@ def detect_columns(
         col_x1 = min(page_width, max(b.x1 for b in cluster_blocks) + 10)
         v_span = max(b.y1 for b in cluster_blocks) - min(b.y0 for b in cluster_blocks)
 
-        if len(cluster_blocks) >= 2 and v_span >= 0.20 * effective_height and (col_x1 - col_x0) > 80:
+        if len(cluster_blocks) >= 2 and v_span >= 0.20 * effective_height and (col_x1 - col_x0) > 60:
             candidate_cols.append(Column(x0=col_x0, x1=col_x1))
 
     # Multi-column classification requires at least 2 valid columns
@@ -162,12 +172,25 @@ def assign_blocks_to_columns(blocks: List[DocumentBlock], columns: List[Column])
         return columns
 
     # Multi-column: assign each block to best column
+    # Calculate earliest column-body y0
+    non_spanning_y0s = [
+        b.y0 for b in blocks
+        if (b.x1 - b.x0) <= 0.60 * (columns[-1].x1 - columns[0].x0)
+    ]
+    min_body_y0 = min(non_spanning_y0s) if non_spanning_y0s else 0.0
+
     for block in blocks:
         block_width = block.x1 - block.x0
         block_center_x = (block.x0 + block.x1) / 2
 
-        # Spanning blocks assigned to first column so they remain at top/proper order
-        if block_width > 0.65 * (columns[-1].x1 - columns[0].x0):
+        # Spanning blocks intersect multiple columns horizontally or sit above all column content
+        is_crossing_columns = (
+            len(columns) >= 2 and
+            block.x0 < columns[0].x1 and
+            block.x1 > columns[1].x0
+        )
+        is_spanning = is_crossing_columns or (block.y1 <= min_body_y0 + 5)
+        if is_spanning:
             columns[0].blocks.append(block)
             continue
 

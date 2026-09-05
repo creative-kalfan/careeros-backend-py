@@ -119,8 +119,27 @@ def parse_education_section(blocks: List[DocumentBlock]) -> EducationParseResult
         
         if institution_match:
             # Clean up institution name
-            edu.institution = re.split(r"[,|]", institution_match)[0].strip()
-        
+            parts = [p.strip() for p in re.split(r"[,|]", institution_match) if p.strip()]
+            inst_part = next((p for p in parts if looks_like_institution(p)), parts[0])
+            edu.institution = re.sub(r"\s*\(\d{4}\)$", "", inst_part).strip()
+        else:
+            # Fallback: find line that isn't degree, date, or GPA
+            for block in entry_blocks:
+                for line in block.lines:
+                    txt = line.text.strip()
+                    if (
+                        txt
+                        and not looks_like_degree(txt)
+                        and not extract_gpa(txt)
+                        and not parse_date_range(txt)[0]
+                        and not any(c in txt.lower() for c in ("cgpa", "percentage", "%"))
+                        and len(txt) > 3
+                    ):
+                        edu.institution = re.split(r"[,|]", txt)[0].strip()
+                        break
+                if edu.institution:
+                    break
+
         # If no degree found but institution found, check first relevant line
         if not degree_match and entry_blocks[0].lines:
             line_idx = 1 if (start_idx == 0 and len(entry_blocks[0].lines) > 1) else 0
@@ -133,6 +152,8 @@ def parse_education_section(blocks: List[DocumentBlock]) -> EducationParseResult
         
         # Extract dates
         start_date, end_date = parse_date_range(full_text)
+        if start_date and end_date and start_date == end_date:
+            end_date = None
         edu.start_date = start_date
         edu.end_date = end_date
 

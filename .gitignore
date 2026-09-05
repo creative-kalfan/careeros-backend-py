@@ -20,3 +20,6 @@ b8001*.log
 server.*
 *.txt
 !requirements.txt
+# Ephemeral visual-debug outputs (regenerated scratch, never baselines)
+tests/artifacts/**/*_BEFORE.png
+tests/artifacts/**/*_AFTER*.png

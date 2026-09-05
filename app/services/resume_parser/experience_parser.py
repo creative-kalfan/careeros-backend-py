@@ -28,8 +28,10 @@ def parse_experience_section(blocks: List[DocumentBlock]) -> ExperienceParseResu
     if not blocks:
         return ExperienceParseResult(experience=[], parse_notes=parse_notes)
 
-    # Detect entry boundaries (skip section header in first block)
-    boundaries = detect_experience_entries(blocks, skip_first_line=True)
+    # Detect entry boundaries (only skip first line if it's an explicit section header)
+    from .header_lexicon import match_section_header
+    has_section_hdr = bool(blocks and blocks[0].lines and match_section_header(blocks[0].lines[0].text.strip()))
+    boundaries = detect_experience_entries(blocks, skip_first_line=has_section_hdr)
     parse_notes.append(f"Detected {len(boundaries)} experience entries")
 
     experiences = []
@@ -43,8 +45,8 @@ def parse_experience_section(blocks: List[DocumentBlock]) -> ExperienceParseResu
         header_block = entry_blocks[0]
         
         # Determine which line to use as header
-        # For first block of section, skip the section header line
-        line_idx = 1 if (start_idx == 0 and len(header_block.lines) > 1) else 0
+        # For first block of section, skip the section header line if present
+        line_idx = 1 if (has_section_hdr and start_idx == 0 and len(header_block.lines) > 1) else 0
         if line_idx >= len(header_block.lines):
             line_idx = 0
         first_line = header_block.lines[line_idx].text.strip()

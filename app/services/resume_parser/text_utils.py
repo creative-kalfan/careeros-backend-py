@@ -178,13 +178,15 @@ def extract_gpa(text: str) -> Optional[str]:
 def is_bullet_line(text: str) -> bool:
     """Check if a line starts with a bullet marker."""
     stripped = text.strip()
-    return any(stripped.startswith(marker) for marker in BULLET_MARKERS)
+    if stripped.startswith(("? ", "\ufffd ")):
+        return True
+    return any(stripped.startswith(marker) for marker in ("•", "▪", "◦", "‣", "·", "-", "*", "▸", "►", "→"))
 
 
 def strip_bullet(text: str) -> str:
     """Remove bullet marker from line start."""
     stripped = text.strip()
-    for marker in BULLET_MARKERS:
+    for marker in ("? ", "\ufffd ", "•", "▪", "◦", "‣", "·", "-", "*", "▸", "►", "→"):
         if stripped.startswith(marker):
             return stripped[len(marker):].strip()
     return stripped
@@ -212,8 +214,12 @@ def split_skills_line(line: str) -> List[str]:
     # Order matters: try more specific delimiters first
     skills = []
     
+    # Check for category prefix like 'Category Name: skill1, skill2'
+    category_match = re.match(r"^([^:,]+):\s*(.+)$", line)
+    target_text = category_match.group(2) if category_match else line
+
     # First split by semicolons
-    parts = re.split(r";", line)
+    parts = re.split(r";", target_text)
     for part in parts:
         # Then split by pipes
         subparts = re.split(r"\|", part)

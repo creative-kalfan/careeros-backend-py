@@ -55,8 +55,8 @@ def fixture_1_single_column() -> bytes:
     page = doc.new_page(width=612, height=792)  # Letter
     page.insert_textbox(fitz.Rect(54, 40, 558, 80), "ALEX MORGAN\nalex.morgan@example.com | (555) 234-5678 | San Francisco, CA", fontsize=12, fontname="helv")
     page.insert_textbox(fitz.Rect(54, 90, 558, 140), "PROFESSIONAL SUMMARY\nPrincipal Infrastructure Engineer with 10+ years designing fault-tolerant cloud platforms and distributed messaging architectures.", fontsize=10, fontname="helv")
-    page.insert_textbox(fitz.Rect(54, 150, 558, 175), "WORK EXPERIENCE\nStaff Infrastructure Architect — CloudScale Systems (2020 – Present)", fontsize=10, fontname="helv")
-    page.insert_textbox(fitz.Rect(54, 180, 558, 220), "• Architected multi-region Kubernetes clusters supporting 250k RPS with 99.999% SLA.\n• Spearheaded database partitioning strategy saving $1.4M annually in cloud infrastructure.", fontsize=9.5, fontname="helv")
+    page.insert_textbox(fitz.Rect(54, 145, 558, 180), "WORK EXPERIENCE\nStaff Infrastructure Architect — CloudScale Systems (2020 – Present)", fontsize=10, fontname="helv")
+    page.insert_textbox(fitz.Rect(54, 180, 558, 225), "• Architected multi-region Kubernetes clusters supporting 250k RPS with 99.999% SLA.\n• Spearheaded database partitioning strategy saving $1.4M annually in cloud infrastructure.", fontsize=9.5, fontname="helv")
     page.insert_textbox(fitz.Rect(54, 230, 558, 270), "Senior DevOps Engineer — FinTech Innovations (2017 – 2020)\n• Implemented zero-downtime CI/CD deployment pipelines using ArgoCD and GitHub Actions.", fontsize=9.5, fontname="helv")
     page.insert_textbox(fitz.Rect(54, 280, 558, 320), "SKILLS & TECHNOLOGIES\nPython, Go, Kubernetes, Terraform, AWS, Docker, Kafka, PostgreSQL, Redis, Grafana", fontsize=9.5, fontname="helv")
     pdf_bytes = doc.tobytes()
@@ -80,9 +80,9 @@ def fixture_2_two_column() -> bytes:
 def fixture_3_three_section_dense() -> bytes:
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
-    page.insert_textbox(fitz.Rect(36, 30, 576, 60), "PRIYA SHARMA — PRINCIPAL DATA SCIENTIST\npriya.sharma@aiml.org | Portfolio: priyasharma.ai", fontsize=11, fontname="helv")
+    page.insert_textbox(fitz.Rect(36, 25, 576, 65), "PRIYA SHARMA - PRINCIPAL DATA SCIENTIST\npriya.sharma@aiml.org | Portfolio: priyasharma.ai", fontsize=11, fontname="helv")
     page.insert_textbox(fitz.Rect(36, 70, 576, 170), "RESEARCH & PUBLICATIONS\n• Lead Author: 'Self-Supervised Representation Learning for Low-Resource Languages', NeurIPS 2023.\n• Co-Author: 'Efficient Transformer Pruning via Dynamic Sparsity Masks', ICML 2022.\n• Reviewer for ACL, EMNLP, and CVPR on multimodal foundation models.", fontsize=9, fontname="helv")
-    page.insert_textbox(fitz.Rect(36, 180, 576, 290), "INDUSTRY EXPERIENCE\nStaff ML Engineer — NeuralCore AI (2021 – Present)\n• Trained 70B parameter enterprise language model optimized with FlashAttention-2.\n• Reduced inference cost per 1M tokens by 64% using FP8 quantization on NVIDIA H100 clusters.", fontsize=9, fontname="helv")
+    page.insert_textbox(fitz.Rect(36, 180, 576, 290), "INDUSTRY EXPERIENCE\nStaff ML Engineer - NeuralCore AI (2021 – Present)\n• Trained 70B parameter enterprise language model optimized with FlashAttention-2.\n• Reduced inference cost per 1M tokens by 64% using FP8 quantization on NVIDIA H100 clusters.", fontsize=9.5, fontname="helv")
     page.insert_textbox(fitz.Rect(36, 300, 576, 400), "PATENTS & OPEN SOURCE\n• US Patent #11,842,109: Distributed gradient synchronization in heterogeneous GPU topologies.\n• Core maintainer of popular open-source LLM evaluation harness with 12k GitHub stars.", fontsize=9, fontname="helv")
     pdf_bytes = doc.tobytes()
     doc.close()
@@ -92,13 +92,13 @@ def fixture_3_three_section_dense() -> bytes:
 def fixture_4_two_page() -> bytes:
     doc = fitz.open()
     p1 = doc.new_page(width=612, height=792)
-    p1.insert_textbox(fitz.Rect(54, 50, 558, 90), "MARCUS VANCE — SENIOR ENGINEERING MANAGER\nPage 1 of 2 | marcus@vance.net | New York, NY", fontsize=12, fontname="helv")
+    p1.insert_textbox(fitz.Rect(54, 50, 558, 90), "MARCUS VANCE - SENIOR ENGINEERING MANAGER\nPage 1 of 2 | marcus@vance.net | New York, NY", fontsize=12, fontname="helv")
     p1.insert_textbox(fitz.Rect(54, 100, 558, 250), "EXECUTIVE SUMMARY\nResults-driven Engineering Manager with 12+ years building high-performing distributed teams.\nExperienced scaling engineering organizations from 15 to 85 engineers across three continents.\nPassionate about engineering excellence, developer velocity, and psychological safety.", fontsize=10, fontname="helv")
-    p1.insert_textbox(fitz.Rect(54, 260, 558, 500), "EXPERIENCE (CONTINUED ON PAGE 2)\nVP of Engineering — ScaleFast Technologies (2021 – Present)\n• Oversee 4 product engineering squads comprising 32 engineers and 4 technical leads.\n• Replaced legacy monolithic payment processor with event-driven saga architecture.", fontsize=10, fontname="helv")
+    p1.insert_textbox(fitz.Rect(54, 260, 558, 500), "EXPERIENCE (CONTINUED ON PAGE 2)\nVP of Engineering - ScaleFast Technologies (2021 – Present)\n• Oversee 4 product engineering squads comprising 32 engineers and 4 technical leads.\n• Replaced legacy monolithic payment processor with event-driven saga architecture.", fontsize=10, fontname="helv")
 
     p2 = doc.new_page(width=612, height=792)
-    p2.insert_textbox(fitz.Rect(54, 50, 558, 80), "MARCUS VANCE — RESUME (PAGE 2)", fontsize=11, fontname="helv")
-    p2.insert_textbox(fitz.Rect(54, 90, 558, 300), "PAST LEADERSHIP ROLES\nDirector of Software Engineering — FinLogic Corp (2016 – 2021)\n• Built core risk and fraud detection engine processing $40B in annual transaction volume.\n• Mentored 14 engineers to Senior and Staff engineering levels.", fontsize=10, fontname="helv")
+    p2.insert_textbox(fitz.Rect(54, 50, 558, 80), "MARCUS VANCE - RESUME (PAGE 2)", fontsize=11, fontname="helv")
+    p2.insert_textbox(fitz.Rect(54, 90, 558, 300), "PAST LEADERSHIP ROLES\nDirector of Software Engineering - FinLogic Corp (2016 – 2021)\n• Built core risk and fraud detection engine processing $40B in annual transaction volume.\n• Mentored 14 engineers to Senior and Staff engineering levels.", fontsize=10, fontname="helv")
     p2.insert_textbox(fitz.Rect(54, 320, 558, 450), "EDUCATION & ADVISORY\n• M.S. Software Engineering, Carnegie Mellon University (2012)\n• Technical Advisor to two Series A enterprise SaaS startups", fontsize=10, fontname="helv")
     pdf_bytes = doc.tobytes()
     doc.close()
@@ -109,7 +109,7 @@ def fixture_5_multipage_twocolumn() -> bytes:
     doc = fitz.open()
     for page_idx in range(2):
         p = doc.new_page(width=612, height=792)
-        p.insert_textbox(fitz.Rect(50, 40, 562, 70), f"DR. ELENA ROSTOVA — PAGE {page_idx + 1}\nSenior Research Scientist | elena.rostova@lab.edu", fontsize=11, fontname="helv")
+        p.insert_textbox(fitz.Rect(50, 30, 562, 75), f"DR. ELENA ROSTOVA - PAGE {page_idx + 1}\nSenior Research Scientist | elena.rostova@lab.edu", fontsize=11, fontname="helv")
         p.insert_textbox(fitz.Rect(50, 80, 220, 300), f"AFFILIATIONS (P{page_idx + 1})\n• Stanford AI Laboratory\n• Institute of Electrical Engineers\n• Association for Computing Machinery\n• National Science Foundation Fellow", fontsize=9, fontname="helv")
         p.insert_textbox(fitz.Rect(240, 80, 562, 400), f"PROJECT HIGHLIGHTS (PAGE {page_idx + 1})\n• Developed novel variational inference algorithms for sparse biomedical time-series data.\n• Accelerated genomics processing pipelines by 14x using CUDA kernels and unified memory.", fontsize=9.5, fontname="helv")
     pdf_bytes = doc.tobytes()
@@ -149,11 +149,28 @@ def fixture_8_right_aligned_dates() -> bytes:
 def fixture_9_graphics_and_images() -> bytes:
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
-    page.draw_line(fitz.Point(50, 80), fitz.Point(562, 80), color=(0.2, 0.4, 0.8), width=2.0)
-    page.draw_rect(fitz.Rect(50, 90, 562, 120), color=(0.9, 0.95, 1.0), fill=(0.9, 0.95, 1.0))
-    page.insert_textbox(fitz.Rect(60, 95, 550, 115), "EXECUTIVE PROFILE — CREATIVE & TECHNICAL LEADERSHIP", fontsize=10, fontname="helv")
-    page.draw_circle(fitz.Point(520, 50), 20, color=(0.3, 0.3, 0.3), fill=(0.8, 0.8, 0.8))
-    page.insert_textbox(fitz.Rect(50, 130, 562, 200), "Senior Product Designer with deep engineering background creating human-centered design systems.\nMaintained 100% vector asset consistency across web, mobile, and print mediums.", fontsize=10, fontname="helv")
+    # Background decorative rectangle directly overlapping header text block
+    page.draw_rect(fitz.Rect(40, 30, 572, 80), color=(0.93, 0.95, 0.98), fill=(0.93, 0.95, 0.98))
+    # Circular graphic logo icon overlapping right side of header
+    page.draw_circle(fitz.Point(540, 55), 18, color=(0.2, 0.4, 0.8), fill=(0.2, 0.4, 0.8))
+    page.insert_textbox(fitz.Rect(50, 36, 500, 75), "ELENA ROSTOVA\nelena.rostova@design.io | San Francisco, CA", fontsize=12, fontname="helv")
+
+    # Decorative accent bar next to Professional Summary
+    page.draw_rect(fitz.Rect(46, 95, 52, 115), color=(0.2, 0.4, 0.8), fill=(0.2, 0.4, 0.8))
+    page.insert_textbox(fitz.Rect(58, 95, 550, 115), "PROFESSIONAL SUMMARY", fontsize=10, fontname="helv")
+    page.insert_textbox(fitz.Rect(50, 125, 562, 175), "Senior Product Designer with deep engineering background creating human-centered design systems. Maintained 100% vector asset consistency across web, mobile, and print mediums.", fontsize=10, fontname="helv")
+
+    # Decorative left border on experience section
+    page.draw_rect(fitz.Rect(44, 185, 46, 275), color=(0.7, 0.75, 0.85), fill=(0.7, 0.75, 0.85))
+    page.insert_textbox(fitz.Rect(50, 185, 562, 280), "WORK EXPERIENCE\nVectorWorks Studio — Lead Product Designer (2020 – Present)\n• Spearheaded unified multi-platform component architecture used by 4M active users.\n• Reduced visual regression incidents by 75% via automated token validation.", fontsize=10, fontname="helv")
+
+    # Education with circular bullet icon shape
+    page.draw_circle(fitz.Point(44, 298), 3, color=(0.2, 0.4, 0.8), fill=(0.2, 0.4, 0.8))
+    page.insert_textbox(fitz.Rect(50, 290, 562, 345), "EDUCATION\nRhode Island School of Design\nB.S. Industrial Design, 2018", fontsize=10, fontname="helv")
+
+    # Skills with shaded container rectangle directly behind skills block
+    page.draw_rect(fitz.Rect(45, 350, 565, 410), color=(0.95, 0.95, 0.95), fill=(0.95, 0.95, 0.95))
+    page.insert_textbox(fitz.Rect(50, 355, 560, 405), "SKILLS & TECHNOLOGIES\nDesign Systems, Figma, Typography, Motion Design, Vector Illustration, CSS3", fontsize=10, fontname="helv")
     pdf_bytes = doc.tobytes()
     doc.close()
     return pdf_bytes
@@ -162,9 +179,19 @@ def fixture_9_graphics_and_images() -> bytes:
 def fixture_10_unusual_fonts() -> bytes:
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
-    page.insert_textbox(fitz.Rect(50, 50, 562, 90), "CLASSICAL TYPOGRAPHY RESUME (TIMES / SERIF)\nDistinguished Academic Researcher in Computational Linguistics", fontsize=12, fontname="times-roman")
-    page.insert_textbox(fitz.Rect(50, 100, 562, 140), "SYSTEM ARCHITECT & KERNEL DEVELOPER (COURIER / MONOSPACE)\n$ kernel_compile --target=x86_64 --opt=release\nSpecializing in eBPF tracing and low-level Linux performance tuning.", fontsize=9.5, fontname="cour")
-    page.insert_textbox(fitz.Rect(50, 150, 562, 190), "CONTEMPORARY BODY TEXT (HELVETICA / SANS-SERIF)\nExtensive background in high-concurrency systems and zero-overhead abstractions.", fontsize=10, fontname="helv")
+    # Use real non-base-14 font (Impact) embedded via font buffer
+    f_impact = fitz.Font(fontfile=r"C:\Windows\Fonts\impact.ttf")
+    page.insert_font(fontname="ImpactFont", fontbuffer=f_impact.buffer)
+    # Header
+    page.insert_textbox(fitz.Rect(50, 36, 562, 75), "DR. ARLO CHEN\narlo.chen@linguistics.edu | Cambridge, MA", fontsize=12, fontname="ImpactFont")
+    # Summary
+    page.insert_textbox(fitz.Rect(50, 85, 562, 160), "PROFESSIONAL SUMMARY\nDistinguished Academic Researcher and Computational Linguist with 12+ years advancing natural language semantics, formal grammars, and neural machine translation architectures.", fontsize=10.5, fontname="ImpactFont")
+    # Experience
+    page.insert_textbox(fitz.Rect(50, 170, 562, 270), "WORK EXPERIENCE\nLanguage Modeling Institute — Principal Research Scientist (2019 – Present)\n• Directed core research initiatives in multilingual representation learning and semantic parsing.\n• Published 14 peer-reviewed papers in computational linguistics and semantic theory.", fontsize=10.5, fontname="ImpactFont")
+    # Education
+    page.insert_textbox(fitz.Rect(50, 280, 562, 335), "EDUCATION\nHarvard University\nDoctor of Philosophy in Computational Linguistics, 2018", fontsize=10.5, fontname="ImpactFont")
+    # Skills
+    page.insert_textbox(fitz.Rect(50, 345, 562, 395), "SKILLS & TECHNOLOGIES\nNatural Language Processing, Formal Semantics, PyTorch, Corpus Linguistics, LaTeX", fontsize=10.5, fontname="ImpactFont")
     pdf_bytes = doc.tobytes()
     doc.close()
     return pdf_bytes

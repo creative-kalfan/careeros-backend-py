@@ -122,14 +122,21 @@ async def parse_resume_job(
                 v1_meta["storage_path"] = storage_path
             if parse_result.geometry:
                 v1_meta["geometry"] = parse_result.geometry
-            repo.create_version(
-                resume_id=resume_id,
-                content=parse_result.content,
-                version_name="v1",
-                source="upload_parse",
-                is_master=True,
-                meta=v1_meta,
-            )
+            existing_master = repo.get_master_version(resume_id)
+            if existing_master:
+                repo.update_version(
+                    existing_master["id"],
+                    {"content": parse_result.content, "meta": {**existing_master.get("meta", {}), **v1_meta}},
+                )
+            else:
+                repo.create_version(
+                    resume_id=resume_id,
+                    content=parse_result.content,
+                    version_name="v1",
+                    source="upload_parse",
+                    is_master=True,
+                    meta=v1_meta,
+                )
             logger.info("PARSE JOB COMPLETED resume_id=%s", resume_id)
         else:
             repo.update_resume(

@@ -96,7 +96,6 @@ def parse_summary(blocks: List[DocumentBlock]) -> str:
     if not blocks:
         return ""
     
-    # Combine all text, excluding very short fragments
     parts = []
     for i, block in enumerate(blocks):
         start_line = 1 if (i == 0 and len(block.lines) > 1) else 0

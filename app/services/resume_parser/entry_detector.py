@@ -332,26 +332,27 @@ def split_company_role_location(line: str) -> Tuple[Optional[str], Optional[str]
     Split a header line into company, role, location.
     Handles formats like:
     - "Company | Role | Location"
+    - "Role — Company (Dates)"
     - "Company - Role - Location"
     - "Role at Company, Location"
     - "Company, Location"
     """
-    # Try pipe separator first
-    if "|" in line:
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) >= 3:
-            return parts[0], parts[1], parts[2]
-        elif len(parts) == 2:
-            return parts[0], parts[1], None
+    cleaned = re.sub(r"\s*\([^)]*(?:19|20)\d{2}[^)]*\)\s*", " ", line).strip()
     
-    # Try dash separator
-    if " - " in line:
-        parts = [p.strip() for p in line.split(" - ")]
-        if len(parts) >= 3:
-            return parts[0], parts[1], parts[2]
-        elif len(parts) == 2:
-            return parts[0], parts[1], None
-    
+    # Check for dash variants (em-dash, en-dash, hyphen, question mark from encoding)
+    for sep in ["|", " — ", " – ", " - ", " ? "]:
+        if sep in cleaned:
+            parts = [p.strip() for p in cleaned.split(sep) if p.strip()]
+            if len(parts) >= 2:
+                p0_role = any(r in parts[0].lower() for r in ROLE_KEYWORDS)
+                p1_role = any(r in parts[1].lower() for r in ROLE_KEYWORDS)
+                p0_comp = any(c in parts[0].lower() for c in COMPANY_SUFFIXES)
+                p1_comp = any(c in parts[1].lower() for c in COMPANY_SUFFIXES)
+                loc = parts[2] if len(parts) >= 3 else None
+                if (p0_role and not p1_role) or (p1_comp and not p0_comp):
+                    return parts[1], parts[0], loc
+                return parts[0], parts[1], loc
+
     # Try "Role at Company, Location"
     at_match = re.match(r"^(.+?)\s+at\s+(.+?)(?:,\s*(.+))?$", line, re.IGNORECASE)
     if at_match:
@@ -359,6 +360,6 @@ def split_company_role_location(line: str) -> Tuple[Optional[str], Optional[str]
         company = at_match.group(2).strip()
         location = at_match.group(3).strip() if at_match.group(3) else None
         return company, role, location
-    
+
     # Default: assume first part is company
     return line, None, None
