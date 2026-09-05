@@ -20,6 +20,25 @@ from app.models.resume import (
     SkillCategory,
 )
 from .models import ParsedEducation, ParsedExperience, ParsedProject, ParsedResume
+from .skills_parser import SKILL_CATEGORIES, is_genuine_soft_skill
+
+# ponytail: single reverse lookup built once from the canonical taxonomy in
+# skills_parser — no second keyword list to drift out of sync.
+_SKILL_TO_FIELD: dict[str, str] = {}
+for _cat, _skills in SKILL_CATEGORIES.items():
+    _field = {
+        "programming": "technical",
+        "frameworks": "technical",
+        "cloud": "technical",
+        "devops": "technical",
+        "ml_ai": "technical",
+        "tools": "tools",
+        "languages": "languages",
+        "databases": "databases",
+        "data": "analytics",
+    }.get(_cat, "technical")
+    for _s in _skills:
+        _SKILL_TO_FIELD.setdefault(_s, _field)
 
 
 def generate_id() -> str:
@@ -34,7 +53,7 @@ def map_contact(parsed_contact) -> PersonalInfo:
         email=parsed_contact.email,
         phone=parsed_contact.phone,
         location=parsed_contact.location,
-        headline=parsed_contact.name,  # Use name as headline if available
+        headline=None,
         website=parsed_contact.website,
         linkedin=parsed_contact.linkedin,
         github=parsed_contact.github,
@@ -104,51 +123,30 @@ def map_education(parsed_edu: List[ParsedEducation]) -> List[EducationItem]:
 
 
 def map_skills(skills: List[str]) -> SkillCategory:
-    """Map flat skills list to SkillCategory."""
-    # Simple classification based on keywords
+    """Map flat skills list to SkillCategory.
+
+    Only genuine interpersonal attributes land in soft_skills; everything
+    unknown defaults to technical so novel stacks never misrender as soft.
+    """
     category = SkillCategory()
-    
-    tech_keywords = {
-        "python", "java", "javascript", "typescript", "c++", "c#", "go", "rust",
-        "ruby", "php", "swift", "kotlin", "scala", "r", "sql", "html", "css",
-        "react", "angular", "vue", "django", "flask", "spring", "node", "express",
-        "aws", "azure", "gcp", "docker", "kubernetes", "git", "linux", "bash",
-    }
-    
-    tool_keywords = {
-        "figma", "jira", "confluence", "trello", "slack", "notion", "postman",
-        "swagger", "vs code", "intellij", "pycharm", "vim", "photoshop", "illustrator",
-    }
-    
-    lang_keywords = {
-        "english", "spanish", "french", "german", "mandarin", "chinese", "japanese",
-        "korean", "hindi", "tamil", "telugu", "bengali", "portuguese", "italian",
-    }
-    
-    db_keywords = {
-        "postgresql", "postgres", "mysql", "mongodb", "redis", "elasticsearch",
-        "cassandra", "oracle", "sql server", "sqlite", "dynamodb", "mariadb",
-    }
-    
-    analytics_keywords = {
-        "tableau", "power bi", "looker", "metabase", "excel", "pandas", "numpy",
-        "matplotlib", "seaborn", "spark", "hadoop", "kafka", "airflow", "dbt",
-    }
 
     for skill in skills:
         lower = skill.lower().strip()
-        if lower in tech_keywords:
-            category.technical.append(skill)
-        elif lower in tool_keywords:
+        field = _SKILL_TO_FIELD.get(lower)
+        if field == "tools":
             category.tools.append(skill)
-        elif lower in lang_keywords:
+        elif field == "languages":
             category.languages.append(skill)
-        elif lower in db_keywords:
+        elif field == "databases":
             category.databases.append(skill)
-        elif lower in analytics_keywords:
+        elif field == "analytics":
             category.analytics.append(skill)
+        elif field == "technical":
+            category.technical.append(skill)
+        elif is_genuine_soft_skill(skill):
+            category.soft_skills.append(skill)
         else:
-            category.soft_skills.append(skill)  # Unclassified go to soft_skills
+            category.technical.append(skill)
 
     return category
 

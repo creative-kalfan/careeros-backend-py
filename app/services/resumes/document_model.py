@@ -23,6 +23,7 @@ from app.models.resume import (
     SkillCategory,
 )
 from .style_model import DocumentStyleModel, extract_style_model
+from app.services.resume_parser.skills_parser import partition_soft_skills
 
 
 def _gen_id(prefix: str = "blk") -> str:
@@ -332,7 +333,7 @@ def build_document_model(
         # Do not invent an identity. An empty name is preferable to a false
         # "Candidate" header when an incomplete legacy profile is compiled.
         full_name=p.full_name or "",
-        headline=p.headline or profile.target_role or "",
+        headline="" if (p.headline or "").strip().lower() == (p.full_name or "").strip().lower() else (p.headline or profile.target_role or ""),
         email=p.email or "",
         phone=p.phone or "",
         location=p.location or "",
@@ -415,7 +416,10 @@ def build_document_model(
     # Build Education
     education: list[EducationEntry] = []
     for edu in profile.education:
-        dates = " — ".join(filter(None, [edu.start_date, edu.end_date]))
+        if edu.start_date and edu.end_date and edu.start_date == edu.end_date:
+            dates = edu.start_date
+        else:
+            dates = " — ".join(filter(None, [edu.start_date, edu.end_date]))
         education.append(
             EducationEntry(
                 id=edu.id,
@@ -443,6 +447,31 @@ def build_document_model(
         vals = getattr(profile.skills, cat_key, [])
         if vals:
             skills_groups.append(SkillGroup(category=cat_label, skills=list(vals)))
+
+    # ponytail: legacy/stale profiles may still carry technical terms in
+    # soft_skills — reclassify at the render boundary so compilers (docx, pdf,
+    # plaintext all read SkillGroups) can never print "Soft Skills: PyTorch".
+    # Soft Skills survives only for genuine interpersonal attributes.
+    for grp in skills_groups:
+        if grp.category == "Soft Skills":
+            technical_like, genuine = partition_soft_skills(grp.skills)
+            if technical_like:
+                grp.skills = genuine
+                target = next(
+                    (g for g in skills_groups if g.category == "Technical Skills"),
+                    None,
+                )
+                if target is None:
+                    target = SkillGroup(
+                        category="Technical & Core Competencies",
+                        skills=[],
+                    )
+                    skills_groups.insert(0, target)
+                for s in technical_like:
+                    if s not in target.skills:
+                        target.skills.append(s)
+            break
+    skills_groups = [g for g in skills_groups if g.skills]
 
     if profile.skills.custom:
         for custom_label, custom_vals in profile.skills.custom.items():

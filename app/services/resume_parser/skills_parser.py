@@ -68,6 +68,39 @@ def classify_skill(skill: str) -> str:
     return "other"
 
 
+# ponytail: allowlist, not classifier — "Soft Skills:" may only ever hold these.
+# Everything else defaults to technical at every consumer, so unknown future
+# stacks (new frameworks, tools, domain terms) can never render as soft skills.
+GENUINE_SOFT_SKILLS = frozenset({
+    "leadership", "communication", "teamwork", "collaboration",
+    "cross-functional collaboration", "cross functional collaboration",
+    "interpersonal skills", "problem solving", "problem-solving",
+    "critical thinking", "time management", "adaptability",
+    "creativity", "work ethic", "emotional intelligence",
+    "conflict resolution", "decision making", "decision-making",
+    "mentoring", "mentorship", "active listening",
+    "agile", "scrum", "agile / scrum", "agile/scrum",
+    "incident communication", "stakeholder management",
+    "public speaking", "negotiation", "empathy", "patience",
+})
+
+
+def is_genuine_soft_skill(skill: str) -> bool:
+    """True only for genuine interpersonal/professional attributes."""
+    return skill.lower().strip() in GENUINE_SOFT_SKILLS
+
+
+def partition_soft_skills(items: list[str]) -> tuple[list[str], list[str]]:
+    """Split a soft_skills list into (technical_like, genuine_soft).
+
+    Technical-like = anything not on the genuine allowlist. Fast set
+    membership, no regex, no I/O.
+    """
+    technical_like = [s for s in items if not is_genuine_soft_skill(s)]
+    genuine = [s for s in items if is_genuine_soft_skill(s)]
+    return technical_like, genuine
+
+
 def parse_skills_section(blocks: List[DocumentBlock]) -> List[str]:
     """Extract skills from skills section blocks."""
     skills: List[str] = []
