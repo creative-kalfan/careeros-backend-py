@@ -274,6 +274,7 @@ class DocxCompiler:
                     cell_left, cell_right = tbl.rows[0].cells
                     cell_left.width = col_widths[0]
                     cell_right.width = col_widths[1]
+                    p_l = cell_left.paragraphs[0]
 
                     f_study = getattr(edu, "field_of_study", getattr(edu, "field", ""))
                     degree_str = " in ".join(filter(None, [edu.degree, f_study])) or "Degree"

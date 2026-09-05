@@ -249,6 +249,47 @@ body {{
 </html>"""
 
 
+def _render_plain_textbox_fallback(doc_model: ResumeDocumentModel, style) -> bytes:
+    """Zero-dependency last-resort PDF renderer: plain text flow, never raises Story errors."""
+    lines: list[str] = []
+    hdr = doc_model.header
+    if hdr.full_name:
+        lines.append(hdr.full_name)
+    if hdr.headline:
+        lines.append(hdr.headline)
+    if hdr.contact_line():
+        lines.append(hdr.contact_line())
+    lines.append("")
+    if doc_model.summary and doc_model.summary.text.strip():
+        lines += ["PROFESSIONAL SUMMARY", doc_model.summary.text.strip(), ""]
+    for exp in doc_model.experience:
+        lines.append(f"{exp.role} | {exp.company}".strip(" |"))
+        if exp.date_range or exp.location:
+            lines.append(" | ".join(filter(None, [exp.date_range, exp.location])))
+        lines += [f"- {b.text.strip()}" for b in exp.bullets if b.text.strip()]
+        lines.append("")
+    for edu in doc_model.education:
+        deg = " in ".join(filter(None, [edu.degree, edu.field_of_study])) or "Degree"
+        lines.append(f"{deg} - {edu.institution}".strip(" -"))
+        lines.append("")
+    for grp in doc_model.skills:
+        if grp.skills:
+            lines.append(f"{grp.category}: " + ", ".join(grp.skills))
+    text = "\n".join(lines) or "Resume"
+    doc = fitz.open()
+    page = doc.new_page(width=style.page_width_pt, height=style.page_height_pt)
+    rect = fitz.Rect(
+        style.margin_left_pt,
+        style.margin_top_pt,
+        style.page_width_pt - style.margin_right_pt,
+        style.page_height_pt - style.margin_bottom_pt,
+    )
+    page.insert_textbox(rect, text, fontsize=style.body_size_pt, fontname="helv")
+    out = doc.tobytes(deflate=True)
+    doc.close()
+    return out
+
+
 class PdfCompiler:
     """Compiles Document Model and native DOCX into visually verified PDF bytes."""
 
@@ -300,26 +341,31 @@ class PdfCompiler:
 
         # Strategy 2: High-fidelity layout engine using PyMuPDF Story
         if not pdf_bytes:
-            html = _render_document_model_to_html(doc_model)
-            buf = io.BytesIO()
-            writer = fitz.DocumentWriter(buf)
-            story = fitz.Story(html)
-            page_rect = fitz.Rect(0, 0, style.page_width_pt, style.page_height_pt)
-            content_rect = fitz.Rect(
-                style.margin_left_pt,
-                style.margin_top_pt,
-                style.page_width_pt - style.margin_right_pt,
-                style.page_height_pt - style.margin_bottom_pt,
-            )
-            more = True
-            while more:
-                dev = writer.begin_page(page_rect)
-                more, _ = story.place(content_rect)
-                story.draw(dev)
-                writer.end_page()
-            writer.close()
-            pdf_bytes = buf.getvalue()
-            logger.info("Compiled PDF via PyMuPDF layout engine (%d bytes)", len(pdf_bytes))
+            try:
+                html = _render_document_model_to_html(doc_model)
+                buf = io.BytesIO()
+                writer = fitz.DocumentWriter(buf)
+                story = fitz.Story(html)
+                page_rect = fitz.Rect(0, 0, style.page_width_pt, style.page_height_pt)
+                content_rect = fitz.Rect(
+                    style.margin_left_pt,
+                    style.margin_top_pt,
+                    style.page_width_pt - style.margin_right_pt,
+                    style.page_height_pt - style.margin_bottom_pt,
+                )
+                more = True
+                while more:
+                    dev = writer.begin_page(page_rect)
+                    more, _ = story.place(content_rect)
+                    story.draw(dev)
+                    writer.end_page()
+                writer.close()
+                pdf_bytes = buf.getvalue()
+                logger.info("Compiled PDF via PyMuPDF layout engine (%d bytes)", len(pdf_bytes))
+            except Exception as story_exc:
+                logger.warning("PyMuPDF Story layout failed (%s); using plain textbox fallback", story_exc)
+                pdf_bytes = _render_plain_textbox_fallback(doc_model, style)
+                logger.info("Compiled PDF via plain textbox fallback (%d bytes)", len(pdf_bytes))
 
         # 3. Visual Verification
         ver_result = VisualVerificationEngine.verify(pdf_bytes)
