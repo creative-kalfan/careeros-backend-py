@@ -325,3 +325,69 @@ def test_mutate_pdf_api_success(client):
         assert mock_bucket.upload.called
 
 
+def test_canonicalize_version_source_obeys_017_check():
+    from app.repositories.resume_repository import canonicalize_version_source
+
+    assert canonicalize_version_source("tailoring") == "job_specific"
+    assert canonicalize_version_source("ai_tailoring") == "job_specific"
+    assert canonicalize_version_source("document_compiler") == "manual"
+    assert canonicalize_version_source("direct_pdf_mutation") == "manual"
+    assert canonicalize_version_source("pdf_edit") == "manual"
+    assert canonicalize_version_source("job_specific") == "job_specific"
+    assert canonicalize_version_source("optimization") == "optimization"
+    assert canonicalize_version_source(None) == "manual"
+
+
+def test_create_version_writes_check_safe_source():
+    repo = ResumeRepository(client=MagicMock())
+    captured = {}
+
+    def fake_insert(payload):
+        captured["payload"] = payload
+        class _Exec:
+            def execute(self):
+                row = dict(payload)
+                row["id"] = "ver-1"
+                result = MagicMock()
+                result.data = [row]
+                return result
+        return _Exec()
+
+    repo._client.table.return_value.insert.side_effect = fake_insert
+    row = repo.create_version(
+        resume_id="resume-1",
+        content={},
+        version_name="Tailored",
+        source="tailoring",
+        meta={"provenance_source": "tailoring"},
+    )
+    assert captured["payload"]["source"] == "job_specific"
+    assert captured["payload"]["meta"]["provenance_source"] == "tailoring"
+    assert row["source"] == "tailoring"
+
+
+def test_update_version_strips_compiler_strategy_from_source():
+    repo = ResumeRepository(client=MagicMock())
+    captured = {}
+
+    def fake_update(payload):
+        captured["payload"] = payload
+        class _Eq:
+            def eq(self, *_args, **_kwargs):
+                return self
+            def execute(self):
+                row = {"id": "ver-1", **payload}
+                result = MagicMock()
+                result.data = [row]
+                return result
+        return _Eq()
+
+    repo._client.table.return_value.update.side_effect = fake_update
+    row = repo.update_version("ver-1", {"source": "document_compiler", "meta": {"compilation_strategy": "document_compiler"}})
+    assert captured["payload"]["source"] == "manual"
+    assert captured["payload"]["meta"]["provenance_source"] == "document_compiler"
+    assert captured["payload"]["meta"]["compilation_strategy"] == "document_compiler"
+    assert row["source"] == "document_compiler"
+
+
+

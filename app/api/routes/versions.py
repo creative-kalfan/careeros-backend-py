@@ -497,7 +497,6 @@ def _apply_compiled_artifact(
             meta["geometry"] = updated_geom
         meta["compilation_strategy"] = strategy
         update_data["meta"] = meta
-        update_data["source"] = strategy or "compiled"
 
     # Closed-loop ATS re-analysis: if version or resume has job description, recompute score
     jd = row.get("job_description") or resume.get("job_description")
@@ -895,6 +894,23 @@ async def apply_tailoring_version(
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[ResumeVersionResponse]:
     """Create a new derived version from tailored profile and compile PDF/DOCX artifacts."""
+    try:
+        return await _apply_tailoring_version_impl(resume_id, body, auth)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to apply tailoring: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to apply tailoring.",
+        ) from exc
+
+
+async def _apply_tailoring_version_impl(
+    resume_id: str,
+    body: ApplyTailoringRequest,
+    auth: AuthContext,
+) -> SuccessResponse[ResumeVersionResponse]:
     from app.models.resume import ResumeContent, ResumeProfile
     from app.services.resumes.compiler_service import resume_compiler_service
     from app.services.ats.ats_analyzer import ATSAnalyzer
@@ -949,7 +965,7 @@ async def apply_tailoring_version(
         resume_id=resume_id,
         content=tailored_content.to_dict(),
         version_name=v_name,
-        source="tailoring",
+        source="job_specific",
         is_master=False,
         parent_version_id=body.parent_version_id,
         target_job_title=body.job_title or (parent_version.get("target_job_title") if parent_version else None),
@@ -959,6 +975,11 @@ async def apply_tailoring_version(
         sections_config=body.sections_config or (parent_version.get("sections_config") if parent_version else {}),
         meta=new_meta,
     )
+    if not created_row or not created_row.get("id"):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create tailored version record.",
+        )
     version_id = created_row["id"]
 
     # Compile and persist DOCX & PDF artifacts
@@ -1008,7 +1029,6 @@ async def apply_tailoring_version(
 
     update_payload: dict[str, Any] = {
         "meta": updated_meta,
-        "source": comp_res.get("strategy", "document_compiler"),
     }
     if last_ats_score is not None:
         update_payload["last_ats_score"] = last_ats_score

@@ -11,6 +11,52 @@ from app.models.resume import ResumeContent, ResumeMeta, ResumeProfile
 
 logger = logging.getLogger(__name__)
 
+# Must match sql/migrations/017_resume_version_sources.sql CHECK constraint.
+ALLOWED_VERSION_SOURCES = frozenset(
+    {
+        "manual",
+        "upload_parse",
+        "reparse",
+        "import",
+        "job_specific",
+        "suggestion",
+        "approved_improvement",
+        "optimization",
+        "duplicate",
+    }
+)
+
+
+def canonicalize_version_source(source: str | None) -> str:
+    """Map caller/legacy source strings onto the 017 CHECK-allowed set."""
+    src = (source or "manual").strip() or "manual"
+    if src in ALLOWED_VERSION_SOURCES:
+        return src
+    if src in {"tailoring", "ai_tailoring"}:
+        return "job_specific"
+    return "manual"
+
+
+def _apply_canonical_source(payload: dict[str, Any], source: str | None) -> None:
+    original = (source or "manual").strip() or "manual"
+    canonical = canonicalize_version_source(original)
+    payload["source"] = canonical
+    if original != canonical:
+        meta = dict(payload.get("meta") or {})
+        meta.setdefault("provenance_source", original)
+        payload["meta"] = meta
+
+
+def _is_source_check_violation(exc: BaseException) -> bool:
+    err = str(exc)
+    code = getattr(exc, "code", None)
+    return (
+        code == "23514"
+        or "23514" in err
+        or "resume_versions_source_check" in err
+    )
+
+
 _RESUME_COLUMNS = (
     "id, user_id, title, file_url, original_filename, storage_path, "
     "parse_status, content, meta, created_at, updated_at"
@@ -215,7 +261,6 @@ class ResumeRepository:
         payload: dict[str, Any] = {
             "resume_id": resume_id,
             "version_name": version_name,
-            "source": source,
             "content": content,
             "is_master": is_master,
             "parent_version_id": parent_version_id,
@@ -228,6 +273,7 @@ class ResumeRepository:
             "sections_config": sections_config or {},
             "meta": meta_payload,
         }
+        _apply_canonical_source(payload, source)
         try:
             result = (
                 self._client.table("resume_versions")
@@ -235,13 +281,14 @@ class ResumeRepository:
                 .execute()
             )
         except Exception as exc:
-            err_str = str(exc)
-            if "resume_versions_source_check" in err_str or "23514" in err_str:
+            if _is_source_check_violation(exc):
                 logger.warning(
-                    "DB check constraint rejected source '%s'; falling back to meta.provenance_source",
-                    source,
+                    "DB check constraint rejected source '%s'; falling back to manual",
+                    payload.get("source"),
+                    exc_info=True,
                 )
-                meta_payload["provenance_source"] = source
+                meta_payload = dict(payload.get("meta") or {})
+                meta_payload.setdefault("provenance_source", source)
                 payload["source"] = "manual"
                 payload["meta"] = meta_payload
                 result = (
@@ -308,12 +355,36 @@ class ResumeRepository:
     def update_version(self, version_id: str, update_data: dict[str, Any]) -> Optional[dict[str, Any]]:
         if not update_data:
             return self.get_version(version_id)
-        result = (
-            self._client.table("resume_versions")
-            .update(update_data)
-            .eq("id", version_id)
-            .execute()
-        )
+        payload = dict(update_data)
+        if "source" in payload:
+            _apply_canonical_source(payload, payload.get("source"))
+        try:
+            result = (
+                self._client.table("resume_versions")
+                .update(payload)
+                .eq("id", version_id)
+                .execute()
+            )
+        except Exception as exc:
+            if "source" in payload and _is_source_check_violation(exc):
+                logger.warning(
+                    "DB check constraint rejected update source '%s'; falling back to manual",
+                    payload.get("source"),
+                    exc_info=True,
+                )
+                meta_payload = dict(payload.get("meta") or {})
+                meta_payload.setdefault("provenance_source", update_data.get("source"))
+                payload["source"] = "manual"
+                payload["meta"] = meta_payload
+                result = (
+                    self._client.table("resume_versions")
+                    .update(payload)
+                    .eq("id", version_id)
+                    .execute()
+                )
+            else:
+                logger.exception("Failed to update resume version %s", version_id)
+                raise
         rows = result.data or []
         if not rows:
             return None

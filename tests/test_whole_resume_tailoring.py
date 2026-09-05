@@ -152,8 +152,8 @@ def test_post_versions_apply_tailoring_api() -> None:
 
     try:
         with patch.object(ResumeRepository, "get_resume", return_value=mock_resume), \
-             patch.object(ResumeRepository, "create_version", return_value=mock_created_ver), \
-             patch.object(ResumeRepository, "update_version", return_value=mock_created_ver), \
+             patch.object(ResumeRepository, "create_version", return_value=mock_created_ver) as mock_create, \
+             patch.object(ResumeRepository, "update_version", return_value=mock_created_ver) as mock_update, \
              patch.object(resume_compiler_service, "compile_and_persist", return_value=mock_compile_res):
 
             payload = {
@@ -167,6 +167,10 @@ def test_post_versions_apply_tailoring_api() -> None:
             json_res = res.json()
             assert json_res.get("success") is True
             assert json_res["data"]["id"] == "ver-new-123"
+            assert mock_create.call_args.kwargs["source"] == "job_specific"
+            update_payload = mock_update.call_args.args[1]
+            assert "source" not in update_payload
+            assert update_payload["meta"]["compilation_strategy"] == "document_compiler"
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
