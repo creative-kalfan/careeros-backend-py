@@ -82,9 +82,19 @@ class WholeResumeTailoringService:
             company=company,
         )
 
-        # 4. Construct tailored ResumeContent
+        # 4. Deterministic Numeric Fabrication Guard Audit
+        from app.services.optimization.numeric_guard import numeric_guard
+
+        audited_profile_dict, guard_issues = numeric_guard.audit_tailored_profile(
+            source_profile=resume_content.profile,
+            tailored_profile_dict=tailored_profile_dict,
+        )
+        if guard_issues:
+            logger.info("NumericFabricationGuard audited profile with issues: %s", guard_issues)
+
+        # 5. Construct tailored ResumeContent
         tailored_content = ResumeContent(
-            profile=ResumeProfile.from_dict(tailored_profile_dict),
+            profile=ResumeProfile.from_dict(audited_profile_dict),
             meta=copy.deepcopy(resume_content.meta),
         )
 

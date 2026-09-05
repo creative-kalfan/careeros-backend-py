@@ -910,11 +910,21 @@ async def apply_tailoring_version(
 
     # Reconstruct tailored ResumeContent
     profile_dict = body.tailored_profile
+    base_content = (parent_version.get("content") if parent_version else None) or resume.get("content") or {}
     if not profile_dict:
-        base_content = (parent_version.get("content") if parent_version else None) or resume.get("content") or {}
         profile_dict = (base_content.get("profile") if isinstance(base_content, dict) else None) or {}
 
-    tailored_profile = ResumeProfile.from_dict(profile_dict)
+    # Audit tailored profile against candidate source baseline profile
+    from app.services.optimization.numeric_guard import numeric_guard
+    source_profile = ResumeProfile.from_dict((base_content.get("profile") if isinstance(base_content, dict) else None) or {})
+    audited_dict, guard_issues = numeric_guard.audit_tailored_profile(
+        source_profile=source_profile,
+        tailored_profile_dict=profile_dict,
+    )
+    if guard_issues:
+        logger.info("NumericFabricationGuard on apply_tailoring detected issues: %s", guard_issues)
+
+    tailored_profile = ResumeProfile.from_dict(audited_dict)
     tailored_content = ResumeContent(profile=tailored_profile)
 
     # Determine default version name

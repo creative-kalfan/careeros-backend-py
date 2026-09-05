@@ -265,7 +265,7 @@ class PdfCompiler:
         pdf_bytes = None
         soffice_bin = _find_libreoffice_binary()
 
-        # Strategy 1: Headless LibreOffice CLI if available
+        # Strategy 1: Headless LibreOffice CLI if available (bounded 15s timeout with resource fallback)
         if soffice_bin:
             try:
                 with tempfile.TemporaryDirectory() as tmpdir:
@@ -284,15 +284,19 @@ class PdfCompiler:
                         ],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
-                        timeout=30,
+                        timeout=15,
                     )
                     out_path = os.path.join(tmpdir, "resume.pdf")
                     if os.path.isfile(out_path):
                         with open(out_path, "rb") as f:
                             pdf_bytes = f.read()
                         logger.info("Compiled PDF via LibreOffice successfully (%d bytes)", len(pdf_bytes))
+                    else:
+                        logger.warning("LibreOffice exited without producing output file; falling back to PyMuPDF layout")
+            except subprocess.TimeoutExpired:
+                logger.warning("LibreOffice conversion timed out after 15s; falling back to PyMuPDF layout engine")
             except Exception as exc:
-                logger.warning("LibreOffice conversion failed: %s; falling back to layout engine", exc)
+                logger.warning("LibreOffice conversion failed (%s); falling back to PyMuPDF layout engine", exc)
 
         # Strategy 2: High-fidelity layout engine using PyMuPDF Story
         if not pdf_bytes:

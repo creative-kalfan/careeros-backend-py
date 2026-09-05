@@ -170,3 +170,24 @@ def test_post_versions_apply_tailoring_api() -> None:
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
+
+def test_numeric_fabrication_guard_catches_unsupported_metrics() -> None:
+    from app.services.optimization.numeric_guard import numeric_guard
+
+    content = sample_resume_content()
+    source_profile = content.profile
+
+    # Tailored profile injecting fabricated numbers (e.g. 99.9%, $5M, 50+)
+    tailored_dict = source_profile.to_dict()
+    tailored_dict["summary"] = "Experienced engineer driving 99.9% uptime and managing $5M budget."
+    tailored_dict["experience"][0]["responsibilities"][0]["text"] = "Managed 50+ engineers across 10 teams."
+
+    audited, issues = numeric_guard.audit_tailored_profile(
+        source_profile=source_profile,
+        tailored_profile_dict=tailored_dict,
+    )
+
+    assert len(issues) >= 2
+    assert any("99.9%" in i or "5m" in i for i in issues)
+    assert any("50+" in i for i in issues)
+
