@@ -111,6 +111,20 @@ def extract_style_model(geometry_dict: Optional[dict[str, Any]] = None) -> Docum
     if not geometry_dict or not isinstance(geometry_dict, dict):
         return DocumentStyleModel()
 
+    # Span-level parser extraction is preferred over geometry heuristics. It is
+    # metadata from the immutable source PDF, not a user-supplied style value.
+    extracted = geometry_dict.get("document_style") or {}
+    if extracted and not extracted.get("fallback"):
+        base = DocumentStyleModel()
+        for key in (
+            "body_font", "body_size_pt", "heading_font", "section_heading_size_pt",
+            "heading_color_hex", "accent_color_hex",
+        ):
+            value = extracted.get(key)
+            if value is not None:
+                setattr(base, key, value)
+        return base
+
     pages = geometry_dict.get("pages") or []
     if not pages:
         return DocumentStyleModel()

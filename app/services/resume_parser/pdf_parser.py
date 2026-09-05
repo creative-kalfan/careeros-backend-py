@@ -93,6 +93,8 @@ class PDFParser:
                 detected_sections=sections,
             )
             geometry_dict = geometry_map.to_dict()
+            from .style_extractor import extract_document_style
+            geometry_dict["document_style"] = extract_document_style(doc)
 
             # Parse structured content
             parsed = self._parse_structured(

@@ -15,6 +15,7 @@ from app.events.bus import DispatchReport, EventBus, HandlerResult
 from app.events.domain_event import (
     ApplicationStatusChanged,
     DomainEvent,
+    InterviewPrepGenerated,
     JobIngested,
     NotificationCreated,
     RecommendationGenerated,
@@ -31,6 +32,7 @@ __all__ = [
     "EventBus",
     "HandlerRegistry",
     "HandlerResult",
+    "InterviewPrepGenerated",
     "JobIngested",
     "NotificationCreated",
     "RecommendationGenerated",

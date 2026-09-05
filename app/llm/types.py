@@ -19,7 +19,8 @@ class LLMTask(str, Enum):
     RESUME_SECTION_SUGGESTION = "resume_section_suggestion"
     ATS_SEMANTIC_REASONING = "ats_semantic_reasoning"
     RESUME_IMPROVEMENT_ASSESSMENT = "resume_improvement_assessment"
-    # Future tasks: resume_summary, cover_letter, interview_prep, etc.
+    INTERVIEW_PREP_GENERATION = "interview_prep_generation"
+    # Future tasks: resume_summary, cover_letter, etc.
 
 
 class LLMUsage(BaseModel):

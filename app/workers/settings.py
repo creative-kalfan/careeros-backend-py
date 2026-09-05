@@ -8,6 +8,7 @@ from arq.worker import Worker, check_health, func, run_worker
 from app.config import get_settings
 from app.workers import functions
 from app.workers.jobs.crawl_jobs import crawl_company_job
+from app.workers.jobs.interview_prep_jobs import generate_interview_prep_job  # noqa: F401 — registration side effect
 from app.workers.jobs.job_intelligence_job import analyze_job_intelligence_job
 from app.workers.registry import JobDefinition, get_registered_jobs
 

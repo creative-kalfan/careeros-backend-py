@@ -932,6 +932,7 @@ async def _apply_tailoring_version_impl(
 
     # Audit tailored profile against candidate source baseline profile
     from app.services.optimization.numeric_guard import numeric_guard
+    from app.services.optimization.semantic_guard import semantic_guard
     source_profile = ResumeProfile.from_dict((base_content.get("profile") if isinstance(base_content, dict) else None) or {})
     audited_dict, guard_issues = numeric_guard.audit_tailored_profile(
         source_profile=source_profile,
@@ -939,6 +940,14 @@ async def _apply_tailoring_version_impl(
     )
     if guard_issues:
         logger.info("NumericFabricationGuard on apply_tailoring detected issues: %s", guard_issues)
+
+    _, semantic_issues = semantic_guard.audit_tailored_profile(source_profile, audited_dict)
+    if semantic_issues:
+        logger.warning("SemanticFabricationGuard blocked tailoring: %s", semantic_issues)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "SEMANTIC_FABRICATION", "issues": semantic_issues},
+        )
 
     tailored_profile = ResumeProfile.from_dict(audited_dict)
     tailored_content = ResumeContent(profile=tailored_profile)
@@ -1026,6 +1035,8 @@ async def _apply_tailoring_version_impl(
     if comp_res.get("geometry"):
         updated_meta["geometry"] = comp_res["geometry"]
     updated_meta["compilation_strategy"] = comp_res.get("strategy", "document_compiler")
+    if comp_res.get("fit_verification"):
+        updated_meta["fit_verification"] = comp_res["fit_verification"]
 
     update_payload: dict[str, Any] = {
         "meta": updated_meta,
@@ -1039,5 +1050,4 @@ async def _apply_tailoring_version_impl(
         raise HTTPException(status_code=404, detail="Version update failed")
 
     return SuccessResponse(data=_to_version_response(updated_version))
-
 

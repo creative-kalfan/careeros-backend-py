@@ -106,3 +106,18 @@ class NotificationCreated(DomainEvent):
 
     aggregate_type: str = "notification"
     notification_type: str = ""
+
+
+@dataclass(frozen=True)
+class InterviewPrepGenerated(DomainEvent):
+    """An interview preparation session finished generating questions.
+
+    ``question_count`` and ``categories`` summarize the already-persisted
+    output so consumers never recalculate generation results.
+    """
+
+    aggregate_type: str = "interview_prep"
+    application_id: str = ""
+    interview_id: str = ""
+    session_id: str = ""
+    question_count: int = 0

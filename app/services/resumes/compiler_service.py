@@ -19,6 +19,7 @@ from app.services.resume_parser.geometry import extract_document_geometry
 from .document_model import ResumeDocumentModel, build_document_model
 from .docx_compiler import docx_compiler
 from .pdf_compiler import pdf_compiler
+from .fit_verifier import fit_verifier
 from .pdf_mutation import PDFMutationEngine
 from .visual_verification import VisualVerificationEngine, VisualVerificationResult
 
@@ -125,10 +126,14 @@ class ResumeCompilerService:
         # 2. Document Reconstruction / Compiler Pipeline (Pipeline B)
         doc_model = build_document_model(content, geometry_map)
 
-        # Compile native OOXML DOCX
+        # Bounded fitting runs before persistence. It never drops below 10pt
+        # body type and records every visible content/layout tradeoff.
+        fit_result = fit_verifier.fit(
+            doc_model,
+            lambda model: pdf_compiler.compile(model)[0],
+        )
+        doc_model = fit_result.document
         docx_bytes = docx_compiler.compile(doc_model)
-
-        # Compile and visually verify PDF
         pdf_bytes, ver_result = pdf_compiler.compile(doc_model, docx_bytes)
 
         # Extract precise physical geometry from verified PDF
@@ -156,6 +161,10 @@ class ResumeCompilerService:
                 "is_valid": ver_result.is_valid,
                 "page_count": ver_result.page_count,
                 "issues": [i.to_dict() for i in ver_result.issues],
+            },
+            "fit_verification": {
+                "needs_manual_review": fit_result.needs_manual_review,
+                "audit": fit_result.audit,
             },
             "strategy": "document_compiler",
         }

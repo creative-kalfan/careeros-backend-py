@@ -61,6 +61,7 @@ from app.api.routes.resumes import router as resumes_router
 from app.api.routes.versions import router as versions_router
 from app.api.routes.improvement import router as improvement_router
 from app.api.routes.optimization import router as optimization_router
+from app.api.routes.interview_prep import router as interview_prep_router
 from app.api.routes.resume_templates import router as templates_router
 from app.auth.service import AuthError
 from app.config import get_settings
@@ -246,6 +247,7 @@ app.include_router(resumes_router)
 app.include_router(versions_router)
 app.include_router(improvement_router)
 app.include_router(optimization_router)
+app.include_router(interview_prep_router)
 app.include_router(templates_router)
 
 
