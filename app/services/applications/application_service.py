@@ -394,7 +394,12 @@ class ApplicationService:
         Conversion rates fall back to ``0`` (never a fake 100%) when the
         relevant sample (denominator) is zero.
         """
-        rows = await self.repository.get_status_counts(auth.supabase, auth.user.id, archived=False)
+        try:
+            rows = await self.repository.get_status_counts(auth.supabase, auth.user.id, archived=False)
+        except Exception as exc:
+            logger.warning("Failed to get status counts for user %s: %s", getattr(auth.user, "id", None), exc)
+            rows = []
+
         total = len(rows)
 
         by_status: dict[str, int] = {s: 0 for s in APPLICATION_STATUSES}
@@ -403,10 +408,14 @@ class ApplicationService:
             if st in by_status:
                 by_status[st] += 1
 
-        active = total - by_status["rejected"] - by_status["withdrawn"]
-        with_interviews = by_status["interview"] + by_status["offer"] + by_status["accepted"]
-        with_offers = by_status["offer"] + by_status["accepted"]
-        accepted = by_status["accepted"]
+        active = total - by_status.get("rejected", 0) - by_status.get("withdrawn", 0)
+        with_interviews = (
+            by_status.get("interview", 0)
+            + by_status.get("offer", 0)
+            + by_status.get("accepted", 0)
+        )
+        with_offers = by_status.get("offer", 0) + by_status.get("accepted", 0)
+        accepted = by_status.get("accepted", 0)
 
         active_this_week = self._count_this_week(rows)
 
@@ -418,15 +427,15 @@ class ApplicationService:
             "total": total,
             "active": active,
             "byStatus": by_status,
-            "applied": by_status["applied"],
-            "screening": by_status["screening"],
-            "assessment": by_status["assessment"],
-            "interview": by_status["interview"],
-            "offer": by_status["offer"],
+            "applied": by_status.get("applied", 0),
+            "screening": by_status.get("screening", 0),
+            "assessment": by_status.get("assessment", 0),
+            "interview": by_status.get("interview", 0),
+            "offer": by_status.get("offer", 0),
             "accepted": accepted,
-            "rejected": by_status["rejected"],
-            "withdrawn": by_status["withdrawn"],
-            "saved": by_status["saved"],
+            "rejected": by_status.get("rejected", 0),
+            "withdrawn": by_status.get("withdrawn", 0),
+            "saved": by_status.get("saved", 0),
             "interviewRate": interview_rate,
             "offerRate": offer_rate,
             "acceptanceRate": acceptance_rate,

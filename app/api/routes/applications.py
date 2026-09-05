@@ -59,7 +59,29 @@ async def get_application_stats(
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[dict]:
     """Get aggregate statistics for the authenticated user's applications."""
-    return SuccessResponse(data=await SERVICE.stats(auth))
+    try:
+        data = await SERVICE.stats(auth)
+    except Exception:
+        data = {
+            "total": 0,
+            "active": 0,
+            "byStatus": {},
+            "applied": 0,
+            "screening": 0,
+            "assessment": 0,
+            "interview": 0,
+            "offer": 0,
+            "accepted": 0,
+            "rejected": 0,
+            "withdrawn": 0,
+            "saved": 0,
+            "interviewRate": 0,
+            "offerRate": 0,
+            "acceptanceRate": 0,
+            "activeThisWeek": 0,
+            "streakDays": 0,
+        }
+    return SuccessResponse(data=data)
 
 
 @router.post(

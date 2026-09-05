@@ -286,13 +286,17 @@ class ApplicationRepository:
     async def get_status_counts(
         self, supabase: Any, user_id: str, archived: bool = False
     ) -> list[dict[str, Any]]:
-        result = await (
-            supabase.table("applications")
-            .select("id, status, favorite, archived, application_date")
-            .eq("user_id", user_id)
-            .execute()
-        )
-        rows = result.data or []
+        try:
+            result = await (
+                supabase.table("applications")
+                .select("*")
+                .eq("user_id", user_id)
+                .execute()
+            )
+            rows = result.data or []
+        except Exception as exc:
+            logger.warning("get_status_counts query failed for user %s: %s", user_id, exc)
+            rows = []
         # Keep the DB query single-`eq` (mock/RLS friendly); filter archived here.
         if archived:
             return [r for r in rows if r.get("archived")]
