@@ -329,7 +329,9 @@ def build_document_model(
     p = profile.personal
 
     header = HeaderElement(
-        full_name=p.full_name or "Candidate",
+        # Do not invent an identity. An empty name is preferable to a false
+        # "Candidate" header when an incomplete legacy profile is compiled.
+        full_name=p.full_name or "",
         headline=p.headline or profile.target_role or "",
         email=p.email or "",
         phone=p.phone or "",

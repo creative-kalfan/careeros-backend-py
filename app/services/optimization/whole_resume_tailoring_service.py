@@ -92,6 +92,14 @@ class WholeResumeTailoringService:
         if guard_issues:
             logger.info("NumericFabricationGuard audited profile with issues: %s", guard_issues)
 
+        # A tailoring pass may only change text explicitly designed for tailoring.
+        # Rebuild against the source profile so an invalid model response can never
+        # erase identity, jobs, education, projects, or other profile sections.
+        audited_profile_dict = self._preserve_profile_sections(
+            source=resume_content.profile,
+            candidate=audited_profile_dict,
+        )
+
         # 5. Construct tailored ResumeContent
         tailored_content = ResumeContent(
             profile=ResumeProfile.from_dict(audited_profile_dict),
@@ -177,6 +185,7 @@ class WholeResumeTailoringService:
             "job_description_snippet": parsed_jd.raw_text[:2000] if hasattr(parsed_jd, "raw_text") else "",
             "required_skills": required_skills[:15],
             "candidate_profile": {
+                "personal": profile.personal.model_dump(),
                 "summary": profile.summary,
                 "skills": profile.skills.to_dict() if profile.skills else {},
                 "experience": [
@@ -188,6 +197,10 @@ class WholeResumeTailoringService:
                     }
                     for exp in profile.experience
                 ],
+                "internships": [exp.model_dump() for exp in profile.internships],
+                "education": [edu.model_dump() for edu in profile.education],
+                "projects": [project.model_dump() for project in profile.projects],
+                "certifications": [cert.model_dump() for cert in profile.certifications],
             },
         }
 
@@ -200,7 +213,9 @@ class WholeResumeTailoringService:
             "3. Rewrite the professional summary to be concise, impactful, and targeted.\n"
             "4. Prioritize technical and domain skills that match the JD.\n"
             "5. Refine experience bullet points using active action verbs and high-impact phrasing.\n"
-            "6. Output ONLY a valid JSON object matching the requested schema."
+            "6. Preserve candidate identity and every source section. You may return edits only for summary, skills, and existing experience bullets.\n"
+            "7. Never use placeholders such as 'Candidate', never repeat a sentence or keyword list, and never keyword-stuff. Each rewritten bullet must correspond to one supplied entry_id and bullet_index.\n"
+            "8. Output ONLY a valid JSON object matching the requested schema."
         )
 
         prompt = (
@@ -245,14 +260,24 @@ class WholeResumeTailoringService:
 
         # Build tailored profile
         tailored_dict = profile.to_dict()
-        if data.get("summary"):
-            tailored_dict["summary"] = data["summary"]
+        if isinstance(data.get("summary"), str) and self._is_safe_rewrite(data["summary"]):
+            tailored_dict["summary"] = data["summary"].strip()
 
         if isinstance(data.get("skills"), dict):
             existing_skills = tailored_dict.get("skills") or {}
             for cat, items in data["skills"].items():
-                if isinstance(items, list):
-                    existing_skills[cat] = items
+                if isinstance(items, list) and cat in existing_skills:
+                    # Existing skill categories only: a model cannot invent a new
+                    # category or replace verified skills with an arbitrary list.
+                    verified = {str(skill).casefold(): skill for skill in existing_skills[cat]}
+                    existing_skills[cat] = [
+                        verified[str(skill).casefold()]
+                        for skill in items
+                        if str(skill).casefold() in verified
+                    ] + [
+                        skill for skill in existing_skills[cat]
+                        if str(skill).casefold() not in {str(value).casefold() for value in items}
+                    ]
             tailored_dict["skills"] = existing_skills
 
         if isinstance(data.get("experience_bullets"), list):
@@ -270,7 +295,12 @@ class WholeResumeTailoringService:
                     for rw in rewrites:
                         idx = rw.get("bullet_index")
                         new_txt = rw.get("rewritten_text")
-                        if new_txt and isinstance(idx, int) and 0 <= idx < len(resps):
+                        if (
+                            isinstance(new_txt, str)
+                            and self._is_safe_rewrite(new_txt)
+                            and isinstance(idx, int)
+                            and 0 <= idx < len(resps)
+                        ):
                             if isinstance(resps[idx], dict):
                                 resps[idx]["text"] = new_txt
                             elif isinstance(resps[idx], str):
@@ -317,6 +347,34 @@ class WholeResumeTailoringService:
 
         return tailored_dict, plan_items
 
+    @staticmethod
+    def _is_safe_rewrite(text: str) -> bool:
+        """Reject placeholders and obvious repeated keyword/sentence output."""
+        normalized = " ".join(text.split())
+        if not normalized or normalized.casefold() == "candidate":
+            return False
+        sentences = [part.strip().casefold() for part in re.split(r"[.!?]+", normalized) if part.strip()]
+        if len(sentences) != len(set(sentences)):
+            return False
+        words = re.findall(r"[a-z0-9+#.-]+", normalized.casefold())
+        return not any(words.count(word) > 4 for word in set(words) if len(word) > 3)
+
+    @staticmethod
+    def _preserve_profile_sections(source: ResumeProfile, candidate: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep all non-tailorable source data if a provider response is incomplete."""
+        preserved = source.to_dict()
+        # Experience rewrites were already applied to a copy of the source
+        # profile by entry id and bullet index above; never trust a returned
+        # collection to replace the source collection here.
+        for key in ("summary", "skills"):
+            if key in candidate:
+                preserved[key] = candidate[key]
+        try:
+            return ResumeProfile.model_validate(preserved).model_dump()
+        except Exception:
+            logger.warning("Discarded invalid whole-resume tailoring response; source profile retained")
+            return source.to_dict()
+
     def _deterministic_ast_tailoring(
         self,
         profile: ResumeProfile,
@@ -343,22 +401,20 @@ class WholeResumeTailoringService:
                 f"targeting the {target_role} role{' at ' + target_co if target_co else ''}."
             )
         else:
-            tailored_summary = (
-                f"Results-driven {target_role} with proven track record in {top_skills_str}. "
-                f"Experienced in architecting scalable solutions, leading cross-functional teams, and driving measurable impact."
-            )
-        tailored_profile.summary = tailored_summary
+            tailored_summary = ""
+        tailored_profile.summary = tailored_summary or None
 
-        plan_items.append(
-            TailoringPlanItemSchema(
-                section="summary",
-                action="REWRITE",
-                current_text=orig_summary,
-                suggested_text=tailored_summary,
-                reasoning=f"Targeted professional summary towards {target_role} highlighting core domain skills.",
-                keywords_addressed=required_skills[:4],
+        if tailored_summary:
+            plan_items.append(
+                TailoringPlanItemSchema(
+                    section="summary",
+                    action="REWRITE",
+                    current_text=orig_summary,
+                    suggested_text=tailored_summary,
+                    reasoning=f"Targeted professional summary towards {target_role} highlighting core domain skills.",
+                    keywords_addressed=required_skills[:4],
+                )
             )
-        )
 
         # 2. Skills Prioritization & Reordering
         if tailored_profile.skills:

@@ -39,9 +39,9 @@ class DocumentStyleModel:
     # Font sizes in points (Pt)
     name_size_pt: float = 20.0
     headline_size_pt: float = 11.0
-    section_heading_size_pt: float = 11.0
-    subheading_size_pt: float = 10.0
-    body_size_pt: float = 9.5
+    section_heading_size_pt: float = 12.0
+    subheading_size_pt: float = 10.5
+    body_size_pt: float = 10.0
     meta_size_pt: float = 8.5
 
     # Weights

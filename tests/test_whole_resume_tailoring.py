@@ -81,6 +81,27 @@ def test_whole_resume_tailoring_empty_jd_raises() -> None:
         )
 
 
+def test_tailoring_preserves_identity_and_non_tailorable_sections() -> None:
+    content = sample_resume_content()
+    content.profile.education = []
+    candidate = {
+        "summary": "Python engineer. Python engineer.",
+        "experience": [],
+        "education": [{"degree": "Discarded by guard"}],
+    }
+
+    preserved = whole_resume_tailoring_service._preserve_profile_sections(
+        content.profile,
+        candidate,
+    )
+
+    assert preserved["personal"]["full_name"] == "Jane Doe"
+    assert len(preserved["experience"]) == 1
+    assert preserved["education"] == []
+    assert whole_resume_tailoring_service._is_safe_rewrite("Candidate") is False
+    assert whole_resume_tailoring_service._is_safe_rewrite("Python engineer. Python engineer.") is False
+
+
 def test_post_optimization_tailor_api() -> None:
     from unittest.mock import MagicMock, patch
     from fastapi.testclient import TestClient
@@ -194,4 +215,3 @@ def test_numeric_fabrication_guard_catches_unsupported_metrics() -> None:
     assert len(issues) >= 2
     assert any("99.9%" in i or "5m" in i for i in issues)
     assert any("50+" in i for i in issues)
-
