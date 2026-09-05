@@ -14,6 +14,7 @@ from app.dependencies import get_current_user
 from app.repositories.resume_repository import ResumeRepository
 from app.schemas.common import ErrorResponse, SuccessResponse
 from app.schemas.resume import (
+    ApplyTailoringRequest,
     ApplyVersionOperationRequest,
     MutatePdfRequest,
     ResumeVersionCreate,
@@ -876,4 +877,137 @@ async def mutate_version_pdf(
         meta=new_meta,
     )
     return SuccessResponse(data=_to_version_response(row))
+
+
+@router.post(
+    "/{resume_id}/versions/apply-tailoring",
+    response_model=SuccessResponse[ResumeVersionResponse],
+    responses={
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        400: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
+async def apply_tailoring_version(
+    resume_id: str,
+    body: ApplyTailoringRequest,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[ResumeVersionResponse]:
+    """Create a new derived version from tailored profile and compile PDF/DOCX artifacts."""
+    from app.models.resume import ResumeContent, ResumeProfile
+    from app.services.resumes.compiler_service import resume_compiler_service
+    from app.services.ats.ats_analyzer import ATSAnalyzer
+
+    repo = ResumeRepository(jwt=auth.jwt)
+    resume = repo.get_resume(auth.user.id, resume_id)
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    parent_version = None
+    if body.parent_version_id:
+        parent_version = repo.get_version(body.parent_version_id)
+
+    # Reconstruct tailored ResumeContent
+    profile_dict = body.tailored_profile
+    if not profile_dict:
+        base_content = (parent_version.get("content") if parent_version else None) or resume.get("content") or {}
+        profile_dict = (base_content.get("profile") if isinstance(base_content, dict) else None) or {}
+
+    tailored_profile = ResumeProfile.from_dict(profile_dict)
+    tailored_content = ResumeContent(profile=tailored_profile)
+
+    # Determine default version name
+    v_name = body.version_name
+    if not v_name or not v_name.strip():
+        role_label = body.job_title or (parent_version.get("target_job_title") if parent_version else None) or "Tailored"
+        v_name = f"{role_label} Version ({datetime.utcnow().strftime('%b %d')})"
+
+    geom_map = (
+        (parent_version.get("meta") or {}).get("geometry")
+        if parent_version
+        else (resume.get("meta") or {}).get("geometry")
+    )
+    new_meta = {
+        "provenance_source": "tailoring",
+        "parent_version_id": body.parent_version_id,
+    }
+    if geom_map:
+        new_meta["geometry"] = geom_map
+
+    created_row = repo.create_version(
+        resume_id=resume_id,
+        content=tailored_content.to_dict(),
+        version_name=v_name,
+        source="tailoring",
+        is_master=False,
+        parent_version_id=body.parent_version_id,
+        target_job_title=body.job_title or (parent_version.get("target_job_title") if parent_version else None),
+        target_company=body.company or (parent_version.get("target_company") if parent_version else None),
+        job_description=body.job_description or (parent_version.get("job_description") if parent_version else None),
+        template=body.template or (parent_version.get("template") if parent_version else "minimal"),
+        sections_config=body.sections_config or (parent_version.get("sections_config") if parent_version else {}),
+        meta=new_meta,
+    )
+    version_id = created_row["id"]
+
+    # Compile and persist DOCX & PDF artifacts
+    try:
+        comp_res = resume_compiler_service.compile_and_persist(
+            user_id=auth.user.id,
+            version_id=version_id,
+            content=tailored_content,
+            geometry_map=geom_map,
+            jwt=auth.jwt,
+        )
+    except Exception as exc:
+        logger.error("Compilation failed for tailored version %s: %s", version_id, exc, exc_info=True)
+        repo.delete_version(version_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Document compilation failed for tailored version.",
+        ) from exc
+
+    storage_path = comp_res.get("storage_path")
+    if not storage_path:
+        repo.delete_version(version_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Document compilation failed for tailored version (storage path missing).",
+        )
+
+    # Calculate closed-loop ATS score if job description is present
+    last_ats_score = None
+    jd = body.job_description or (parent_version.get("job_description") if parent_version else None)
+    target_role = body.job_title or (parent_version.get("target_job_title") if parent_version else None)
+    if jd and jd.strip():
+        try:
+            analyzer = ATSAnalyzer()
+            ats_report = analyzer.analyze_resume(tailored_content, jd, job_title=target_role)
+            last_ats_score = ats_report.overall_score
+        except Exception as ats_exc:
+            logger.warning("Closed-loop ATS score calculation failed: %s", ats_exc)
+
+    updated_meta = dict(new_meta)
+    updated_meta["storage_path"] = storage_path
+    if comp_res.get("docx_storage_path"):
+        updated_meta["docx_storage_path"] = comp_res["docx_storage_path"]
+    if comp_res.get("geometry"):
+        updated_meta["geometry"] = comp_res["geometry"]
+    updated_meta["compilation_strategy"] = comp_res.get("strategy", "document_compiler")
+
+    update_payload: dict[str, Any] = {
+        "meta": updated_meta,
+        "source": comp_res.get("strategy", "document_compiler"),
+    }
+    if last_ats_score is not None:
+        update_payload["last_ats_score"] = last_ats_score
+        update_payload["last_analyzed_at"] = datetime.utcnow().isoformat()
+
+    updated_version = repo.update_version(version_id, update_payload)
+    if not updated_version:
+        raise HTTPException(status_code=404, detail="Version update failed")
+
+    return SuccessResponse(data=_to_version_response(updated_version))
+
 

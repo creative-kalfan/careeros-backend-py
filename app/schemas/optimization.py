@@ -297,3 +297,46 @@ class ReanalyzeResponseSchema(BaseModel):
     delta: float
     report_id: str
     message: str
+
+
+class TailoringPlanItemSchema(BaseModel):
+    section: str
+    action: str = "ALIGN"  # KEEP, REWRITE, EMPHASIZE, ALIGN
+    target_id: Optional[str] = None
+    current_text: Optional[str] = None
+    suggested_text: Optional[str] = None
+    reasoning: str = ""
+    keywords_addressed: List[str] = []
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+
+class ATSScoreComparisonSchema(BaseModel):
+    baseline_score: float
+    tailored_score: float
+    delta: float
+    matched_keywords_count: int = 0
+    missing_keywords_count: int = 0
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+
+class TailorResumeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
+    resume_id: Optional[str] = None
+    version_id: Optional[str] = None
+    job_description: str
+    job_title: Optional[str] = None
+    company: Optional[str] = None
+    content: Optional[Dict[str, Any]] = None
+
+
+class TailorResumeResponse(BaseModel):
+    success: bool = True
+    plan: List[TailoringPlanItemSchema] = []
+    tailored_profile: Dict[str, Any] = {}
+    score_comparison: ATSScoreComparisonSchema
+    message: str = ""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)

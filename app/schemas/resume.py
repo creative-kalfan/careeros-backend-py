@@ -107,6 +107,19 @@ class SaveVersionContentRequest(BaseModel):
     content: dict[str, Any]
 
 
+class ApplyTailoringRequest(BaseModel):
+    """Apply whole-document tailored profile to create a new derived version with compiled artifacts."""
+
+    parent_version_id: Optional[str] = None
+    version_name: Optional[str] = None
+    tailored_profile: dict[str, Any] = Field(default_factory=dict)
+    job_description: Optional[str] = None
+    job_title: Optional[str] = None
+    company: Optional[str] = None
+    template: Optional[str] = "minimal"
+    sections_config: Optional[dict[str, Any]] = None
+
+
 class MutatePdfResponse(BaseModel):
     version: ResumeVersionResponse
     storage_path: str

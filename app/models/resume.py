@@ -100,6 +100,18 @@ class SkillCategory(BaseModel):
     soft_skills: list[str] = []
     custom: dict[str, list[str]] = {}
 
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump()
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> SkillCategory:
+        if not data:
+            return cls()
+        try:
+            return cls.model_validate(data)
+        except Exception:
+            return cls()
+
 
 class ProjectItem(BaseModel):
     id: str = Field(default_factory=_gen_id)
@@ -166,6 +178,18 @@ class ResumeProfile(BaseModel):
     languages: list[LanguageItem] = []
     links: list[LinkItem] = []
     additional: list[AdditionalItem] = []
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump()
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> ResumeProfile:
+        if not data:
+            return cls()
+        try:
+            return cls.model_validate(data)
+        except Exception:
+            return cls()
 
 
 class ResumeMeta(BaseModel):

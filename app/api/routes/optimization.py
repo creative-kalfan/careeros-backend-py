@@ -30,9 +30,12 @@ from app.schemas.optimization import (
     GenerateSummaryOptimizationResponse,
     GenerateExperienceBulletOptimizationRequest,
     GenerateExperienceBulletOptimizationResponse,
+    TailorResumeRequest,
+    TailorResumeResponse,
 )
 from app.services.ats.ats_analyzer import ATSAnalyzer
 from app.services.optimization.optimization_service import OptimizationService
+from app.services.optimization.whole_resume_tailoring_service import whole_resume_tailoring_service
 from app.repositories.optimization_repository import optimization_repo
 from app.repositories.resume_repository import ResumeRepository
 from app.repositories.ats_repository import ATSReportRepository
@@ -287,6 +290,66 @@ async def generate_optimizations(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Optimization generation failed",
+        )
+
+
+@router.post("/tailor", response_model=TailorResumeResponse)
+async def tailor_resume(
+    payload: TailorResumeRequest,
+    current_user: AuthContext = Depends(get_current_user),
+    token: Optional[str] = Depends(get_auth_token),
+) -> TailorResumeResponse:
+    """Tailor entire resume (AST-level summary, skills, experience) against a job description."""
+    try:
+        if not payload.job_description or not payload.job_description.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Job description cannot be empty",
+            )
+
+        resume_content: Optional[ResumeContent] = None
+
+        if payload.content:
+            resume_content = ResumeContent.from_dict(payload.content)
+        elif payload.resume_id:
+            repo = ResumeRepository(jwt=token)
+            resume = repo.get_resume(current_user.user.id, payload.resume_id)
+            if not resume:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Resume not found or unauthorized access",
+                )
+            if payload.version_id:
+                version = repo.get_version(payload.version_id)
+                if not version:
+                    raise HTTPException(status_code=404, detail="Version not found")
+                if version.get("resume_id") != payload.resume_id:
+                    raise HTTPException(status_code=400, detail="Version does not belong to this resume")
+                resume_content = ResumeContent.from_dict(version.get("content") or {})
+            else:
+                resume_content = ResumeContent.from_dict(resume.get("content") or {})
+
+        if not resume_content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Resume content or resume_id is required for tailoring",
+            )
+
+        response = whole_resume_tailoring_service.tailor_resume(
+            resume_content=resume_content,
+            job_description=payload.job_description,
+            job_title=payload.job_title,
+            company=payload.company,
+        )
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error tailoring resume: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Whole resume tailoring failed: {str(e)}",
         )
 
 
