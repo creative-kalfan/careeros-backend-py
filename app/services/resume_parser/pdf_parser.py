@@ -36,7 +36,10 @@ class PDFParser:
         
         doc = None
         try:
-            doc = fitz.open(file_path)
+            if isinstance(file_path, (bytes, bytearray)):
+                doc = fitz.open(stream=file_path, filetype="pdf")
+            else:
+                doc = fitz.open(file_path)
             logger.info("PDF opened: %s pages", len(doc))
 
             all_blocks: List[DocumentBlock] = []

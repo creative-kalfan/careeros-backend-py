@@ -20,7 +20,9 @@ _SCOPE_PATTERNS = ("led a team", "managed a team", "managed team", "cross-functi
 
 
 def _tokens(text: str) -> set[str]:
-    return {_ALIASES.get(token.casefold(), token.casefold()) for token in _WORD_RE.findall(text or "")}
+    raw = _WORD_RE.findall(text or "")
+    cleaned = (t.strip(".,;:!?()[]{}'\"-") for t in raw)
+    return {_ALIASES.get(token.casefold(), token.casefold()) for token in cleaned if token}
 
 
 def _profile_text(profile: ResumeProfile) -> str:

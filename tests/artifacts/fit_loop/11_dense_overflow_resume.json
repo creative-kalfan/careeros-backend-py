@@ -1,0 +1,9 @@
+{
+  "fixture": "11_dense_overflow_resume",
+  "final_page_count": 1,
+  "needs_manual_review": false,
+  "audit_trail": [
+    "Removed lowest-priority bullet for one-page fit: Spearheaded enterprise infrastructure modernization initiative 29 resulting in 40% reduction in cloud hosting expenses across multi-region environments.",
+    "Tightened line spacing to 1.0 for one-page fit."
+  ]
+}
