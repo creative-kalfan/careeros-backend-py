@@ -9,7 +9,6 @@ Strictly grounded in candidate facts: never hallucinates employers, metrics, or 
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import json
 import logging
@@ -235,8 +234,16 @@ class WholeResumeTailoringService:
             "}"
         )
 
+        from app.llm.sync_bridge import run_coro_sync
+
         gateway = get_llm_gateway()
-        response = asyncio.run(
+        # run_coro_sync (not asyncio.run): this service is synchronous but is
+        # called from async route handlers inside a running event loop, where
+        # asyncio.run() raises RuntimeError and silently disabled LLM
+        # tailoring. Bounded at 25s so the request stays within the
+        # frontend's long-request budget; failures fall back to the
+        # deterministic AST pass in _generate_tailoring.
+        response = run_coro_sync(
             gateway.generate(
                 LLMRequest(
                     task=LLMTask.RESUME_SECTION_SUGGESTION,
@@ -245,7 +252,8 @@ class WholeResumeTailoringService:
                     temperature=0.3,
                     max_tokens=2048,
                 )
-            )
+            ),
+            timeout_seconds=25.0,
         )
 
         content_str = response.content.strip()
@@ -391,15 +399,38 @@ class WholeResumeTailoringService:
         target_co = company or (parsed_jd.company if hasattr(parsed_jd, "company") else "")
 
         # 1. Summary AST Alignment
-        orig_summary = profile.summary or ""
-        top_skills_str = ", ".join(required_skills[:4]) if required_skills else "software engineering and system design"
+        # Only name skills the candidate actually has: apply-tailoring's
+        # semantic guard rejects tailored text naming technologies absent
+        # from the source resume, so injecting raw JD requirements here made
+        # deterministic output fail its own pipeline with a 422 (e.g. a tech
+        # JD naming Kubernetes for a candidate without it).
+        candidate_skills: set[str] = set()
+        if profile.skills:
+            for skill_list in (
+                profile.skills.technical,
+                profile.skills.tools,
+                profile.skills.languages,
+                profile.skills.databases,
+                profile.skills.analytics,
+                profile.skills.soft_skills,
+            ):
+                candidate_skills.update((s or "").lower() for s in (skill_list or []))
+        grounded_skills = [s for s in (required_skills or []) if (s or "").lower() in candidate_skills]
 
+        orig_summary = profile.summary or ""
         if orig_summary.strip():
             # Align existing summary
-            tailored_summary = (
-                f"{orig_summary.rstrip('.')} with focused expertise in {top_skills_str} "
-                f"targeting the {target_role} role{' at ' + target_co if target_co else ''}."
-            )
+            if grounded_skills:
+                top_skills_str = ", ".join(grounded_skills[:4])
+                tailored_summary = (
+                    f"{orig_summary.rstrip('.')} with focused expertise in {top_skills_str} "
+                    f"targeting the {target_role} role{' at ' + target_co if target_co else ''}."
+                )
+            else:
+                tailored_summary = (
+                    f"{orig_summary.rstrip('.')} "
+                    f"targeting the {target_role} role{' at ' + target_co if target_co else ''}."
+                )
         else:
             tailored_summary = ""
         tailored_profile.summary = tailored_summary or None
@@ -422,10 +453,10 @@ class WholeResumeTailoringService:
             # Find candidate skills matching required skills (case-insensitive)
             matched_tech: List[str] = []
             remaining_tech: List[str] = []
-            req_lower_set = {s.lower(): s for s in required_skills}
+            req_lower_set = {(s or "").lower(): s for s in required_skills}
 
             for skill in current_tech:
-                sk_lower = skill.lower()
+                sk_lower = (skill or "").lower()
                 if sk_lower in req_lower_set:
                     matched_tech.append(skill)
                 else:
@@ -450,8 +481,12 @@ class WholeResumeTailoringService:
             for b in exp.responsibilities:
                 b_text = b.text.strip()
                 # Check for action verb enhancement or keyword injection if relevant
+                # role is Optional[str]; a parser may leave it empty. Treat a missing
+                # role/tools as providing no match rather than crashing on .lower().
+                role_match_text = (exp.role or "").lower()
+                tools_match_text = " ".join((t or "") for t in (exp.tools or [])).lower()
                 for req in required_skills[:5]:
-                    if req.lower() in exp.role.lower() or req.lower() in " ".join(exp.tools).lower():
+                    if req.lower() in role_match_text or req.lower() in tools_match_text:
                         if req.lower() not in b_text.lower():
                             exp_keywords.append(req)
 

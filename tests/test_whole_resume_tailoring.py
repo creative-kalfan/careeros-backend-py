@@ -102,6 +102,84 @@ def test_tailoring_preserves_identity_and_non_tailorable_sections() -> None:
     assert whole_resume_tailoring_service._is_safe_rewrite("Python engineer. Python engineer.") is False
 
 
+def test_whole_resume_tailoring_experience_without_role_does_not_crash() -> None:
+    """Regression: a resume whose experience entry has an unparsed role (None).
+
+    Previously crashed with `AttributeError: 'NoneType' object has no attribute
+    'lower'` from the deterministic tailoring pass calling `exp.role.lower()`.
+    """
+    content = ResumeContent(
+        profile=ResumeProfile(
+            personal=PersonalInfo(full_name="Kavya Raman", email="kavya@example.com"),
+            summary="Finance professional handling client accounting and reconciliations.",
+            skills=SkillCategory(
+                technical=["Accounting", "Excel", "Reconciliation"],
+                tools=["SAP"],
+                soft_skills=["Communication"],
+            ),
+            experience=[
+                ExperienceItem(
+                    company="ZS Associates",
+                    role=None,  # parser did not extract the job title
+                    start_date="2022-01",
+                    responsibilities=[
+                        BulletItem(text="Prepared monthly client account reconciliations."),
+                    ],
+                    tools=["Excel", "SAP"],
+                )
+            ],
+            education=[],
+        )
+    )
+    jd = (
+        "Finance Associate - Client Accounting\n"
+        "Requirements:\n"
+        "- Strong knowledge of accounting\n"
+        "- Proficiency in Excel and financial reporting\n"
+        "- Client reconciliation experience\n"
+    )
+
+    result = whole_resume_tailoring_service.tailor_resume(
+        resume_content=content,
+        job_description=jd,
+        job_title="Finance Associate",
+        company="ZS Associates",
+    )
+
+    assert isinstance(result, TailorResumeResponse)
+    assert result.success is True
+    assert result.score_comparison is not None
+    assert result.tailored_profile.get("summary")
+    assert result.tailored_profile["experience"][0]["company"] == "ZS Associates"
+    assert result.tailored_profile["experience"][0]["role"] is None
+
+
+def test_whole_resume_tailoring_sparse_resume_minimal_jd() -> None:
+    """Sparse resume with minimal JD: genuinely empty optional fields must not crash."""
+    content = ResumeContent(
+        profile=ResumeProfile(
+            personal=PersonalInfo(full_name="Aarav Patel"),
+            summary=None,
+            skills=SkillCategory(),
+            experience=[],
+            education=[],
+        )
+    )
+    jd = "Finance Associate: handle client accounting."
+
+    result = whole_resume_tailoring_service.tailor_resume(
+        resume_content=content,
+        job_description=jd,
+        job_title="Finance Associate",
+    )
+
+    assert isinstance(result, TailorResumeResponse)
+    assert result.success is True
+    assert result.score_comparison is not None
+    assert result.score_comparison.baseline_score >= 0
+    assert result.score_comparison.tailored_score >= 0
+
+
 def test_post_optimization_tailor_api() -> None:
     from unittest.mock import MagicMock, patch
     from fastapi.testclient import TestClient
