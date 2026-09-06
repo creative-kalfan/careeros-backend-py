@@ -33,7 +33,14 @@ def canonicalize_version_source(source: str | None) -> str:
     if src in ALLOWED_VERSION_SOURCES:
         return src
     if src in {"tailoring", "ai_tailoring"}:
-        return "job_specific"
+        # NOTE: 'job_specific' is 017-intended but the live DB CHECK constraint
+        # still rejects it (23514) where migration 017 is unapplied — which is
+        # the production state. Emitting 'job_specific' there made every
+        # apply-tailoring insert fail, surfacing as a generic 500
+        # (TAILORING_APPLY_FAILED). Fall back to the universally-safe base
+        # source and let _apply_canonical_source preserve the semantic
+        # classification in meta.provenance_source (the response layer reads it).
+        return "manual"
     return "manual"
 
 

@@ -1027,7 +1027,7 @@ async def _apply_tailoring_version_impl(
         resume_id=resume_id,
         content=tailored_content.to_dict(),
         version_name=v_name,
-        source="job_specific",
+        source="tailoring",
         is_master=False,
         parent_version_id=body.parent_version_id,
         target_job_title=body.job_title or (parent_version.get("target_job_title") if parent_version else None),

@@ -266,7 +266,7 @@ def test_post_versions_apply_tailoring_api() -> None:
             json_res = res.json()
             assert json_res.get("success") is True
             assert json_res["data"]["id"] == "ver-new-123"
-            assert mock_create.call_args.kwargs["source"] == "job_specific"
+            assert mock_create.call_args.kwargs["source"] == "tailoring"
             update_payload = mock_update.call_args.args[1]
             assert "source" not in update_payload
             assert update_payload["meta"]["compilation_strategy"] == "document_compiler"

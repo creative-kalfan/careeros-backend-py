@@ -328,8 +328,8 @@ def test_mutate_pdf_api_success(client):
 def test_canonicalize_version_source_obeys_017_check():
     from app.repositories.resume_repository import canonicalize_version_source
 
-    assert canonicalize_version_source("tailoring") == "job_specific"
-    assert canonicalize_version_source("ai_tailoring") == "job_specific"
+    assert canonicalize_version_source("tailoring") == "manual"
+    assert canonicalize_version_source("ai_tailoring") == "manual"
     assert canonicalize_version_source("document_compiler") == "manual"
     assert canonicalize_version_source("direct_pdf_mutation") == "manual"
     assert canonicalize_version_source("pdf_edit") == "manual"
@@ -361,7 +361,7 @@ def test_create_version_writes_check_safe_source():
         source="tailoring",
         meta={"provenance_source": "tailoring"},
     )
-    assert captured["payload"]["source"] == "job_specific"
+    assert captured["payload"]["source"] == "manual"
     assert captured["payload"]["meta"]["provenance_source"] == "tailoring"
     assert row["source"] == "tailoring"
 
