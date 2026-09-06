@@ -12,8 +12,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 8000
+# Dual-process entrypoint: ARQ background worker (background) + Uvicorn (foreground).
+COPY start.sh ./start.sh
+RUN chmod +x ./start.sh
 
-# Default: run the FastAPI server.
-# Override CMD for worker: python -m arq app.workers.settings.WorkerSettings
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 10000
+
+CMD ["./start.sh"]
