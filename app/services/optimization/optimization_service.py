@@ -600,8 +600,6 @@ class OptimizationService:
         Uses the LLM Gateway to produce structured ResumeSectionSuggestion
         objects. Context is minimized to only the skills-relevant subset.
         """
-        import asyncio
-
         profile = resume_content.profile
         parser = JobDescriptionParser()
         parsed_jd = parser.parse_job_description(job_description, job_title)
@@ -653,8 +651,14 @@ class OptimizationService:
         )
 
         try:
+            from app.llm.sync_bridge import run_coro_sync
+
             gateway = get_llm_gateway()
-            response = asyncio.run(
+            # run_coro_sync (not asyncio.run): these service methods are sync
+            # but run inside FastAPI's event loop, where asyncio.run() raises
+            # RuntimeError and turned every AI generation call into an HTTP
+            # 500. Bounded so slow providers degrade gracefully.
+            response = run_coro_sync(
                 gateway.generate(
                     LLMRequest(
                         task=LLMTask.RESUME_SECTION_SUGGESTION,
@@ -664,7 +668,8 @@ class OptimizationService:
                         max_tokens=512,
                         metadata={"section": "skills"},
                     )
-                )
+                ),
+                timeout_seconds=25.0,
             )
         except LLMProviderError as exc:
             logger.warning("LLM skills optimization failed: %s", exc)
@@ -742,8 +747,6 @@ class OptimizationService:
         for the summary section. Context is minimized to only relevant fields.
         The LLM must not invent employers, skills, metrics, or experience.
         """
-        import asyncio
-
         profile = resume_content.profile
         parser = JobDescriptionParser()
         parsed_jd = parser.parse_job_description(job_description, job_title)
@@ -830,8 +833,11 @@ class OptimizationService:
         )
 
         try:
+            from app.llm.sync_bridge import run_coro_sync
+
             gateway = get_llm_gateway()
-            response = asyncio.run(
+            # run_coro_sync (not asyncio.run): see skills optimization above.
+            response = run_coro_sync(
                 gateway.generate(
                     LLMRequest(
                         task=LLMTask.RESUME_SECTION_SUGGESTION,
@@ -841,7 +847,8 @@ class OptimizationService:
                         max_tokens=512,
                         metadata={"section": "summary"},
                     )
-                )
+                ),
+                timeout_seconds=25.0,
             )
         except LLMProviderError as exc:
             logger.warning("LLM summary optimization failed: %s", exc)
@@ -923,8 +930,6 @@ class OptimizationService:
         entry, the specific bullet, and JD requirements. The LLM must not
         invent employers, technologies, certifications, or metrics.
         """
-        import asyncio
-
         profile = resume_content.profile
         parser = JobDescriptionParser()
         parsed_jd = parser.parse_job_description(job_description, job_title)
@@ -994,8 +999,11 @@ class OptimizationService:
         )
 
         try:
+            from app.llm.sync_bridge import run_coro_sync
+
             gateway = get_llm_gateway()
-            response = asyncio.run(
+            # run_coro_sync (not asyncio.run): see skills optimization above.
+            response = run_coro_sync(
                 gateway.generate(
                     LLMRequest(
                         task=LLMTask.RESUME_SECTION_SUGGESTION,
@@ -1005,7 +1013,8 @@ class OptimizationService:
                         max_tokens=256,
                         metadata={"section": "experience"},
                     )
-                )
+                ),
+                timeout_seconds=25.0,
             )
         except LLMProviderError as exc:
             logger.warning("LLM experience bullet optimization failed: %s", exc)

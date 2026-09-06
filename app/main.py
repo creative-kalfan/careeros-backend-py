@@ -196,17 +196,44 @@ async def auth_error_handler(request: Request, exc: AuthError) -> JSONResponse:
     )
 
 
+def _normalize_exception_detail(status_code: int, detail: object) -> tuple[str, str, object | None]:
+    """Split an ``HTTPException`` detail into (code, message, details).
+
+    Route handlers may raise ``HTTPException(detail={"code": ..., "message": ...,
+    "issues"/"details": ...})`` for machine-readable errors. The error envelope
+    contract requires ``message`` to be a string, so dict details are split
+    into a short human-readable message plus structured details. Previously the
+    raw dict was assigned as ``message``, which clients could not render and
+    which violated the ``ErrorDetail`` schema (message: str).
+    """
+    if isinstance(detail, dict):
+        code = str(detail.get("code", status_code))
+        message = detail.get("message")
+        if not isinstance(message, str) or not message.strip():
+            issues = detail.get("issues")
+            if isinstance(issues, list) and issues:
+                message = "; ".join(str(i) for i in issues[:3])
+            else:
+                message = f"Request failed with status {status_code}."
+        details = detail.get("details", detail.get("issues"))
+        return code, message, details
+    if isinstance(detail, str) and detail.strip():
+        return str(status_code), detail, None
+    return str(status_code), f"Request failed with status {status_code}.", None
+
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """Translate :class:`HTTPException` into the standard CareerOS error envelope."""
+    code, message, details = _normalize_exception_detail(exc.status_code, exc.detail)
+    error: dict[str, object] = {"code": code, "message": message}
+    if details is not None:
+        error["details"] = details
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "success": False,
-            "error": {
-                "code": str(exc.status_code),
-                "message": exc.detail,
-            },
+            "error": error,
         },
     )
 

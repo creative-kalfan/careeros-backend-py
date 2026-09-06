@@ -338,5 +338,7 @@ class TailorResumeResponse(BaseModel):
     tailored_profile: Dict[str, Any] = {}
     score_comparison: ATSScoreComparisonSchema
     message: str = ""
+    limited_alignment: bool = False
+    alignment_message: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)

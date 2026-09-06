@@ -304,14 +304,31 @@ class ResumeRepository:
             return None
         return self._coerce_version_row(rows[0])
 
+    @staticmethod
+    def _is_not_found(exc: BaseException) -> bool:
+        """Detect PostgREST "0 rows" responses without masking real DB errors.
+
+        ``.single()`` raises (PGRST116 / 406 / "0 rows") when no row matches.
+        Callers treat a missing version as ``None`` (404); only that case is
+        swallowed here so genuine outages still propagate as 500s.
+        """
+        code = str(getattr(exc, "code", "") or "")
+        body = str(getattr(exc, "message", "") or "") or str(exc)
+        return "PGRST116" in code or "PGRST116" in body or "0 rows" in body
+
     def get_version(self, version_id: str) -> Optional[dict[str, Any]]:
-        result = (
-            self._client.table("resume_versions")
-            .select("*")
-            .eq("id", version_id)
-            .single()
-            .execute()
-        )
+        try:
+            result = (
+                self._client.table("resume_versions")
+                .select("*")
+                .eq("id", version_id)
+                .single()
+                .execute()
+            )
+        except Exception as exc:
+            if self._is_not_found(exc):
+                return None
+            raise
         row = result.data
         if not row:
             return row
@@ -400,15 +417,20 @@ class ResumeRepository:
         return bool(result.data)
 
     def get_master_version(self, resume_id: str) -> Optional[dict[str, Any]]:
-        result = (
-            self._client.table("resume_versions")
-            .select("*")
-            .eq("resume_id", resume_id)
-            .eq("is_master", True)
-            .eq("status", "active")
-            .single()
-            .execute()
-        )
+        try:
+            result = (
+                self._client.table("resume_versions")
+                .select("*")
+                .eq("resume_id", resume_id)
+                .eq("is_master", True)
+                .eq("status", "active")
+                .single()
+                .execute()
+            )
+        except Exception as exc:
+            if self._is_not_found(exc):
+                return None
+            raise
         return self._coerce_version_row(result.data)
 
     def set_master_version(self, resume_id: str, version_id: str) -> dict[str, Any]:

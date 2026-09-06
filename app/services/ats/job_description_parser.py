@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime
 import logging
 
@@ -39,8 +39,53 @@ REQUIREMENT_LEXICON: List[Dict[str, Any]] = [
      "variants": ["ticket lifecycle", "ticket life cycle", "ticket management"]},
     {"canonical": "Knowledge Base", "category": "skill", "importance": "medium",
      "variants": ["Knowledge Base", "Knowledge Bases", "knowledge management", "Knowledge Management"]},
-    {"canonical": "SOP Adherence", "category": "skill", "importance": "low",
-     "variants": ["SOP", "SOPs", "SOP adherence", "standard operating procedure"]},
+    # --- Process / Governance / Compliance ---
+    {"canonical": "SOP Adherence", "category": "skill", "importance": "medium",
+     "variants": ["SOP", "SOPs", "SOP adherence", "standard operating procedure", "standard operating procedures", "SOP guidelines"]},
+    {"canonical": "Process Compliance & Governance", "category": "skill", "importance": "medium",
+     "variants": ["process compliance", "process governance", "compliance & governance", "compliance and governance",
+                  "process compliance & governance", "governance and compliance", "regulatory compliance", "process compliance and governance"]},
+    {"canonical": "Audit Trail & Documentation", "category": "skill", "importance": "medium",
+     "variants": ["audit trail", "audit documentation", "process documentation", "documentation",
+                  "audit trail & documentation", "audit trail and documentation", "operational documentation"]},
+    {"canonical": "Process Discipline", "category": "skill", "importance": "medium",
+     "variants": ["process discipline", "operational discipline", "procedural discipline", "procedural rigor"]},
+
+    # --- Cross-Functional Collaboration ---
+    {"canonical": "Cross-Functional Collaboration", "category": "skill", "importance": "medium",
+     "variants": ["cross-functional collaboration", "cross functional collaboration", "cross-functional",
+                  "cross functional", "collaborating across teams", "cross-functional coordination"]},
+    {"canonical": "Stakeholder Coordination", "category": "skill", "importance": "medium",
+     "variants": ["stakeholder coordination", "stakeholder management", "stakeholder communication",
+                  "coordinating with stakeholders", "stakeholder engagement"]},
+
+    # --- Reporting & Quality ---
+    {"canonical": "Operational Reporting & Metrics", "category": "skill", "importance": "medium",
+     "variants": ["operational reporting", "operational metrics", "reporting & metrics", "reporting and metrics",
+                  "operational reporting & metrics", "operational reports", "kpi reporting", "performance metrics"]},
+    {"canonical": "Data Verification & Accuracy", "category": "skill", "importance": "medium",
+     "variants": ["data verification", "data accuracy", "verification & accuracy", "verification and accuracy",
+                  "data verification & accuracy", "data validation", "data integrity"]},
+    {"canonical": "Attention to Detail & Quality Validation", "category": "skill", "importance": "medium",
+     "variants": ["attention to detail", "quality validation", "quality verification", "quality check",
+                  "attention to detail & quality validation", "quality assurance"]},
+
+    # --- Business / Finance ---
+    {"canonical": "SAP ERP", "category": "skill", "importance": "high",
+     "variants": ["SAP", "SAP ERP", "SAP ECC", "SAP S/4HANA", "SAP system", "SAP financial"]},
+    {"canonical": "Microsoft Excel / Spreadsheets", "category": "skill", "importance": "high",
+     "variants": ["Excel", "Microsoft Excel", "MS Excel", "spreadsheets", "advanced Excel", "vlookup", "pivot tables"]},
+    {"canonical": "Billing & Invoicing", "category": "skill", "importance": "high",
+     "variants": ["billing", "invoicing", "billing & invoicing", "billing and invoicing",
+                  "client billing", "customer billing", "invoice processing"]},
+    {"canonical": "Contract-to-Cash / Order Management", "category": "skill", "importance": "high",
+     "variants": ["contract-to-cash", "order management", "order-to-cash", "contract to cash",
+                  "order to cash", "O2C", "C2C"]},
+    {"canonical": "Account Reconciliation", "category": "skill", "importance": "high",
+     "variants": ["account reconciliation", "reconciliation", "account reconciliations",
+                  "reconciling accounts", "balance sheet reconciliation", "bank reconciliation"]},
+    {"canonical": "Revenue Recognition (ASC 606 / IFRS 15)", "category": "skill", "importance": "high",
+     "variants": ["revenue recognition", "ASC 606", "IFRS 15", "ASC606", "IFRS15", "rev rec"]},
 
     # --- Software / Data Engineering skills (carried over from the legacy skill dictionary) ---
     {"canonical": "Python", "category": "skill", "importance": "high",
@@ -319,8 +364,10 @@ class JobDescriptionParser:
         """Extract content from different sections of a job description."""
         sections = {}
         text_lower = text.lower()
+        matched_spans: List[Tuple[int, int]] = []
 
         for header in section_headers:
+            header_clean = header.rstrip(":")
             # Try to find section headers in various formats
             patterns = [
                 rf"{re.escape(header)}:",
@@ -328,19 +375,25 @@ class JobDescriptionParser:
                 rf"^{re.escape(header)}$",
                 rf"[\n\r]+\s*{re.escape(header)}\s*[\n\r]+"
             ]
+            if header != header_clean:
+                patterns.insert(0, rf"^{re.escape(header)}")
+                patterns.insert(1, rf"[\n\r]+\s*{re.escape(header)}")
 
             for pattern in patterns:
                 matches = list(re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE))
                 if matches:
                     start_pos = matches[0].end()
+                    # Skip if this section header position was already extracted by an equivalent header
+                    if any(abs(span[0] - start_pos) <= len(header) + 2 for span in matched_spans):
+                        break
 
                     # Find next section header or end of text
                     next_header_pos = len(text)
                     for other_header in section_headers:
-                        if other_header.lower() == header.lower():
+                        if other_header.lower().rstrip(":") == header.lower().rstrip(":"):
                             continue
                         other_matches = list(re.finditer(
-                            rf"{re.escape(other_header)}:|{re.escape(other_header)}\s*[:—-]",
+                            rf"{re.escape(other_header)}:|{re.escape(other_header)}\s*[:—-]|[\n\r]+\s*{re.escape(other_header)}",
                             text, re.IGNORECASE | re.MULTILINE
                         ))
                         if other_matches:
@@ -350,6 +403,7 @@ class JobDescriptionParser:
 
                     section_content = text[start_pos:next_header_pos].strip()
                     sections[header] = section_content
+                    matched_spans.append((start_pos, next_header_pos))
                     break
 
         return sections
@@ -454,7 +508,23 @@ class JobDescriptionParser:
             "Certifications": JobRequirementType.QUALIFICATION,
             "Key Responsibilities": JobRequirementType.RESPONSIBILITY,
             "Technical Skills": JobRequirementType.SKILL,
-            "Preferred Qualifications": JobRequirementType.PREFERRED
+            "Preferred Qualifications": JobRequirementType.PREFERRED,
+            "What you'll do": JobRequirementType.RESPONSIBILITY,
+            "What you will do": JobRequirementType.RESPONSIBILITY,
+            "What You'll Do:": JobRequirementType.RESPONSIBILITY,
+            "What You'll Do": JobRequirementType.RESPONSIBILITY,
+            "What you'll bring": JobRequirementType.QUALIFICATION,
+            "What you bring": JobRequirementType.QUALIFICATION,
+            "What You'll Bring:": JobRequirementType.QUALIFICATION,
+            "What You'll Bring": JobRequirementType.QUALIFICATION,
+            "What we're looking for": JobRequirementType.QUALIFICATION,
+            "Who you are": JobRequirementType.QUALIFICATION,
+            "Role responsibilities": JobRequirementType.RESPONSIBILITY,
+            "Key duties": JobRequirementType.RESPONSIBILITY,
+            "Basic qualifications": JobRequirementType.QUALIFICATION,
+            "Minimum qualifications": JobRequirementType.QUALIFICATION,
+            "Preferred qualifications": JobRequirementType.PREFERRED,
+            "Nice to have": JobRequirementType.PREFERRED,
         }
 
         sections = self._extract_section_content(job_description, list(headers_config.keys()))

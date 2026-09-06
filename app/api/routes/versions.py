@@ -902,7 +902,10 @@ async def apply_tailoring_version(
         logger.error("Failed to apply tailoring: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to apply tailoring.",
+            detail={
+                "code": "TAILORING_APPLY_FAILED",
+                "message": "Failed to apply tailoring. Please retry.",
+            },
         ) from exc
 
 
@@ -922,7 +925,45 @@ async def _apply_tailoring_version_impl(
 
     parent_version = None
     if body.parent_version_id:
-        parent_version = repo.get_version(body.parent_version_id)
+        try:
+            parent_version = repo.get_version(body.parent_version_id)
+        except Exception as exc:
+            # get_version() uses .single(): a missing/deleted/RLS-invisible
+            # version raises instead of returning None. Surface a structured
+            # 404 the frontend can render (with a retry path) instead of a
+            # bare 500. See repro S3.
+            logger.warning(
+                "Parent version lookup failed for %s: %s", body.parent_version_id, exc
+            )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "PARENT_VERSION_NOT_FOUND",
+                    "message": (
+                        "The selected resume version could not be found. "
+                        "It may have been deleted. Pick another version and retry."
+                    ),
+                },
+            ) from exc
+        if not parent_version:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "PARENT_VERSION_NOT_FOUND",
+                    "message": (
+                        "The selected resume version could not be found. "
+                        "It may have been deleted. Pick another version and retry."
+                    ),
+                },
+            )
+        if parent_version.get("resume_id") != resume_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "VERSION_RESUME_MISMATCH",
+                    "message": "The selected version does not belong to this resume.",
+                },
+            )
 
     # Reconstruct tailored ResumeContent
     profile_dict = body.tailored_profile
@@ -944,9 +985,21 @@ async def _apply_tailoring_version_impl(
     _, semantic_issues = semantic_guard.audit_tailored_profile(source_profile, audited_dict)
     if semantic_issues:
         logger.warning("SemanticFabricationGuard blocked tailoring: %s", semantic_issues)
+        # NOTE: detail must carry a string "message" (the envelope contract
+        # requires message: str). The handler in app.main normalizes this
+        # dict into {code, message, details} so the frontend can render the
+        # issue list instead of a generic "Unprocessable Entity".
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "SEMANTIC_FABRICATION", "issues": semantic_issues},
+            detail={
+                "code": "SEMANTIC_FABRICATION",
+                "message": (
+                    "Tailoring was blocked: the tailored profile adds skills, "
+                    "titles, or scope not found in the original resume. "
+                    "Remove the ungrounded claims and retry."
+                ),
+                "issues": semantic_issues,
+            },
         )
 
     tailored_profile = ResumeProfile.from_dict(audited_dict)
@@ -987,7 +1040,10 @@ async def _apply_tailoring_version_impl(
     if not created_row or not created_row.get("id"):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create tailored version record.",
+            detail={
+                "code": "VERSION_CREATE_FAILED",
+                "message": "Could not save the tailored version. Please retry.",
+            },
         )
     version_id = created_row["id"]
 
@@ -1002,18 +1058,35 @@ async def _apply_tailoring_version_impl(
         )
     except Exception as exc:
         logger.error("Compilation failed for tailored version %s: %s", version_id, exc, exc_info=True)
-        repo.delete_version(version_id)
+        try:
+            repo.delete_version(version_id)
+        except Exception as cleanup_exc:
+            # Cleanup must never mask the original compilation failure.
+            logger.warning(
+                "Cleanup of failed tailored version %s failed: %s", version_id, cleanup_exc
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Document compilation failed for tailored version.",
+            detail={
+                "code": "COMPILATION_FAILED",
+                "message": "Document compilation failed for the tailored version. Please retry.",
+            },
         ) from exc
 
     storage_path = comp_res.get("storage_path")
     if not storage_path:
-        repo.delete_version(version_id)
+        try:
+            repo.delete_version(version_id)
+        except Exception as cleanup_exc:
+            logger.warning(
+                "Cleanup of failed tailored version %s failed: %s", version_id, cleanup_exc
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Document compilation failed for tailored version (storage path missing).",
+            detail={
+                "code": "COMPILATION_FAILED",
+                "message": "Document compilation failed for the tailored version (artifact missing). Please retry.",
+            },
         )
 
     # Calculate closed-loop ATS score if job description is present
@@ -1047,7 +1120,16 @@ async def _apply_tailoring_version_impl(
 
     updated_version = repo.update_version(version_id, update_payload)
     if not updated_version:
-        raise HTTPException(status_code=404, detail="Version update failed")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "VERSION_UPDATE_FAILED",
+                "message": (
+                    "The tailored version was created but could not be finalized. "
+                    "Please reload and retry."
+                ),
+            },
+        )
 
     return SuccessResponse(data=_to_version_response(updated_version))
 

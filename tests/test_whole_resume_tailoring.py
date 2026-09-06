@@ -293,3 +293,137 @@ def test_numeric_fabrication_guard_catches_unsupported_metrics() -> None:
     assert len(issues) >= 2
     assert any("99.9%" in i or "5m" in i for i in issues)
     assert any("50+" in i for i in issues)
+
+
+def test_tailoring_noc_analyst_to_finance_associate_transferable() -> None:
+    from app.services.optimization.semantic_guard import semantic_guard
+
+    content = ResumeContent(
+        profile=ResumeProfile(
+            personal=PersonalInfo(
+                full_name="Alex Chen",
+                email="alex.chen@example.com",
+                phone="+15551234567",
+                location="Chicago, IL",
+            ),
+            summary="Network Operations Center (NOC) Analyst with 4 years managing enterprise systems, following SOP guidelines, and generating operational reports.",
+            skills=SkillCategory(
+                technical=["Network Monitoring", "Linux", "SOP Adherence", "Incident Management", "Process Documentation"],
+                tools=["Wireshark", "JIRA", "Pingdom"],
+                soft_skills=["Cross-Functional Collaboration", "Operational Reporting", "Problem Solving"],
+            ),
+            experience=[
+                ExperienceItem(
+                    company="CloudTech Global",
+                    role="NOC Analyst",
+                    start_date="2020-06",
+                    end_date="2024-06",
+                    responsibilities=[
+                        BulletItem(text="Maintained rigorous SOP adherence and operational documentation for all incident workflows."),
+                        BulletItem(text="Generated weekly operational reporting and metrics for leadership reviews."),
+                        BulletItem(text="Fostered cross-functional collaboration between engineering and support teams to resolve issues."),
+                    ],
+                    tools=["JIRA", "Linux"],
+                )
+            ],
+            education=[],
+        )
+    )
+
+    zs_jd = (
+        "ZS Associates - Finance Associate\n\n"
+        "What You'll Do:\n"
+        "• Execute billing and client invoicing operations in SAP ERP.\n"
+        "• Perform monthly account reconciliation and contract-to-cash workflows.\n"
+        "• Maintain strict SOP adherence and comprehensive audit trail & documentation for all financial transactions.\n"
+        "• Prepare weekly operational reporting & metrics on billing status and revenue recognition.\n"
+        "• Drive cross-functional collaboration with client teams and corporate accounting.\n\n"
+        "What You'll Bring:\n"
+        "• Bachelor's degree in Finance, Accounting, or related field.\n"
+        "• Proficiency in SAP ERP and Microsoft Excel.\n"
+        "• Commitment to process compliance & governance and operational discipline.\n"
+    )
+
+    result = whole_resume_tailoring_service.tailor_resume(
+        resume_content=content,
+        job_description=zs_jd,
+        job_title="Finance Associate",
+        company="ZS Associates",
+    )
+
+    assert isinstance(result, TailorResumeResponse)
+    assert result.success is True
+    assert result.limited_alignment is False
+
+    # Verify diff: summary reframed
+    orig_summary = content.profile.summary
+    tailored_summary = result.tailored_profile.get("summary")
+    assert tailored_summary is not None
+    assert tailored_summary != orig_summary
+    assert (
+        "SOP adherence" in tailored_summary
+        or "operational documentation" in tailored_summary
+        or "cross-functional collaboration" in tailored_summary
+    )
+    assert "Finance Associate" in tailored_summary
+
+    # Verify diff: skills reordered with transferable overlapping skills prioritized
+    orig_tech = content.profile.skills.technical
+    tailored_tech = result.tailored_profile.get("skills", {}).get("technical", [])
+    assert tailored_tech != orig_tech
+    assert tailored_tech[0] in ["SOP Adherence", "Process Documentation"]
+
+    # Verify SemanticFabricationGuard passes with 0 issues
+    audited, issues = semantic_guard.audit_tailored_profile(
+        source_profile=content.profile,
+        tailored_profile_dict=result.tailored_profile,
+    )
+    assert len(issues) == 0, f"SemanticFabricationGuard found issues: {issues}"
+
+
+def test_tailoring_genuine_zero_overlap_returns_limited_alignment() -> None:
+    content = ResumeContent(
+        profile=ResumeProfile(
+            personal=PersonalInfo(
+                full_name="Pastry Chef Gordon",
+                email="gordon@example.com",
+            ),
+            summary="Artisanal Pastry Chef with 10 years experience in French patisserie and sourdough fermentation.",
+            skills=SkillCategory(
+                technical=["Baking", "Pastry Arts", "Sourdough Fermentation", "Recipe Formulation"],
+                tools=["Convection Oven", "Proofer"],
+            ),
+            experience=[
+                ExperienceItem(
+                    company="Le Petit Bistro",
+                    role="Head Pastry Chef",
+                    start_date="2018-01",
+                    responsibilities=[
+                        BulletItem(text="Baked 500+ artisanal loaves and pastries daily for breakfast service."),
+                        BulletItem(text="Managed kitchen pantry inventory and ingredient sourcing."),
+                    ],
+                )
+            ],
+            education=[],
+        )
+    )
+
+    tech_jd = (
+        "Lead Python Developer - Cloud Infrastructure\n\n"
+        "Requirements:\n"
+        "• 5+ years building microservices with Python and FastAPI.\n"
+        "• Deep hands-on experience with PostgreSQL, Docker, and Kubernetes.\n"
+        "• Strong background in distributed systems and cloud architecture.\n"
+    )
+
+    result = whole_resume_tailoring_service.tailor_resume(
+        resume_content=content,
+        job_description=tech_jd,
+        job_title="Lead Python Developer",
+        company="CloudScale Inc",
+    )
+
+    assert isinstance(result, TailorResumeResponse)
+    assert result.success is True
+    assert result.limited_alignment is True
+    assert result.alignment_message == "Limited alignment found; consider whether this resume is a strong fit for this role."

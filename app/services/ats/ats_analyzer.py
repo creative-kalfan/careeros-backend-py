@@ -738,13 +738,19 @@ class ATSAnalyzer:
             return None, None
 
         try:
-            import asyncio
-            result = asyncio.run(
+            from app.llm.sync_bridge import run_coro_sync
+
+            # run_coro_sync (not asyncio.run): analyze_resume() is synchronous
+            # but is called from async route handlers inside a running event
+            # loop, where asyncio.run() raises RuntimeError. Honors the
+            # reasoner's timeout budget instead of hanging the request.
+            result = run_coro_sync(
                 self._semantic_reasoner.analyze_requirements(
                     concepts=concepts,
                     resume_content=resume_content,
                     deterministic_coverage=concept_result.get("coverage"),
-                )
+                ),
+                timeout_seconds=self._semantic_reasoner._timeout_seconds,
             )
             if result.success:
                 return result, None  # metadata built later after reconciliation
