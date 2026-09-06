@@ -575,34 +575,68 @@ class WholeResumeTailoringService:
                         )
                     )
 
-            # Rewrite summary to reframe existing true experience using JD-aligned vocabulary
+            # Rewrite summary to reframe existing true experience into one coherent sentence
+            transferable_strength_map = {
+                "SOP Adherence": "SOP-driven process execution",
+                "Audit Trail & Documentation": "operational documentation and audit-trail accuracy",
+                "Process Documentation": "operational documentation",
+                "Process Compliance & Governance": "process compliance and governance",
+                "Process Discipline": "procedural rigor and compliance",
+                "Cross-Functional Collaboration": "cross-functional coordination",
+                "Stakeholder Coordination": "stakeholder coordination",
+                "Operational Reporting & Metrics": "operational reporting and metrics",
+                "Status Reporting": "status reporting",
+                "Data Verification & Accuracy": "data verification and accuracy",
+                "Attention to Detail & Quality Validation": "quality validation and detail-oriented execution",
+                "Incident & Escalation Management": "incident triage and escalation workflows",
+            }
             vocab_phrases: List[str] = []
             for c in transferable_overlap:
-                mapped = TRANSFERABLE_CONCEPT_MAP.get(c)
+                mapped = transferable_strength_map.get(c)
                 if mapped and mapped not in vocab_phrases:
                     vocab_phrases.append(mapped)
 
             if not vocab_phrases:
-                vocab_phrases = ["SOP adherence", "operational documentation", "cross-functional collaboration"]
+                vocab_phrases = ["SOP-driven process execution", "operational documentation", "cross-functional coordination"]
 
             if len(vocab_phrases) == 1:
-                phrase_str = vocab_phrases[0]
+                strengths_text = vocab_phrases[0]
             elif len(vocab_phrases) == 2:
-                phrase_str = f"{vocab_phrases[0]} and {vocab_phrases[1]}"
+                strengths_text = f"{vocab_phrases[0]} and {vocab_phrases[1]}"
             else:
-                phrase_str = f"{vocab_phrases[0]}, {vocab_phrases[1]}, and {vocab_phrases[2]}"
+                strengths_text = f"{vocab_phrases[0]}, {vocab_phrases[1]}, and {vocab_phrases[2]}"
 
-            orig_summary = profile.summary or ""
-            if orig_summary.strip():
-                tailored_summary = (
-                    f"{orig_summary.rstrip('.')}, bringing demonstrated experience in {phrase_str} "
-                    f"and operational discipline to the {target_role} role{' at ' + target_co if target_co else ''}."
-                )
+            orig_summary = (profile.summary or "").strip()
+
+            # Extract years of experience if present in original summary
+            years_match = re.search(
+                r"\b(\d+\+?\s+years?(?:\s+of)?(?:\s+experience)?)\b", orig_summary, re.IGNORECASE
+            )
+            duration_str = "with demonstrated experience "
+            if years_match:
+                raw_y = years_match.group(1).lower()
+                num_match = re.search(r"\d+\+?\s+years?", raw_y)
+                if num_match:
+                    duration_str = f"with {num_match.group(0)} of experience "
+
+            # Extract candidate operational domain from original summary text
+            s_low = orig_summary.lower()
+            if "noc" in s_low or "monitoring" in s_low or "network" in s_low:
+                bg_domain = "enterprise systems monitoring and operations"
+            elif "support" in s_low or "service desk" in s_low:
+                bg_domain = "technical support and operations"
+            elif "data" in s_low or "analyst" in s_low:
+                bg_domain = "operational analysis and reporting"
+            elif "cloud" in s_low or "infrastructure" in s_low:
+                bg_domain = "cloud systems and infrastructure operations"
             else:
-                tailored_summary = (
-                    f"Experienced professional with a proven track record in {phrase_str} and operational discipline, "
-                    f"targeting the {target_role} role{' at ' + target_co if target_co else ''}."
-                )
+                bg_domain = "technical operations"
+
+            target_str = f"the {target_role} role" + (f" at {target_co}" if target_co else "")
+            tailored_summary = (
+                f"Operations professional {duration_str}in {strengths_text}, "
+                f"adapting a disciplined background in {bg_domain} to support {target_str}."
+            )
 
             # Verify strict compliance with SemanticFabricationGuard
             tailored_profile.summary = tailored_summary
@@ -619,7 +653,7 @@ class WholeResumeTailoringService:
                         action="REWRITE",
                         current_text=orig_summary,
                         suggested_text=tailored_profile.summary,
-                        reasoning=f"Reframed summary highlighting transferable competencies ({phrase_str}) aligned with target role.",
+                        reasoning=f"Reframed summary highlighting transferable competencies ({strengths_text}) aligned with target role.",
                         keywords_addressed=vocab_phrases[:3],
                     )
                 )
