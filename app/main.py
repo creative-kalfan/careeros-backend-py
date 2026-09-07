@@ -287,4 +287,4 @@ async def health() -> dict[str, str]:
 @app.get("/version")
 async def version() -> dict[str, str]:
     """Version probe to verify deployment."""
-    return {"version": "jobs-perf-fix-v1"}
+    return {"version": "studio-qa-v2", "commit": "71faf79"}
