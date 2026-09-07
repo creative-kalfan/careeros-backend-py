@@ -196,6 +196,39 @@ class DocxCompiler:
                         r_b.font.size = Pt(style.body_size_pt)
                         r_b.font.color.rgb = body_rgb
 
+                    # Nested Sub-Engagements (e.g. Syntheseed.com, LearnSquare)
+                    if getattr(exp, "sub_engagements", None):
+                        for sub in exp.sub_engagements:
+                            p_sub = doc.add_paragraph()
+                            p_sub.paragraph_format.space_before = Pt(2.0)
+                            p_sub.paragraph_format.space_after = Pt(1.0)
+                            p_sub.paragraph_format.left_indent = Inches(0.15)
+                            r_sname = p_sub.add_run(sub.name)
+                            r_sname.font.name = style.body_font
+                            r_sname.font.size = Pt(style.subheading_size_pt * 0.95)
+                            r_sname.font.bold = True
+                            r_sname.font.color.rgb = heading_rgb
+
+                            if sub.description:
+                                p_sdesc = doc.add_paragraph(style='List Bullet')
+                                p_sdesc.paragraph_format.left_indent = Inches(0.25)
+                                p_sdesc.paragraph_format.space_after = Pt(1.5)
+                                r_sd = p_sdesc.add_run(sub.description)
+                                r_sd.font.name = style.body_font
+                                r_sd.font.size = Pt(style.body_size_pt)
+                                r_sd.font.color.rgb = body_rgb
+
+                            for sb in sub.bullets:
+                                if not sb.text.strip():
+                                    continue
+                                p_sb = doc.add_paragraph(style='List Bullet')
+                                p_sb.paragraph_format.left_indent = Inches(0.25)
+                                p_sb.paragraph_format.space_after = Pt(1.5)
+                                r_sb = p_sb.add_run(sb.text.strip())
+                                r_sb.font.name = style.body_font
+                                r_sb.font.size = Pt(style.body_size_pt)
+                                r_sb.font.color.rgb = body_rgb
+
             elif sec == "internships" and doc_model.internships:
                 add_section_heading("Internships")
                 for exp in doc_model.internships:

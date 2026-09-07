@@ -30,6 +30,31 @@ class BulletItem(BaseModel):
     text: str = ""
 
 
+class SubEngagementItem(BaseModel):
+    """A nested project or client engagement under a primary experience role."""
+
+    id: str = Field(default_factory=_gen_id)
+    name: str = ""
+    role: Optional[str] = None
+    description: Optional[str] = None
+    responsibilities: list[BulletItem] = []
+
+    @field_validator("responsibilities", mode="before")
+    @classmethod
+    def _coerce_responsibilities(cls, v: Any) -> list[BulletItem]:
+        if not isinstance(v, list):
+            return v
+        result: list[BulletItem] = []
+        for item in v:
+            if isinstance(item, str):
+                result.append(BulletItem(text=item))
+            elif isinstance(item, dict):
+                result.append(BulletItem(**item))
+            elif isinstance(item, BulletItem):
+                result.append(item)
+        return result
+
+
 class ExperienceItem(BaseModel):
     id: str = Field(default_factory=_gen_id)
     company: Optional[str] = None
@@ -40,6 +65,7 @@ class ExperienceItem(BaseModel):
     current: bool = False
     employment_type: Optional[str] = None
     responsibilities: list[BulletItem] = []
+    sub_engagements: list[SubEngagementItem] = []
     achievements: list[str] = []
     tools: list[str] = []
     metrics: Optional[str] = None
@@ -206,6 +232,7 @@ class ResumeContent(BaseModel):
 
     profile: ResumeProfile = Field(default_factory=ResumeProfile)
     meta: ResumeMeta = Field(default_factory=ResumeMeta)
+    raw_text: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return self.model_dump()

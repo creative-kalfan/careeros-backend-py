@@ -103,6 +103,7 @@ class ExperiencePosition:
     location: str = ""
     date_range: str = ""
     bullets: list[BulletElement] = field(default_factory=list)
+    sub_engagements: list[ProjectEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -366,6 +367,21 @@ def build_document_model(
             for b in exp.responsibilities
             if b.text.strip()
         ]
+        sub_entries: list[ProjectEntry] = []
+        for sub in getattr(exp, "sub_engagements", []):
+            sub_b = [
+                BulletElement(id=b.id, text=b.text)
+                for b in getattr(sub, "responsibilities", [])
+                if b.text.strip()
+            ]
+            sub_entries.append(
+                ProjectEntry(
+                    id=sub.id,
+                    name=sub.name,
+                    description=getattr(sub, "description", "") or "",
+                    bullets=sub_b,
+                )
+            )
         dates = " — ".join(filter(None, [exp.start_date, "Present" if exp.current else exp.end_date]))
         experience_positions.append(
             ExperiencePosition(
@@ -375,6 +391,7 @@ def build_document_model(
                 location=exp.location or "",
                 date_range=dates,
                 bullets=bullets,
+                sub_engagements=sub_entries,
             )
         )
 

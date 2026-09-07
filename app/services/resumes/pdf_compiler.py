@@ -74,13 +74,28 @@ def _render_document_model_to_html(doc_model: ResumeDocumentModel) -> str:
             for exp in doc_model.experience:
                 date_loc = " | ".join(filter(None, [exp.date_range, exp.location]))
                 bullets = "".join(f'<li>{b.text.strip()}</li>' for b in exp.bullets if b.text.strip())
+                sub_html = ""
+                if getattr(exp, "sub_engagements", None):
+                    sub_items = []
+                    for sub in exp.sub_engagements:
+                        sub_bullets = "".join(f'<li>{b.text.strip()}</li>' for b in sub.bullets if b.text.strip())
+                        sub_items.append(
+                            f'<div class="sub-engagement" style="margin-left: 12pt; margin-top: 4pt;">'
+                            f'<div style="font-weight: 600; font-size: {style.body_size_pt}pt; color: #{style.heading_color_hex};">{sub.name}</div>'
+                            + (f'<div style="font-size: {style.meta_size_pt}pt; color: #{style.meta_color_hex}; margin-left: 4pt;">{sub.description}</div>' if sub.description else '')
+                            + (f'<ul class="bullet-list" style="margin-left: 8pt;">{sub_bullets}</ul>' if sub_bullets else '') +
+                            f'</div>'
+                        )
+                    sub_html = "".join(sub_items)
+
                 items.append(
                     f'<div class="entry">'
                     f'<table class="entry-header-table"><tr>'
                     f'<td class="entry-left"><strong>{exp.role}</strong>' + (f' | {exp.company}' if exp.company else '') + f'</td>'
                     f'<td class="entry-right">{date_loc}</td>'
                     f'</tr></table>'
-                    + (f'<ul class="bullet-list">{bullets}</ul>' if bullets else '') +
+                    + (f'<ul class="bullet-list">{bullets}</ul>' if bullets else '')
+                    + sub_html +
                     f'</div>'
                 )
             sections_html.append(f'<div class="section"><div class="section-title">EXPERIENCE</div>{"".join(items)}</div>')

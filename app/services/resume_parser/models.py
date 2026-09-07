@@ -90,6 +90,7 @@ class ParsedExperience:
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     bullets: list[str] = field(default_factory=list)
+    sub_engagements: list[ParsedProject] = field(default_factory=list)
     confidence: Literal["high", "medium", "low"] = "medium"
 
 
@@ -132,6 +133,7 @@ class ParsedResume:
     languages: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
     additional: list[str] = field(default_factory=list)
+    raw_text: str = ""
     parse_notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:

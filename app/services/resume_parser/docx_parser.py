@@ -105,8 +105,23 @@ class DOCXParser:
 
             page_layouts = [page_layout]
 
-            # Parse structured content
-            parsed = self._parse_structured(all_blocks, page_layouts, raw_text)
+            # Parse structured content: LLM-based structuring is primary
+            parsed = None
+            try:
+                from .llm_structuring_service import llm_structuring_service
+                parsed = llm_structuring_service.structure_resume_text(raw_text)
+                logger.info("LLM structuring completed successfully for DOCX (%d chars raw text)", len(raw_text))
+            except Exception as llm_exc:
+                logger.error(
+                    "CRITICAL FALLBACK: LLM DOCX resume structuring failed; falling back to legacy regex parser. Details: %s",
+                    llm_exc,
+                    exc_info=True,
+                )
+                self.parse_notes.append(f"CRITICAL FALLBACK: LLM structuring failed ({llm_exc}); used regex fallback")
+                parsed = self._parse_structured(all_blocks, page_layouts, raw_text)
+
+            if parsed and not getattr(parsed, "raw_text", None):
+                parsed.raw_text = raw_text
 
             return ParseResult(
                 status="completed",

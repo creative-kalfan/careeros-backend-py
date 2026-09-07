@@ -85,6 +85,19 @@ def map_experience(parsed_exp: List[ParsedExperience]) -> List[ExperienceItem]:
         for b in exp.bullets:
             responsibilities.append(BulletItem(id=_bullet_id(b), text=b))
 
+        sub_engagements: list[SubEngagementItem] = []
+        from app.models.resume import SubEngagementItem
+        for sub in getattr(exp, "sub_engagements", []):
+            sub_resps = [BulletItem(id=_bullet_id(b), text=b) for b in (sub.bullets or [])]
+            sub_engagements.append(
+                SubEngagementItem(
+                    id=_bullet_id(f"{sub.name}-{exp.company or ''}"),
+                    name=sub.name,
+                    description=sub.description,
+                    responsibilities=sub_resps,
+                )
+            )
+
         item = ExperienceItem(
             id=_bullet_id(f"{exp.company or ''}-{exp.title or ''}-{exp.start_date or ''}-{exp.end_date or ''}"),
             company=exp.company or None,
@@ -95,6 +108,7 @@ def map_experience(parsed_exp: List[ParsedExperience]) -> List[ExperienceItem]:
             current=exp.end_date is not None and exp.end_date.lower() in ("present", "current"),
             employment_type=None,
             responsibilities=responsibilities,
+            sub_engagements=sub_engagements,
             achievements=[],  # Separated in our parser
             tools=[],
             metrics=None,
@@ -268,6 +282,14 @@ def parsed_resume_to_resume_content(parsed: ParsedResume) -> ResumeContent:
     This is the main adapter function that maps the new parser output
     to the existing application schema.
     """
+    effective_projects = map_projects(parsed.projects)
+    if not effective_projects:
+        sub_projects = [
+            sub for exp in parsed.experience for sub in getattr(exp, "sub_engagements", [])
+        ]
+        if sub_projects:
+            effective_projects = map_projects(sub_projects)
+
     profile = ResumeProfile(
         personal=map_contact(parsed.contact),
         target_role=None,
@@ -276,7 +298,7 @@ def parsed_resume_to_resume_content(parsed: ParsedResume) -> ResumeContent:
         internships=[],  # Not separated in new parser
         education=map_education(parsed.education),
         skills=map_skills(parsed.skills, getattr(parsed, "skill_categories", None)),
-        projects=map_projects(parsed.projects),
+        projects=effective_projects,
         certifications=map_certifications(parsed.certifications),
         achievements=map_achievements(parsed.achievements),
         leadership=map_leadership(parsed),
@@ -345,7 +367,7 @@ def parsed_resume_to_resume_content(parsed: ParsedResume) -> ResumeContent:
         setup_step=0,
     )
 
-    return ResumeContent(profile=profile, meta=meta)
+    return ResumeContent(profile=profile, meta=meta, raw_text=getattr(parsed, "raw_text", None))
 
 
 def resume_content_to_parsed_resume(content: ResumeContent) -> ParsedResume:

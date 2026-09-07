@@ -48,9 +48,14 @@ class SemanticFabricationGuard:
 
     @classmethod
     def audit_tailored_profile(
-        cls, source_profile: ResumeProfile, tailored_profile_dict: dict[str, Any]
+        cls,
+        source_profile: ResumeProfile,
+        tailored_profile_dict: dict[str, Any],
+        raw_source_text: Optional[str] = None,
     ) -> tuple[dict[str, Any], list[str]]:
         source_text = _profile_text(source_profile)
+        if raw_source_text:
+            source_text = f"{source_text} {raw_source_text}"
         source_tokens = _tokens(source_text)
         issues: list[str] = []
 
@@ -61,9 +66,16 @@ class SemanticFabricationGuard:
 
         skills = tailored_profile_dict.get("skills") or {}
         if isinstance(skills, dict):
-            for category, values in skills.items():
-                if not isinstance(values, list):
-                    continue
+            cats_to_check: dict[str, list[Any]] = {}
+            for k, v in skills.items():
+                if k == "custom" and isinstance(v, dict):
+                    for ck, cv in v.items():
+                        if isinstance(cv, list):
+                            cats_to_check[ck] = cv
+                elif isinstance(v, list):
+                    cats_to_check[k] = v
+
+            for category, values in cats_to_check.items():
                 for value in values:
                     phrase = str(value).strip()
                     phrase_tokens = _tokens(phrase)
@@ -80,6 +92,13 @@ class SemanticFabricationGuard:
             for bullet_index, bullet in enumerate(exp.get("responsibilities") or []):
                 text = bullet.get("text", "") if isinstance(bullet, dict) else str(bullet)
                 cls._audit_text(text, source_text, source_tokens, f"experience[{index}].bullet[{bullet_index}]", flag)
+
+            for sub_index, sub in enumerate(exp.get("sub_engagements") or []):
+                if not isinstance(sub, dict):
+                    continue
+                for s_b_index, s_bullet in enumerate(sub.get("responsibilities") or []):
+                    text = s_bullet.get("text", "") if isinstance(s_bullet, dict) else str(s_bullet)
+                    cls._audit_text(text, source_text, source_tokens, f"experience[{index}].sub[{sub_index}].bullet[{s_b_index}]", flag)
 
         summary = tailored_profile_dict.get("summary")
         if isinstance(summary, str):

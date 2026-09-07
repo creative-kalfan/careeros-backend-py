@@ -92,6 +92,15 @@ class WholeResumeTailoringService:
         if guard_issues:
             logger.info("NumericFabricationGuard audited profile with issues: %s", guard_issues)
 
+        # 4b. Semantic Fabrication Guard Audit
+        audited_profile_dict, semantic_issues = semantic_guard.audit_tailored_profile(
+            source_profile=resume_content.profile,
+            tailored_profile_dict=audited_profile_dict,
+            raw_source_text=getattr(resume_content, "raw_text", None),
+        )
+        if semantic_issues:
+            logger.warning("SemanticFabricationGuard flagged issues in tailoring output: %s", semantic_issues)
+
         # A tailoring pass may only change text explicitly designed for tailoring.
         # Rebuild against the source profile so an invalid model response can never
         # erase identity, jobs, education, projects, or other profile sections.
@@ -175,7 +184,10 @@ class WholeResumeTailoringService:
         candidate_bullets: List[str] = []
         for exp in (profile.experience or []):
             candidate_bullets.extend(exp.get_responsibility_texts())
-        resume_text = " ".join([candidate_summary] + candidate_skills + candidate_bullets).lower()
+            for sub in getattr(exp, "sub_engagements", []):
+                candidate_bullets.extend([b.text for b in getattr(sub, "responsibilities", [])])
+        raw_source_text = getattr(resume_content, "raw_text", "") or ""
+        resume_text = " ".join([candidate_summary, raw_source_text] + candidate_skills + candidate_bullets).lower()
 
         jd_raw = parsed_jd.raw_text if hasattr(parsed_jd, "raw_text") else str(parsed_jd)
         jd_concepts = self.job_parser.extract_job_concepts(jd_raw)
@@ -198,6 +210,9 @@ class WholeResumeTailoringService:
                     break
 
         if not has_overlap:
+            logger.warning(
+                "LLM whole resume tailoring skipped due to zero overlap between candidate profile/raw text and JD. Using deterministic AST pass."
+            )
             return self._deterministic_ast_tailoring(
                 profile=profile,
                 parsed_jd=parsed_jd,
@@ -213,12 +228,17 @@ class WholeResumeTailoringService:
                 job_title=job_title,
                 company=company,
                 required_skills=required_skills,
+                raw_source_text=raw_source_text,
             )
             if llm_result:
                 tailored_dict, plan_items = llm_result
                 return tailored_dict, plan_items, False, None
         except Exception as exc:
-            logger.warning("LLM whole resume tailoring failed, using deterministic AST pass: %s", exc)
+            logger.error(
+                "CRITICAL FALLBACK: LLM whole resume tailoring failed (%s); falling back to deterministic AST pass.",
+                exc,
+                exc_info=True,
+            )
 
         return self._deterministic_ast_tailoring(
             profile=profile,
@@ -235,6 +255,7 @@ class WholeResumeTailoringService:
         job_title: Optional[str],
         company: Optional[str],
         required_skills: List[str],
+        raw_source_text: str = "",
     ) -> Optional[tuple[Dict[str, Any], List[TailoringPlanItemSchema]]]:
         """Use LLM Gateway to generate cohesive tailored summary, skills, and experience bullets."""
         target_role = job_title or (parsed_jd.title if hasattr(parsed_jd, "title") else "") or "Target Role"
@@ -256,8 +277,9 @@ class WholeResumeTailoringService:
         prompt_data = {
             "target_role": target_role,
             "target_company": target_co,
-            "job_description_snippet": parsed_jd.raw_text[:2000] if hasattr(parsed_jd, "raw_text") else "",
+            "job_description_snippet": parsed_jd.raw_text[:2500] if hasattr(parsed_jd, "raw_text") else "",
             "required_skills": required_skills[:15],
+            "raw_source_resume_text": raw_source_text,
             "candidate_profile": {
                 "personal": profile.personal.model_dump(),
                 "summary": profile.summary,
@@ -268,6 +290,14 @@ class WholeResumeTailoringService:
                         "role": exp.role,
                         "company": exp.company,
                         "responsibilities": exp.get_responsibility_texts(),
+                        "sub_engagements": [
+                            {
+                                "id": sub.id,
+                                "name": sub.name,
+                                "responsibilities": [b.text for b in getattr(sub, "responsibilities", [])],
+                            }
+                            for sub in getattr(exp, "sub_engagements", [])
+                        ],
                     }
                     for exp in profile.experience
                 ],
@@ -283,15 +313,17 @@ class WholeResumeTailoringService:
             "You are an expert resume strategist and ATS optimization engine.\n"
             "Generate a tailored version of the candidate's resume for the target role.\n"
             "STRICT GROUNDING & STRUCTURAL FIDELITY RULES:\n"
-            "1. NEVER fabricate employers, degrees, specializations, dates, metrics, or technologies not present or implied in candidate profile.\n"
-            "2. NEVER drop or alter factual fields such as degree field/major (e.g. Civil Engineering) or GPA/CGPA.\n"
-            "3. Faithfully preserve candidate skill categorization structure (including custom categories like 'Manual Testing', 'Test Execution', etc.). Reorder skills within their existing categories to elevate target keywords, but do not drop, combine, or collapse categories.\n"
-            "4. Align and elevate candidate verified strengths to match target job keywords.\n"
-            "5. Rewrite the professional summary to be concise, impactful, and targeted.\n"
-            "6. Refine experience bullet points using active action verbs and high-impact phrasing while strictly preserving true facts.\n"
-            "7. Preserve candidate identity and every source section. You may return edits only for summary, skills, and existing experience bullets.\n"
-            "8. Never use placeholders such as 'Candidate', never repeat a sentence or keyword list, and never keyword-stuff. Each rewritten bullet must correspond to one supplied entry_id and bullet_index.\n"
-            "9. Output ONLY a valid JSON object matching the requested schema."
+            "1. Ground all claims strictly against the supplied `raw_source_resume_text` and candidate profile.\n"
+            "2. NEVER fabricate employers, degrees, specializations, dates, metrics, or technologies not present in candidate facts.\n"
+            "3. NEVER drop or alter factual fields such as degree field/major (e.g. Civil Engineering) or GPA/CGPA.\n"
+            "4. Faithfully preserve candidate skill categorization structure (including custom categories like 'Manual Testing', 'Test Execution', etc.). Reorder skills within their existing categories to elevate target keywords, but do not drop, combine, or collapse categories.\n"
+            "5. Faithfully preserve nested experience sub-engagements under their parent experience role.\n"
+            "6. Align and elevate candidate verified strengths to match target job keywords.\n"
+            "7. Rewrite the professional summary to be concise, impactful, and targeted to the role.\n"
+            "8. Refine experience bullet points and sub-engagement bullets using active action verbs and high-impact phrasing while strictly preserving true facts.\n"
+            "9. Preserve candidate identity and every source section. You may return edits only for summary, skills, and existing experience bullets.\n"
+            "10. Never use placeholders such as 'Candidate' or 'Your Name', never repeat a sentence or keyword list, and never keyword-stuff. Each rewritten bullet must correspond to one supplied entry_id and bullet_index.\n"
+            "11. Output ONLY a valid JSON object matching the requested schema."
         )
 
         prompt = (
@@ -302,6 +334,9 @@ class WholeResumeTailoringService:
             f'  "skills": {json.dumps(skills_example)},\n'
             '  "experience_bullets": [\n'
             '    {"entry_id": "...", "bullet_index": 0, "rewritten_text": "...", "reasoning": "...", "keywords": ["..."]}\n'
+            "  ],\n"
+            '  "sub_engagement_bullets": [\n'
+            '    {"entry_id": "...", "sub_engagement_name": "...", "bullet_index": 0, "rewritten_text": "...", "reasoning": "..."}\n'
             "  ],\n"
             '  "plan": [\n'
             '    {"section": "summary", "action": "REWRITE", "reasoning": "...", "keywords_addressed": ["..."]},\n'
@@ -411,6 +446,29 @@ class WholeResumeTailoringService:
                                 resps[idx] = new_txt
                     exp["responsibilities"] = resps
 
+        if isinstance(data.get("sub_engagement_bullets"), list):
+            exp_list = tailored_dict.get("experience") or []
+            for se_rw in data["sub_engagement_bullets"]:
+                e_id = se_rw.get("entry_id")
+                sub_name = str(se_rw.get("sub_engagement_name") or "").strip().lower()
+                b_idx = se_rw.get("bullet_index")
+                new_txt = se_rw.get("rewritten_text")
+                if (
+                    isinstance(new_txt, str)
+                    and self._is_safe_rewrite(new_txt)
+                    and isinstance(b_idx, int)
+                ):
+                    for exp in exp_list:
+                        if not e_id or exp.get("id") == e_id:
+                            for sub in exp.get("sub_engagements", []):
+                                if not sub_name or sub.get("name", "").strip().lower() == sub_name:
+                                    s_resps = sub.get("responsibilities") or []
+                                    if 0 <= b_idx < len(s_resps):
+                                        if isinstance(s_resps[b_idx], dict):
+                                            s_resps[b_idx]["text"] = new_txt
+                                        elif isinstance(s_resps[b_idx], str):
+                                            s_resps[b_idx] = new_txt
+
         # Build plan items
         plan_items: List[TailoringPlanItemSchema] = []
         if isinstance(data.get("plan"), list):
@@ -483,6 +541,8 @@ class WholeResumeTailoringService:
                     cand_e = candidate_exp_map[e_id]
                     if "responsibilities" in cand_e:
                         orig_exp["responsibilities"] = cand_e["responsibilities"]
+                    if "sub_engagements" in cand_e:
+                        orig_exp["sub_engagements"] = cand_e["sub_engagements"]
                 merged_exp.append(orig_exp)
             preserved["experience"] = merged_exp
 
