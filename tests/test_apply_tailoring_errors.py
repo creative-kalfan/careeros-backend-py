@@ -224,3 +224,50 @@ def test_run_coro_sync_outside_loop() -> None:
         return 42
 
     assert run_coro_sync(_coro(), timeout_seconds=5.0) == 42
+
+
+def test_visual_verification_issue_serialization_in_compiler() -> None:
+    from app.services.resumes.visual_verification import (
+        VisualVerificationEngine,
+        VisualVerificationIssue,
+        VisualVerificationResult,
+    )
+    from app.services.resumes.pdf_compiler import pdf_compiler
+
+    # 1. VisualVerificationIssue must have to_dict() returning dict representation
+    issue = VisualVerificationIssue(
+        code="ORPHAN_HEADING",
+        severity="warning",
+        message="Possible orphan heading near bottom of page 1: 'Soft Skills'",
+        page=0,
+        bbox=(40.1, 782.72, 173.43, 794.45),
+    )
+    d = issue.to_dict()
+    assert d["code"] == "ORPHAN_HEADING"
+    assert d["severity"] == "warning"
+    assert d["page"] == 0
+
+    # 2. When pdf_compiler returns visual verification issues, compile_and_persist
+    # must serialize them cleanly without raising AttributeError: 'VisualVerificationIssue' object has no attribute 'to_dict'
+    synthetic_result = VisualVerificationResult(
+        is_valid=True,
+        page_count=1,
+        dimensions=[(595.28, 841.89)],
+        issues=[issue],
+    )
+
+    import fitz
+    doc = fitz.open()
+    doc.new_page()
+    real_pdf_bytes = doc.tobytes()
+    doc.close()
+
+    with patch.object(pdf_compiler, "compile", return_value=(real_pdf_bytes, synthetic_result)), \
+         patch("app.services.resumes.compiler_service._upload_to_storage", return_value=True):
+        res = resume_compiler_service.compile_and_persist(
+            user_id="user-123",
+            version_id="ver-123",
+            content=_sample_content(),
+        )
+        assert res["storage_path"] == "user-123/versions/ver-123.pdf"
+        assert res["visual_verification"]["issues"] == [d]

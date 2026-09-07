@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import asdict
 from typing import Any, Dict, Optional, Tuple
 
 import fitz  # PyMuPDF
@@ -37,14 +38,14 @@ def _upload_to_storage(
     if jwt:
         try:
             client = get_authenticated_client(jwt)
-            client.storage.from_("resumes").upload(storage_path, data_bytes, file_options=file_opts)
+            client.storage.from_("resumes").upload(storage_path, data_bytes, file_options=file_opts.copy())
             return True
         except Exception as e:
             logger.warning("Authenticated storage upload failed (%s); trying service client", e)
 
     try:
         service_client = get_service_client()
-        service_client.storage.from_("resumes").upload(storage_path, data_bytes, file_options=file_opts)
+        service_client.storage.from_("resumes").upload(storage_path, data_bytes, file_options=file_opts.copy())
         return True
     except Exception as e:
         logger.error("Service client storage upload failed for %s: %s", storage_path, e)
@@ -160,7 +161,7 @@ class ResumeCompilerService:
             "visual_verification": {
                 "is_valid": ver_result.is_valid,
                 "page_count": ver_result.page_count,
-                "issues": [i.to_dict() for i in ver_result.issues],
+                "issues": [i.to_dict() if hasattr(i, "to_dict") else asdict(i) for i in ver_result.issues],
             },
             "fit_verification": {
                 "needs_manual_review": fit_result.needs_manual_review,

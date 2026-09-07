@@ -31,6 +31,9 @@ class VisualVerificationIssue:
     page: int = 0
     bbox: Optional[Tuple[float, float, float, float]] = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
 
 @dataclass
 class VisualVerificationResult:
