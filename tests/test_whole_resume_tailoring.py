@@ -49,18 +49,20 @@ def sample_resume_content() -> ResumeContent:
 
 
 def test_whole_resume_tailoring_service_deterministic() -> None:
+    from unittest.mock import patch
     content = sample_resume_content()
     jd = (
         "We are looking for a Lead Python Developer with deep experience in FastAPI, "
         "AWS, PostgreSQL, microservices architecture, and team leadership to scale our backend."
     )
 
-    result = whole_resume_tailoring_service.tailor_resume(
-        resume_content=content,
-        job_description=jd,
-        job_title="Lead Python Developer",
-        company="Tech Innovations",
-    )
+    with patch.object(whole_resume_tailoring_service, "_call_llm_tailoring", return_value=None):
+        result = whole_resume_tailoring_service.tailor_resume(
+            resume_content=content,
+            job_description=jd,
+            job_title="Lead Python Developer",
+            company="Tech Innovations",
+        )
 
     assert isinstance(result, TailorResumeResponse)
     assert result.success is True
@@ -344,12 +346,14 @@ def test_tailoring_noc_analyst_to_finance_associate_transferable() -> None:
         "• Commitment to process compliance & governance and operational discipline.\n"
     )
 
-    result = whole_resume_tailoring_service.tailor_resume(
-        resume_content=content,
-        job_description=zs_jd,
-        job_title="Finance Associate",
-        company="ZS Associates",
-    )
+    from unittest.mock import patch
+    with patch.object(whole_resume_tailoring_service, "_call_llm_tailoring", return_value=None):
+        result = whole_resume_tailoring_service.tailor_resume(
+            resume_content=content,
+            job_description=zs_jd,
+            job_title="Finance Associate",
+            company="ZS Associates",
+        )
 
     assert isinstance(result, TailorResumeResponse)
     assert result.success is True
@@ -427,3 +431,120 @@ def test_tailoring_genuine_zero_overlap_returns_limited_alignment() -> None:
     assert result.success is True
     assert result.limited_alignment is True
     assert result.alignment_message == "Limited alignment found; consider whether this resume is a strong fit for this role."
+
+
+def test_llm_tailoring_preserves_custom_skills_and_bullet_rewrites() -> None:
+    import json
+    from unittest.mock import MagicMock, patch
+    from app.llm.gateway import LLMResponse
+    from app.models.resume import EducationItem, ProjectItem, AdditionalItem
+
+    content = ResumeContent(
+        profile=ResumeProfile(
+            personal=PersonalInfo(full_name="Alex QA", email="alex@example.com"),
+            summary="QA Engineer with 3 years manual testing experience.",
+            skills=SkillCategory(
+                custom={
+                    "Manual Testing": ["Smoke Testing", "Functional Testing", "Regression Testing"],
+                    "Tools": ["Jira", "Postman"],
+                }
+            ),
+            experience=[
+                ExperienceItem(
+                    id="exp-1",
+                    company="TechCorp",
+                    role="QA Tester",
+                    responsibilities=[
+                        BulletItem(text="Executed manual test cases across web and mobile."),
+                        BulletItem(text="Logged defects in Jira."),
+                    ],
+                )
+            ],
+            education=[
+                EducationItem(
+                    degree="B.Tech",
+                    field="Civil Engineering",
+                    institution="RGUKT RK Valley",
+                    gpa="CGPA: 7.5",
+                )
+            ],
+            projects=[
+                ProjectItem(
+                    name="Syntheseed.com",
+                    responsibilities=[BulletItem(text="Led functional testing.")],
+                )
+            ],
+            additional=[
+                AdditionalItem(description="Basic understanding of ADB commands.")
+            ],
+        )
+    )
+
+    mock_llm_json = {
+        "summary": "Targeted QA Specialist with extensive functional and regression testing expertise.",
+        "skills": {
+            "Manual Testing": ["Functional Testing", "Smoke Testing", "Regression Testing"],
+            "Tools": ["Jira", "Postman"],
+        },
+        "experience_bullets": [
+            {
+                "entry_id": "exp-1",
+                "bullet_index": 0,
+                "rewritten_text": "Spearheaded end-to-end functional and smoke test suites across cross-platform applications.",
+                "reasoning": "Elevated test coverage impact.",
+                "keywords": ["functional testing"],
+            }
+        ],
+        "plan": [
+            {"section": "summary", "action": "REWRITE", "reasoning": "Targeted summary."},
+            {"section": "skills", "action": "ALIGN", "reasoning": "Prioritized functional testing."},
+            {"section": "experience", "action": "EMPHASIZE", "reasoning": "Enhanced bullet 0."},
+        ],
+    }
+
+    mock_resp = LLMResponse(
+        content=json.dumps(mock_llm_json),
+        model="openai/gpt-oss-120b",
+        provider="groq",
+    )
+
+    with patch("app.services.optimization.whole_resume_tailoring_service.get_llm_gateway") as mock_gw_getter:
+        mock_gateway = MagicMock()
+        mock_gateway.generate = MagicMock()
+        mock_gw_getter.return_value = mock_gateway
+        with patch("app.llm.sync_bridge.run_coro_sync", return_value=mock_resp):
+            qa_jd = (
+                "QA Engineer - Software Quality\n\n"
+                "Requirements:\n"
+                "• Proven experience in Manual Testing and Functional Testing.\n"
+                "• Experience with test execution and defect reporting tools such as Jira.\n"
+            )
+            result = whole_resume_tailoring_service.tailor_resume(
+                resume_content=content,
+                job_description=qa_jd,
+                job_title="QA Engineer",
+                company="Acme QA",
+            )
+
+    assert result.success is True
+    # Verify summary rewritten
+    assert "Targeted QA Specialist" in result.tailored_profile["summary"]
+    # Verify experience bullet 0 rewritten, bullet 1 untouched
+    resps = result.tailored_profile["experience"][0]["responsibilities"]
+    assert resps[0]["text"] == "Spearheaded end-to-end functional and smoke test suites across cross-platform applications."
+    assert resps[1]["text"] == "Logged defects in Jira."
+    # Verify custom skills preserved and reordered
+    custom_skills = result.tailored_profile["skills"]["custom"]
+    assert "Manual Testing" in custom_skills
+    assert custom_skills["Manual Testing"][0] == "Functional Testing"
+    # Verify education details (degree field and CGPA) preserved
+    edu = result.tailored_profile["education"][0]
+    assert edu["degree"] == "B.Tech"
+    assert edu["field"] == "Civil Engineering"
+    assert edu["gpa"] == "CGPA: 7.5"
+    # Verify projects and additional preserved
+    assert len(result.tailored_profile["projects"]) == 1
+    assert result.tailored_profile["projects"][0]["name"] == "Syntheseed.com"
+    assert len(result.tailored_profile["additional"]) == 1
+    assert "ADB commands" in result.tailored_profile["additional"][0]["description"]
+

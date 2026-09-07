@@ -118,7 +118,8 @@ def _render_document_model_to_html(doc_model: ResumeDocumentModel) -> str:
                     f'{b_html}'
                     f'</div>'
                 )
-            sections_html.append(f'<div class="section"><div class="section-title">PROJECTS</div>{"".join(items)}</div>')
+            proj_title = getattr(doc_model, "projects_heading", "PROJECTS").upper()
+            sections_html.append(f'<div class="section"><div class="section-title">{proj_title}</div>{"".join(items)}</div>')
 
         elif sec == "education" and doc_model.education:
             items = []
@@ -126,6 +127,10 @@ def _render_document_model_to_html(doc_model: ResumeDocumentModel) -> str:
                 f_study = getattr(edu, "field_of_study", getattr(edu, "field", ""))
                 deg = " in ".join(filter(None, [edu.degree, f_study])) or "Degree"
                 inst = f" — {edu.institution}" if edu.institution else ""
+                gpa_html = ""
+                if edu.gpa:
+                    gpa_label = edu.gpa if any(k in edu.gpa.lower() for k in ("gpa", "cgpa")) else f"CGPA: {edu.gpa}"
+                    gpa_html = f'<div class="edu-gpa" style="font-size: {style.meta_size_pt}pt; color: #{style.meta_color_hex}; margin-top: 1pt;">{gpa_label}</div>'
                 cw_html = f'<p class="edu-cw">Coursework: {", ".join(edu.coursework)}</p>' if edu.coursework else ""
                 items.append(
                     f'<div class="entry">'
@@ -133,10 +138,16 @@ def _render_document_model_to_html(doc_model: ResumeDocumentModel) -> str:
                     f'<td class="entry-left"><strong>{deg}</strong>{inst}</td>'
                     f'<td class="entry-right">{edu.date_range}</td>'
                     f'</tr></table>'
+                    f'{gpa_html}'
                     f'{cw_html}'
                     f'</div>'
                 )
             sections_html.append(f'<div class="section"><div class="section-title">EDUCATION</div>{"".join(items)}</div>')
+
+        elif sec == "additional" and getattr(doc_model, "additional", None):
+            lis = "".join(f'<li>{item.text}</li>' for item in doc_model.additional if item.text)
+            add_title = getattr(doc_model, "additional_heading", "ADDITIONAL KNOWLEDGE").upper()
+            sections_html.append(f'<div class="section"><div class="section-title">{add_title}</div><ul class="bullet-list">{lis}</ul></div>')
 
         elif sec == "skills" and doc_model.skills:
             rows = []

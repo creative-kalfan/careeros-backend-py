@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from app.models.resume import (
+    AdditionalItem,
     CertificationItem,
     EducationItem,
     ExperienceItem,
@@ -110,7 +111,7 @@ def map_education(parsed_edu: List[ParsedEducation]) -> List[EducationItem]:
             id=generate_id(),
             institution=edu.institution or None,
             degree=edu.degree or None,
-            field=None,  # Not directly extracted
+            field=getattr(edu, "field", None),
             location=None,
             start_date=edu.start_date,
             end_date=edu.end_date,
@@ -122,13 +123,16 @@ def map_education(parsed_edu: List[ParsedEducation]) -> List[EducationItem]:
     return items
 
 
-def map_skills(skills: List[str]) -> SkillCategory:
+def map_skills(skills: List[str], skill_categories: Optional[dict[str, list[str]]] = None) -> SkillCategory:
     """Map flat skills list to SkillCategory.
 
+    Preserves explicit category labels in custom if present.
     Only genuine interpersonal attributes land in soft_skills; everything
     unknown defaults to technical so novel stacks never misrender as soft.
     """
     category = SkillCategory()
+    if skill_categories:
+        category.custom = dict(skill_categories)
 
     for skill in skills:
         lower = skill.lower().strip()
@@ -153,8 +157,11 @@ def map_skills(skills: List[str]) -> SkillCategory:
 
 def map_projects(parsed_projects: List[ParsedProject]) -> List[ProjectItem]:
     """Map ParsedProject to ProjectItem."""
+    from app.models.resume import BulletItem
+
     items = []
     for proj in parsed_projects:
+        responsibilities = [BulletItem(id=_bullet_id(b), text=b) for b in (proj.bullets or [])]
         item = ProjectItem(
             id=generate_id(),
             name=proj.name or None,
@@ -166,6 +173,7 @@ def map_projects(parsed_projects: List[ParsedProject]) -> List[ProjectItem]:
             results=None,
             metrics=None,
             url=None,
+            responsibilities=responsibilities,
         )
         items.append(item)
     return items
@@ -239,9 +247,18 @@ def map_leadership(parsed: ParsedResume) -> List[LeadershipItem]:
     return []
 
 
-def map_additional(parsed: ParsedResume) -> List[Any]:
-    """Map additional - not directly extracted, return empty."""
-    return []
+def map_additional(parsed: ParsedResume) -> List[AdditionalItem]:
+    """Map additional statements."""
+    items = []
+    for item_str in getattr(parsed, "additional", []):
+        items.append(
+            AdditionalItem(
+                id=generate_id(),
+                title="Additional Knowledge",
+                description=item_str,
+            )
+        )
+    return items
 
 
 def parsed_resume_to_resume_content(parsed: ParsedResume) -> ResumeContent:
@@ -258,7 +275,7 @@ def parsed_resume_to_resume_content(parsed: ParsedResume) -> ResumeContent:
         experience=map_experience(parsed.experience),
         internships=[],  # Not separated in new parser
         education=map_education(parsed.education),
-        skills=map_skills(parsed.skills),
+        skills=map_skills(parsed.skills, getattr(parsed, "skill_categories", None)),
         projects=map_projects(parsed.projects),
         certifications=map_certifications(parsed.certifications),
         achievements=map_achievements(parsed.achievements),

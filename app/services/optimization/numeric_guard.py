@@ -73,7 +73,7 @@ class NumericFabricationGuard:
         for proj in profile.projects:
             nums.update(cls.extract_numbers(proj.name))
             nums.update(cls.extract_numbers(proj.description))
-            for b in proj.bullets:
+            for b in (getattr(proj, "responsibilities", None) or getattr(proj, "bullets", None) or []):
                 nums.update(cls.extract_numbers(b.text if hasattr(b, "text") else str(b)))
 
         for cert in profile.certifications:

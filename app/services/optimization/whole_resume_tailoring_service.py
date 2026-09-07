@@ -154,6 +154,58 @@ class WholeResumeTailoringService:
         """Run LLM tailoring pass or fallback to high-fidelity AST alignment."""
         profile = resume_content.profile
 
+        # Quick check for total concept overlap
+        # If candidate has zero overlap with the JD, do not invoke LLM;
+        # let AST pass flag limited alignment immediately.
+        candidate_skills: List[str] = []
+        if profile.skills:
+            for s_list in (
+                profile.skills.technical,
+                profile.skills.tools,
+                profile.skills.languages,
+                profile.skills.databases,
+                profile.skills.analytics,
+                profile.skills.soft_skills,
+            ):
+                candidate_skills.extend(s_list or [])
+            for c_list in profile.skills.custom.values():
+                candidate_skills.extend(c_list or [])
+
+        candidate_summary = profile.summary or ""
+        candidate_bullets: List[str] = []
+        for exp in (profile.experience or []):
+            candidate_bullets.extend(exp.get_responsibility_texts())
+        resume_text = " ".join([candidate_summary] + candidate_skills + candidate_bullets).lower()
+
+        jd_raw = parsed_jd.raw_text if hasattr(parsed_jd, "raw_text") else str(parsed_jd)
+        jd_concepts = self.job_parser.extract_job_concepts(jd_raw)
+        has_overlap = False
+        for c in jd_concepts:
+            for v in c.get("variants", []):
+                if self.job_parser._variant_in_text(resume_text, v):
+                    has_overlap = True
+                    break
+            if has_overlap:
+                break
+            if c["canonical"].lower() in resume_text:
+                has_overlap = True
+                break
+
+        if not has_overlap:
+            for req in required_skills:
+                if req.lower() in resume_text:
+                    has_overlap = True
+                    break
+
+        if not has_overlap:
+            return self._deterministic_ast_tailoring(
+                profile=profile,
+                parsed_jd=parsed_jd,
+                required_skills=required_skills,
+                job_title=job_title,
+                company=company,
+            )
+
         try:
             llm_result = self._call_llm_tailoring(
                 profile=profile,
@@ -188,6 +240,19 @@ class WholeResumeTailoringService:
         target_role = job_title or (parsed_jd.title if hasattr(parsed_jd, "title") else "") or "Target Role"
         target_co = company or (parsed_jd.company if hasattr(parsed_jd, "company") else "") or "Target Company"
 
+        # Provide representative skills schema matching candidate's actual structure
+        skills_example: Dict[str, Any] = {}
+        if profile.skills:
+            if profile.skills.custom:
+                for k in list(profile.skills.custom.keys())[:3]:
+                    skills_example[k] = [f"Prioritized {k} skill 1", "..."]
+            else:
+                for k in ("technical", "tools", "languages"):
+                    if getattr(profile.skills, k, None):
+                        skills_example[k] = [f"Prioritized {k} skill 1", "..."]
+        if not skills_example:
+            skills_example = {"technical": ["Prioritized skill 1", "..."], "tools": [...]}
+
         prompt_data = {
             "target_role": target_role,
             "target_company": target_co,
@@ -210,21 +275,23 @@ class WholeResumeTailoringService:
                 "education": [edu.model_dump() for edu in profile.education],
                 "projects": [project.model_dump() for project in profile.projects],
                 "certifications": [cert.model_dump() for cert in profile.certifications],
+                "additional": [item.model_dump() for item in profile.additional],
             },
         }
 
         system_instruction = (
             "You are an expert resume strategist and ATS optimization engine.\n"
             "Generate a tailored version of the candidate's resume for the target role.\n"
-            "STRICT GROUNDING RULES:\n"
-            "1. NEVER fabricate employers, degrees, dates, metrics, or technologies not present or implied in candidate profile.\n"
-            "2. Align and elevate the candidate's verified strengths to match target job keywords.\n"
-            "3. Rewrite the professional summary to be concise, impactful, and targeted.\n"
-            "4. Prioritize technical and domain skills that match the JD.\n"
-            "5. Refine experience bullet points using active action verbs and high-impact phrasing.\n"
-            "6. Preserve candidate identity and every source section. You may return edits only for summary, skills, and existing experience bullets.\n"
-            "7. Never use placeholders such as 'Candidate', never repeat a sentence or keyword list, and never keyword-stuff. Each rewritten bullet must correspond to one supplied entry_id and bullet_index.\n"
-            "8. Output ONLY a valid JSON object matching the requested schema."
+            "STRICT GROUNDING & STRUCTURAL FIDELITY RULES:\n"
+            "1. NEVER fabricate employers, degrees, specializations, dates, metrics, or technologies not present or implied in candidate profile.\n"
+            "2. NEVER drop or alter factual fields such as degree field/major (e.g. Civil Engineering) or GPA/CGPA.\n"
+            "3. Faithfully preserve candidate skill categorization structure (including custom categories like 'Manual Testing', 'Test Execution', etc.). Reorder skills within their existing categories to elevate target keywords, but do not drop, combine, or collapse categories.\n"
+            "4. Align and elevate candidate verified strengths to match target job keywords.\n"
+            "5. Rewrite the professional summary to be concise, impactful, and targeted.\n"
+            "6. Refine experience bullet points using active action verbs and high-impact phrasing while strictly preserving true facts.\n"
+            "7. Preserve candidate identity and every source section. You may return edits only for summary, skills, and existing experience bullets.\n"
+            "8. Never use placeholders such as 'Candidate', never repeat a sentence or keyword list, and never keyword-stuff. Each rewritten bullet must correspond to one supplied entry_id and bullet_index.\n"
+            "9. Output ONLY a valid JSON object matching the requested schema."
         )
 
         prompt = (
@@ -232,7 +299,7 @@ class WholeResumeTailoringService:
             "Generate a tailored resume profile and tailoring plan in JSON format:\n"
             "{\n"
             '  "summary": "Targeted 2-3 sentence professional summary",\n'
-            '  "skills": {"technical": ["Prioritized skill 1", "..."], "tools": [...], "languages": [...]},\n'
+            f'  "skills": {json.dumps(skills_example)},\n'
             '  "experience_bullets": [\n'
             '    {"entry_id": "...", "bullet_index": 0, "rewritten_text": "...", "reasoning": "...", "keywords": ["..."]}\n'
             "  ],\n"
@@ -283,19 +350,38 @@ class WholeResumeTailoringService:
 
         if isinstance(data.get("skills"), dict):
             existing_skills = tailored_dict.get("skills") or {}
-            for cat, items in data["skills"].items():
-                if isinstance(items, list) and cat in existing_skills:
-                    # Existing skill categories only: a model cannot invent a new
-                    # category or replace verified skills with an arbitrary list.
-                    verified = {str(skill).casefold(): skill for skill in existing_skills[cat]}
-                    existing_skills[cat] = [
-                        verified[str(skill).casefold()]
-                        for skill in items
-                        if str(skill).casefold() in verified
-                    ] + [
-                        skill for skill in existing_skills[cat]
-                        if str(skill).casefold() not in {str(value).casefold() for value in items}
-                    ]
+            custom_skills = existing_skills.get("custom") or {}
+
+            raw_cats = dict(data["skills"])
+            if isinstance(raw_cats.get("custom"), dict):
+                nested_custom = raw_cats.pop("custom")
+                for k, v in nested_custom.items():
+                    raw_cats[k] = v
+
+            for cat, items in raw_cats.items():
+                if isinstance(items, list):
+                    if cat in existing_skills and isinstance(existing_skills[cat], list):
+                        verified = {str(skill).casefold(): skill for skill in existing_skills[cat]}
+                        existing_skills[cat] = [
+                            verified[str(skill).casefold()]
+                            for skill in items
+                            if str(skill).casefold() in verified
+                        ] + [
+                            skill for skill in existing_skills[cat]
+                            if str(skill).casefold() not in {str(value).casefold() for value in items}
+                        ]
+                    elif cat in custom_skills and isinstance(custom_skills[cat], list):
+                        verified = {str(skill).casefold(): skill for skill in custom_skills[cat]}
+                        custom_skills[cat] = [
+                            verified[str(skill).casefold()]
+                            for skill in items
+                            if str(skill).casefold() in verified
+                        ] + [
+                            skill for skill in custom_skills[cat]
+                            if str(skill).casefold() not in {str(value).casefold() for value in items}
+                        ]
+            if custom_skills:
+                existing_skills["custom"] = custom_skills
             tailored_dict["skills"] = existing_skills
 
         if isinstance(data.get("experience_bullets"), list):
@@ -381,12 +467,25 @@ class WholeResumeTailoringService:
     def _preserve_profile_sections(source: ResumeProfile, candidate: Dict[str, Any]) -> Dict[str, Any]:
         """Keep all non-tailorable source data if a provider response is incomplete."""
         preserved = source.to_dict()
-        # Experience rewrites were already applied to a copy of the source
-        # profile by entry id and bullet index above; never trust a returned
-        # collection to replace the source collection here.
         for key in ("summary", "skills"):
             if key in candidate:
                 preserved[key] = candidate[key]
+
+        # Safely preserve rewritten experience bullets if present in candidate
+        if "experience" in candidate and isinstance(candidate["experience"], list):
+            candidate_exp_map = {
+                e.get("id"): e for e in candidate["experience"] if isinstance(e, dict) and e.get("id")
+            }
+            merged_exp = []
+            for orig_exp in preserved.get("experience", []):
+                e_id = orig_exp.get("id")
+                if e_id and e_id in candidate_exp_map:
+                    cand_e = candidate_exp_map[e_id]
+                    if "responsibilities" in cand_e:
+                        orig_exp["responsibilities"] = cand_e["responsibilities"]
+                merged_exp.append(orig_exp)
+            preserved["experience"] = merged_exp
+
         try:
             return ResumeProfile.model_validate(preserved).model_dump()
         except Exception:
@@ -575,6 +674,22 @@ class WholeResumeTailoringService:
                         )
                     )
 
+                if tailored_profile.skills.custom:
+                    for cat_name, cat_skills in tailored_profile.skills.custom.items():
+                        if isinstance(cat_skills, list):
+                            matched_c = [s for s in cat_skills if _skill_matches_overlap(s)]
+                            rem_c = [s for s in cat_skills if s not in matched_c]
+                            tailored_profile.skills.custom[cat_name] = matched_c + rem_c
+                            if matched_c:
+                                plan_items.append(
+                                    TailoringPlanItemSchema(
+                                        section="skills",
+                                        action="ALIGN",
+                                        reasoning=f"Elevated {len(matched_c)} verified transferable skills in {cat_name}.",
+                                        keywords_addressed=matched_c,
+                                    )
+                                )
+
             # Rewrite summary to reframe existing true experience into one coherent sentence
             transferable_strength_map = {
                 "SOP Adherence": "SOP-driven process execution",
@@ -737,14 +852,31 @@ class WholeResumeTailoringService:
             reordered_tech = matched_tech + remaining_tech
             tailored_profile.skills.technical = reordered_tech
 
-            plan_items.append(
-                TailoringPlanItemSchema(
-                    section="skills",
-                    action="ALIGN",
-                    reasoning=f"Elevated {len(matched_tech)} matching technical skills to the front of technical skills section.",
-                    keywords_addressed=matched_tech,
+            if matched_tech:
+                plan_items.append(
+                    TailoringPlanItemSchema(
+                        section="skills",
+                        action="ALIGN",
+                        reasoning=f"Elevated {len(matched_tech)} matching technical skills to the front of technical skills section.",
+                        keywords_addressed=matched_tech,
+                    )
                 )
-            )
+
+            if tailored_profile.skills.custom:
+                for cat_name, cat_skills in tailored_profile.skills.custom.items():
+                    if isinstance(cat_skills, list):
+                        m_c = [s for s in cat_skills if (s or "").lower() in req_lower_set]
+                        r_c = [s for s in cat_skills if s not in m_c]
+                        tailored_profile.skills.custom[cat_name] = m_c + r_c
+                        if m_c:
+                            plan_items.append(
+                                TailoringPlanItemSchema(
+                                    section="skills",
+                                    action="ALIGN",
+                                    reasoning=f"Elevated {len(m_c)} matching skills in {cat_name}.",
+                                    keywords_addressed=m_c,
+                                )
+                            )
 
         for i, exp in enumerate(tailored_profile.experience):
             exp_keywords = []

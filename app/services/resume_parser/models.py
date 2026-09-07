@@ -98,6 +98,7 @@ class ParsedEducation:
     """A single education entry."""
 
     degree: str = ""
+    field: Optional[str] = None
     institution: str = ""
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -124,11 +125,13 @@ class ParsedResume:
     experience: list[ParsedExperience] = field(default_factory=list)
     education: list[ParsedEducation] = field(default_factory=list)
     skills: list[str] = field(default_factory=list)
+    skill_categories: dict[str, list[str]] = field(default_factory=dict)
     projects: list[ParsedProject] = field(default_factory=list)
     certifications: list[str] = field(default_factory=list)
     achievements: list[str] = field(default_factory=list)
     languages: list[str] = field(default_factory=list)
     links: list[str] = field(default_factory=list)
+    additional: list[str] = field(default_factory=list)
     parse_notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -158,6 +161,7 @@ class ParsedResume:
             "education": [
                 {
                     "degree": e.degree,
+                    "field": e.field,
                     "institution": e.institution,
                     "start_date": e.start_date,
                     "end_date": e.end_date,
@@ -167,6 +171,7 @@ class ParsedResume:
                 for e in self.education
             ],
             "skills": self.skills,
+            "skill_categories": self.skill_categories,
             "projects": [
                 {
                     "name": p.name,
@@ -180,6 +185,7 @@ class ParsedResume:
             "achievements": self.achievements,
             "languages": self.languages,
             "links": self.links,
+            "additional": self.additional,
             "parse_notes": self.parse_notes,
         }
 

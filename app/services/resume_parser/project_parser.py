@@ -10,6 +10,9 @@ from .models import DocumentBlock, ParsedProject
 from .text_utils import is_bullet_line, strip_bullet
 
 
+from .header_lexicon import match_section_header
+
+
 @dataclass
 class ProjectParseResult:
     projects: List[ParsedProject]
@@ -22,6 +25,35 @@ def parse_projects_section(blocks: List[DocumentBlock]) -> ProjectParseResult:
     
     if not blocks:
         return ProjectParseResult(projects=[], parse_notes=parse_notes)
+
+    # Check if blocks contain sub-engagements within blocks (e.g. umbrella sections with named project entries)
+    multi_projects: List[ParsedProject] = []
+    has_multi = False
+    for i, b in enumerate(blocks):
+        # Scan lines for project name + bullets pattern
+        sub_list: List[ParsedProject] = []
+        cur_p: Optional[ParsedProject] = None
+        start_l = 1 if (i == 0 and len(b.lines) > 1 and match_section_header(b.lines[0].text.strip())) else 0
+        for line in b.lines[start_l:]:
+            txt = line.text.strip()
+            if not txt or match_section_header(txt):
+                continue
+            if is_bullet_line(txt):
+                if cur_p:
+                    cur_p.bullets.append(strip_bullet(txt))
+            elif len(txt) < 80:
+                cur_p = ParsedProject(name=txt, bullets=[], confidence="high")
+                sub_list.append(cur_p)
+        valid_subs = [p for p in sub_list if p.name and p.bullets]
+        if len(valid_subs) >= 2:
+            has_multi = True
+            multi_projects.extend(valid_subs)
+        elif len(valid_subs) == 1 and has_multi:
+            multi_projects.extend(valid_subs)
+
+    if has_multi and multi_projects:
+        parse_notes.append(f"Detected {len(multi_projects)} sub-engagement project entries")
+        return ProjectParseResult(projects=multi_projects, parse_notes=parse_notes)
 
     boundaries = detect_project_entries(blocks, skip_first_line=True)
     parse_notes.append(f"Detected {len(boundaries)} project entries")

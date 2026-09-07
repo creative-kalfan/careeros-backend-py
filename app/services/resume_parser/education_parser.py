@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from .entry_detector import detect_education_entries, extract_bullets_from_blocks, parse_date_range
 from .models import DocumentBlock, ParsedEducation
-from .text_utils import extract_gpa, looks_like_degree, looks_like_institution
+from .text_utils import DEGREE_RE, extract_gpa, looks_like_degree, looks_like_institution
 
 
 @dataclass
@@ -105,7 +105,24 @@ def parse_education_section(blocks: List[DocumentBlock]) -> EducationParseResult
                 break
         
         if degree_match:
-            edu.degree = normalize_degree(degree_match)
+            subparts = [p.strip() for p in re.split(r"\|", degree_match) if p.strip()]
+            main_part = subparts[0]
+            parts = [p.strip() for p in re.split(r"\s+in\s+|[\ufffd\u2013\u2014\-]+", main_part) if p.strip()]
+            if len(parts) >= 2 and looks_like_degree(parts[0]):
+                edu.degree = normalize_degree(parts[0])
+                edu.field = parts[1]
+            elif looks_like_degree(main_part):
+                m = DEGREE_RE.search(main_part)
+                if m:
+                    deg_str = m.group(0).strip()
+                    rem = main_part[m.end():].strip(" .-,|/")
+                    edu.degree = normalize_degree(deg_str)
+                    if rem and not re.match(r"^(?:19|20)\d\d$", rem):
+                        edu.field = rem
+                else:
+                    edu.degree = normalize_degree(main_part)
+            else:
+                edu.degree = normalize_degree(main_part)
         
         # Extract institution
         institution_match = None
@@ -146,7 +163,12 @@ def parse_education_section(blocks: List[DocumentBlock]) -> EducationParseResult
             if line_idx < len(entry_blocks[0].lines):
                 first_line = entry_blocks[0].lines[line_idx].text.strip()
                 if looks_like_degree(first_line):
-                    edu.degree = normalize_degree(first_line)
+                    parts = [p.strip() for p in re.split(r"\s+in\s+|[\ufffd\u2013\u2014\-|,/]+", first_line) if p.strip()]
+                    if len(parts) >= 2 and looks_like_degree(parts[0]):
+                        edu.degree = normalize_degree(parts[0])
+                        edu.field = " - ".join(parts[1:])
+                    else:
+                        edu.degree = normalize_degree(first_line)
                 elif looks_like_institution(first_line):
                     edu.institution = re.split(r"[,|]", first_line)[0].strip()
         

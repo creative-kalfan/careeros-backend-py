@@ -225,7 +225,7 @@ class DocxCompiler:
                         r_b.font.size = Pt(style.body_size_pt)
 
             elif sec == "projects" and doc_model.projects:
-                add_section_heading("Projects")
+                add_section_heading(getattr(doc_model, "projects_heading", "Projects"))
                 for prj in doc_model.projects:
                     p_prj = doc.add_paragraph()
                     p_prj.paragraph_format.space_before = Pt(2.0)
@@ -297,6 +297,16 @@ class DocxCompiler:
                     r_date.font.size = Pt(style.meta_size_pt)
                     r_date.font.color.rgb = meta_rgb
 
+                    if edu.gpa:
+                        gpa_label = edu.gpa if any(k in edu.gpa.lower() for k in ("gpa", "cgpa")) else f"CGPA: {edu.gpa}"
+                        p_gpa = doc.add_paragraph()
+                        p_gpa.paragraph_format.space_before = Pt(0)
+                        p_gpa.paragraph_format.space_after = Pt(1.5)
+                        r_gpa = p_gpa.add_run(gpa_label)
+                        r_gpa.font.name = style.body_font
+                        r_gpa.font.size = Pt(style.meta_size_pt)
+                        r_gpa.font.color.rgb = meta_rgb
+
                     if edu.coursework:
                         p_cw = doc.add_paragraph()
                         p_cw.paragraph_format.space_before = Pt(0)
@@ -305,6 +315,16 @@ class DocxCompiler:
                         r_cw.font.name = style.body_font
                         r_cw.font.size = Pt(style.meta_size_pt)
                         r_cw.font.color.rgb = meta_rgb
+
+            elif sec == "additional" and getattr(doc_model, "additional", None):
+                add_section_heading(getattr(doc_model, "additional_heading", "Additional Knowledge"))
+                for item in doc_model.additional:
+                    p_add = doc.add_paragraph(style='List Bullet')
+                    p_add.paragraph_format.space_after = Pt(1.5)
+                    r_add = p_add.add_run(item.text.strip())
+                    r_add.font.name = style.body_font
+                    r_add.font.size = Pt(style.body_size_pt)
+                    r_add.font.color.rgb = body_rgb
 
             elif sec == "skills" and doc_model.skills:
                 add_section_heading("Skills")

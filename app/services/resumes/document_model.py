@@ -153,9 +153,12 @@ class ResumeDocumentModel:
     experience: list[ExperiencePosition] = field(default_factory=list)
     internships: list[ExperiencePosition] = field(default_factory=list)
     projects: list[ProjectEntry] = field(default_factory=list)
+    projects_heading: str = "Projects"
     education: list[EducationEntry] = field(default_factory=list)
     skills: list[SkillGroup] = field(default_factory=list)
     certifications: list[DocumentElement] = field(default_factory=list)
+    additional: list[BulletElement] = field(default_factory=list)
+    additional_heading: str = "Additional Knowledge"
     section_order: list[str] = field(
         default_factory=lambda: [
             "summary",
@@ -164,6 +167,7 @@ class ResumeDocumentModel:
             "education",
             "skills",
             "certifications",
+            "additional",
         ]
     )
     style: DocumentStyleModel = field(default_factory=DocumentStyleModel)
@@ -396,9 +400,24 @@ def build_document_model(
 
     # Build Projects
     projects: list[ProjectEntry] = []
+    projects_heading = "Projects"
+    if geometry and "sections" in geometry:
+        for sec in geometry["sections"]:
+            if sec.get("section_key") == "projects" and sec.get("title"):
+                projects_heading = sec["title"]
+                break
+
     for proj in profile.projects:
         bullets = []
-        if proj.description:
+        if hasattr(proj, "responsibilities") and proj.responsibilities:
+            for b in proj.responsibilities:
+                bullets.append(
+                    BulletElement(
+                        id=getattr(b, "id", None) or _gen_id("proj_b"),
+                        text=getattr(b, "text", str(b)),
+                    )
+                )
+        elif proj.description:
             bullets.append(BulletElement(text=proj.description))
         if proj.results:
             bullets.append(BulletElement(text=f"Results: {proj.results}"))
@@ -433,50 +452,64 @@ def build_document_model(
             )
         )
 
-    # Build Skills
+    # Build Skills: preserve explicit category labels when present in custom
     skills_groups: list[SkillGroup] = []
-    categories = [
-        ("technical", "Technical Skills"),
-        ("tools", "Tools & Frameworks"),
-        ("languages", "Languages"),
-        ("databases", "Databases"),
-        ("analytics", "Analytics"),
-        ("soft_skills", "Soft Skills"),
-    ]
-    for cat_key, cat_label in categories:
-        vals = getattr(profile.skills, cat_key, [])
-        if vals:
-            skills_groups.append(SkillGroup(category=cat_label, skills=list(vals)))
-
-    # ponytail: legacy/stale profiles may still carry technical terms in
-    # soft_skills — reclassify at the render boundary so compilers (docx, pdf,
-    # plaintext all read SkillGroups) can never print "Soft Skills: PyTorch".
-    # Soft Skills survives only for genuine interpersonal attributes.
-    for grp in skills_groups:
-        if grp.category == "Soft Skills":
-            technical_like, genuine = partition_soft_skills(grp.skills)
-            if technical_like:
-                grp.skills = genuine
-                target = next(
-                    (g for g in skills_groups if g.category == "Technical Skills"),
-                    None,
-                )
-                if target is None:
-                    target = SkillGroup(
-                        category="Technical & Core Competencies",
-                        skills=[],
-                    )
-                    skills_groups.insert(0, target)
-                for s in technical_like:
-                    if s not in target.skills:
-                        target.skills.append(s)
-            break
-    skills_groups = [g for g in skills_groups if g.skills]
-
     if profile.skills.custom:
         for custom_label, custom_vals in profile.skills.custom.items():
             if custom_vals:
                 skills_groups.append(SkillGroup(category=custom_label, skills=list(custom_vals)))
+    else:
+        categories = [
+            ("technical", "Technical Skills"),
+            ("tools", "Tools & Frameworks"),
+            ("languages", "Languages"),
+            ("databases", "Databases"),
+            ("analytics", "Analytics"),
+            ("soft_skills", "Soft Skills"),
+        ]
+        for cat_key, cat_label in categories:
+            vals = getattr(profile.skills, cat_key, [])
+            if vals:
+                skills_groups.append(SkillGroup(category=cat_label, skills=list(vals)))
+
+        # ponytail: legacy/stale profiles may still carry technical terms in
+        # soft_skills — reclassify at the render boundary so compilers (docx, pdf,
+        # plaintext all read SkillGroups) can never print "Soft Skills: PyTorch".
+        # Soft Skills survives only for genuine interpersonal attributes.
+        for grp in skills_groups:
+            if grp.category == "Soft Skills":
+                technical_like, genuine = partition_soft_skills(grp.skills)
+                if technical_like:
+                    grp.skills = genuine
+                    target = next(
+                        (g for g in skills_groups if g.category == "Technical Skills"),
+                        None,
+                    )
+                    if target is None:
+                        target = SkillGroup(
+                            category="Technical & Core Competencies",
+                            skills=[],
+                        )
+                        skills_groups.insert(0, target)
+                    for s in technical_like:
+                        if s not in target.skills:
+                            target.skills.append(s)
+                break
+        skills_groups = [g for g in skills_groups if g.skills]
+
+    # Build Additional Knowledge / Information
+    additional_elements: list[BulletElement] = []
+    additional_heading = "Additional Knowledge"
+    if geometry and "sections" in geometry:
+        for sec in geometry["sections"]:
+            if sec.get("section_key") == "additional" and sec.get("title"):
+                additional_heading = sec["title"]
+                break
+
+    for item in profile.additional:
+        desc = item.description or item.title or ""
+        if desc.strip():
+            additional_elements.append(BulletElement(id=item.id, text=desc.strip()))
 
     # Build Certifications
     certs: list[DocumentElement] = []
@@ -491,22 +524,36 @@ def build_document_model(
             )
         )
 
-    # Determine dynamic section order
-    section_order: list[str] = []
+    # Determine dynamic section order, following source document geometry when available
+    available_sections = set()
     if summary_el:
-        section_order.append("summary")
+        available_sections.add("summary")
     if experience_positions:
-        section_order.append("experience")
+        available_sections.add("experience")
     if projects:
-        section_order.append("projects")
+        available_sections.add("projects")
+    if additional_elements:
+        available_sections.add("additional")
     if education:
-        section_order.append("education")
+        available_sections.add("education")
     if skills_groups:
-        section_order.append("skills")
+        available_sections.add("skills")
     if internship_positions:
-        section_order.append("internships")
+        available_sections.add("internships")
     if certs:
-        section_order.append("certifications")
+        available_sections.add("certifications")
+
+    section_order: list[str] = []
+    if geometry and "sections" in geometry:
+        for s in geometry["sections"]:
+            k = s.get("section_key")
+            if k in available_sections and k not in section_order:
+                section_order.append(k)
+
+    # Append any remaining available sections not captured by geometry
+    for default_k in ("summary", "experience", "projects", "additional", "education", "skills", "internships", "certifications"):
+        if default_k in available_sections and default_k not in section_order:
+            section_order.append(default_k)
 
     return ResumeDocumentModel(
         header=header,
@@ -514,9 +561,12 @@ def build_document_model(
         experience=experience_positions,
         internships=internship_positions,
         projects=projects,
+        projects_heading=projects_heading,
         education=education,
         skills=skills_groups,
         certifications=certs,
+        additional=additional_elements,
+        additional_heading=additional_heading,
         section_order=section_order,
         style=style,
     )

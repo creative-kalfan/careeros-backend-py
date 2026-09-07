@@ -145,9 +145,10 @@ class PDFParser:
         from .contact_parser import extract_contact_from_blocks
         from .experience_parser import parse_experience_section
         from .education_parser import parse_education_section
-        from .skills_parser import parse_skills_section
+        from .skills_parser import parse_skills_section_with_categories
         from .project_parser import parse_projects_section
         from .other_parsers import (
+            parse_additional,
             parse_certifications,
             parse_achievements,
             parse_languages,
@@ -166,12 +167,13 @@ class PDFParser:
         # Parse each section
         experience_result = parse_experience_section(get_section_blocks(sections, "experience"))
         education_result = parse_education_section(get_section_blocks(sections, "education"))
-        skills = parse_skills_section(get_section_blocks(sections, "skills"))
+        skills, skill_categories = parse_skills_section_with_categories(get_section_blocks(sections, "skills"))
         projects_result = parse_projects_section(get_section_blocks(sections, "projects"))
         certifications = parse_certifications(get_section_blocks(sections, "certifications"))
         achievements = parse_achievements(get_section_blocks(sections, "achievements"))
         languages = parse_languages(get_section_blocks(sections, "languages"))
         links = parse_links(get_section_blocks(sections, "links"))
+        additional = parse_additional(get_section_blocks(sections, "additional"))
         summary = parse_summary(get_section_blocks(sections, "summary"))
 
         self.parse_notes.extend(experience_result.parse_notes)
@@ -184,10 +186,12 @@ class PDFParser:
             experience=experience_result.experience,
             education=education_result.education,
             skills=skills,
+            skill_categories=skill_categories,
             projects=projects_result.projects,
             certifications=certifications,
             achievements=achievements,
             languages=languages,
             links=links,
+            additional=additional,
             parse_notes=self.parse_notes,
         )

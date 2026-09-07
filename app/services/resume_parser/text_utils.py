@@ -170,9 +170,12 @@ def extract_simple_dates(text: str) -> List[str]:
 
 
 def extract_gpa(text: str) -> Optional[str]:
-    """Extract GPA from text."""
+    """Extract GPA from text, preserving CGPA / GPA prefix."""
     m = GPA_RE.search(text)
-    return m.group(1) if m else None
+    if not m:
+        return None
+    match_str = m.group(0).strip()
+    return match_str
 
 
 def is_bullet_line(text: str) -> bool:

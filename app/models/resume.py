@@ -124,6 +124,7 @@ class ProjectItem(BaseModel):
     results: Optional[str] = None
     metrics: Optional[str] = None
     url: Optional[str] = None
+    responsibilities: list[BulletItem] = []
 
 
 class CertificationItem(BaseModel):

@@ -105,3 +105,23 @@ def parse_summary(blocks: List[DocumentBlock]) -> str:
                 parts.append(text)
     
     return " ".join(parts)
+
+
+def parse_additional(blocks: List[DocumentBlock]) -> List[str]:
+    """Extract statements from additional knowledge/information section."""
+    from .header_lexicon import match_section_header
+
+    items: List[str] = []
+    for i, block in enumerate(blocks):
+        if i == 0 and len(block.lines) == 1 and match_section_header(block.lines[0].text.strip()):
+            continue
+        start_line = 1 if (i == 0 and len(block.lines) > 1 and match_section_header(block.lines[0].text.strip())) else 0
+        for line in block.lines[start_line:]:
+            text = line.text.strip()
+            if not text or match_section_header(text):
+                continue
+            if is_bullet_line(text):
+                text = strip_bullet(text)
+            if len(text) >= 3:
+                items.append(text)
+    return items

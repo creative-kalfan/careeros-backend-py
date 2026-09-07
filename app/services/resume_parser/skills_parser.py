@@ -101,10 +101,11 @@ def partition_soft_skills(items: list[str]) -> tuple[list[str], list[str]]:
     return technical_like, genuine
 
 
-def parse_skills_section(blocks: List[DocumentBlock]) -> List[str]:
-    """Extract skills from skills section blocks."""
+def parse_skills_section_with_categories(blocks: List[DocumentBlock]) -> tuple[List[str], dict[str, list[str]]]:
+    """Extract skills from skills section blocks, preserving explicit category labels."""
     skills: List[str] = []
     seen: Set[str] = set()
+    categories: dict[str, list[str]] = {}
 
     for i, block in enumerate(blocks):
         # Skip section header block if it's a single line that matches section name
@@ -120,6 +121,10 @@ def parse_skills_section(blocks: List[DocumentBlock]) -> List[str]:
             if not text:
                 continue
 
+            # Check for category prefix like 'Category Name: skill1, skill2'
+            cat_match = re.match(r"^([^:,]+):\s*(.+)$", text)
+            cat_name = cat_match.group(1).strip() if cat_match else None
+
             # Handle bullet points
             if is_bullet_line(text):
                 skill = strip_bullet(text)
@@ -130,12 +135,21 @@ def parse_skills_section(blocks: List[DocumentBlock]) -> List[str]:
 
             # Split comma-separated skills
             line_skills = split_skills_line(text)
+            if cat_name and line_skills:
+                categories.setdefault(cat_name, []).extend(line_skills)
+
             for skill in line_skills:
                 skill = skill.strip()
                 if skill and skill.lower() not in seen:
                     skills.append(skill)
                     seen.add(skill.lower())
 
+    return skills, categories
+
+
+def parse_skills_section(blocks: List[DocumentBlock]) -> List[str]:
+    """Extract skills from skills section blocks."""
+    skills, _ = parse_skills_section_with_categories(blocks)
     return skills
 
 

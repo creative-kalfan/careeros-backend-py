@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # LLM Gateway (backend-only credentials; empty key = provider unconfigured).
     llm_default_provider: str = Field(default="groq", alias="LLM_DEFAULT_PROVIDER")
     llm_groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
-    llm_groq_model: str = Field(default="llama-3.3-70b-versatile", alias="GROQ_MODEL")
+    llm_groq_model: str = Field(default="openai/gpt-oss-120b", alias="GROQ_MODEL")
     llm_gemini_api_key: str = Field(default="", alias="GOOGLE_GEMINI_API_KEY")
     llm_gemini_model: str = Field(default="gemini-2.0-flash", alias="GOOGLE_GEMINI_MODEL")
     llm_mistral_api_key: str = Field(default="", alias="MISTRAL_API_KEY")

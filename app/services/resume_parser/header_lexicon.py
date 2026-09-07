@@ -51,6 +51,12 @@ HEADER_LEXICON: Dict[str, List[str]] = {
         "notable projects",
         "project experience",
         "project highlights",
+        "contributions",
+        "live application testing contributions",
+        "application testing contributions",
+        "testing contributions",
+        "application contributions",
+        "applications tested",
     ],
     "certifications": [
         "certifications",
@@ -108,6 +114,14 @@ HEADER_LEXICON: Dict[str, List[str]] = {
         "leadership & activities",
         "activities",
     ],
+    "additional": [
+        "additional knowledge",
+        "additional information",
+        "additional details",
+        "additional",
+        "other information",
+        "other knowledge",
+    ],
 }
 
 # Flattened set for quick lookup
@@ -128,6 +142,7 @@ SECTION_PRIORITY = [
     "links",
     "internships",
     "leadership",
+    "additional",
 ]
 
 # Normalization helpers
