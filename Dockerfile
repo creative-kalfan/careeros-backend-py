@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Dual-process entrypoint: ARQ background worker (background) + Uvicorn (foreground).
+# Single-process entrypoint: Uvicorn as PID 1 (ARQ worker runs in a separate service).
 COPY start.sh ./start.sh
 RUN chmod +x ./start.sh
 
