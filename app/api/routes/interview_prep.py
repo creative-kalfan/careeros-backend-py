@@ -15,7 +15,12 @@ from fastapi import status as http_status
 
 from app.auth.service import AuthContext
 from app.dependencies import get_current_user
-from app.models.interview_prep import InterviewPrepGenerateRequest, InterviewPrepQuestionUpdate
+from app.models.interview_prep import (
+    DrillGenerateRequest,
+    InterviewPrepGenerateRequest,
+    InterviewPrepQuestionUpdate,
+    ResponseCritiqueRequest,
+)
 from app.schemas.common import ErrorResponse, SuccessResponse, build_meta
 from app.services.interview_prep.service import InterviewPrepService
 
@@ -119,6 +124,53 @@ async def regenerate_session(
     except Exception:  # noqa: BLE001
         logger.exception("Interview prep regeneration failed")
         raise HTTPException(status_code=500, detail="Failed to regenerate preparation")
+
+
+@router.post(
+    "/generate-drills",
+    response_model=SuccessResponse[dict],
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+    status_code=http_status.HTTP_201_CREATED,
+)
+async def generate_drills(
+    payload: DrillGenerateRequest,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[dict]:
+    """Generate stateless role-specific practice drills (no application needed)."""
+    if not (payload.target_role or "").strip():
+        raise HTTPException(status_code=400, detail="target_role is required")
+    try:
+        drills = await SERVICE.generate_drills(auth, payload)
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 — never leak internals
+        logger.exception("Interview drill generation failed")
+        raise HTTPException(status_code=500, detail="Failed to generate practice drills")
+    return SuccessResponse(data=drills, status_code=201)
+
+
+@router.post(
+    "/critique",
+    response_model=SuccessResponse[dict],
+    responses={400: {"model": ErrorResponse}, 401: {"model": ErrorResponse}},
+)
+async def critique_response(
+    payload: ResponseCritiqueRequest,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[dict]:
+    """Critique one typed STAR practice response (qualitative coaching only)."""
+    if not (payload.question or "").strip():
+        raise HTTPException(status_code=400, detail="question is required")
+    if len((payload.response_text or "").strip()) < 10:
+        raise HTTPException(status_code=400, detail="response_text must be at least 10 characters")
+    try:
+        result = await SERVICE.critique_response(auth, payload)
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001
+        logger.exception("Interview critique failed")
+        raise HTTPException(status_code=500, detail="Failed to critique response")
+    return SuccessResponse(data=result)
 
 
 @router.patch(

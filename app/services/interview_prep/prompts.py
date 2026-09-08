@@ -175,3 +175,156 @@ def response_schema() -> dict[str, Any]:
         },
         "required": ["questions"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Practice drills (role-specific simulation without an application)
+# ---------------------------------------------------------------------------
+
+DRILL_SYSTEM_INSTRUCTION = """You are a precise interview-preparation coach inside CareerOS.
+Generate role-specific practice drills grounded ONLY in the provided candidate evidence and job description.
+
+HARD RULES — never violate these:
+1. NEVER invent employers, projects, technologies, metrics, responsibilities, certifications, education, achievements, or years of experience.
+2. Every resume_evidence string must be traceable to the CANDIDATE EVIDENCE section. If no evidence supports a drill angle, put exactly "Not supported by current resume evidence." as the evidence and list the angle under gaps.
+3. NEVER claim the candidate has experience with a JD requirement that does not appear in the candidate evidence. Name such requirements under gaps instead.
+4. Cover all three drill buckets: technical_screen (core architecture/concepts), behavioral_star (challenges, leadership, conflicts — STAR-structured), live_scenario (timed scenario / what-would-you-do drill).
+5. Return ONLY a single JSON object with fields: questions (array of {drill_type, category, question, difficulty, rationale, resume_evidence, talking_points, expected_signals, related_jd_requirements, gaps}), assumption_note (string), gaps (array of strings).
+6. drill_type must be exactly: technical_screen, behavioral_star, or live_scenario. Category must be one of: behavioral, technical, role_specific, resume_deep_dive, situational, company_context. Difficulty must be foundational, intermediate, or advanced."""
+
+MAX_DRILL_JD_CHARS = 2500
+
+
+def build_drill_prompt(
+    *,
+    target_role: str,
+    seniority: str,
+    job_description: str,
+    evidence: str,
+    jd_requirements: list[str],
+    count: int,
+) -> str:
+    """Build the minimized drill-generation prompt (no application context)."""
+    lines = [
+        f"Target role: {target_role or 'Not specified'}",
+        f"Seniority: {seniority or 'mid'}",
+        f"Generate exactly {count} practice drills: at least one technical_screen, "
+        "at least one behavioral_star, and at least one live_scenario drill.",
+        "Behavioral drills must be answerable with the STAR method "
+        "(Situation, Task, Action, Result) and include STAR-ready talking points. "
+        "Live-scenario drills must pose a realistic on-the-job situation for the role.",
+    ]
+    if jd_requirements:
+        lines.append("Key JD requirements:\n- " + "\n- ".join(jd_requirements[:10]))
+    lines.append(
+        "JOB DESCRIPTION (excerpt):\n"
+        + truncate(job_description or "Not provided.", MAX_DRILL_JD_CHARS)
+    )
+    lines.append(
+        "CANDIDATE EVIDENCE (use only this — do not invent beyond it):\n"
+        + (evidence or "No resume evidence available.")
+    )
+    return "\n\n".join(lines)
+
+
+def drill_response_schema() -> dict[str, Any]:
+    """JSON-schema hint for drill generation."""
+    return {
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "drill_type": {"type": "string"},
+                        "category": {"type": "string"},
+                        "question": {"type": "string"},
+                        "difficulty": {"type": "string"},
+                        "rationale": {"type": "string"},
+                        "resume_evidence": {"type": "array", "items": {"type": "string"}},
+                        "talking_points": {"type": "array", "items": {"type": "string"}},
+                        "expected_signals": {"type": "array", "items": {"type": "string"}},
+                        "related_jd_requirements": {"type": "array", "items": {"type": "string"}},
+                        "gaps": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["drill_type", "category", "question"],
+                },
+            },
+            "assumption_note": {"type": "string"},
+            "gaps": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["questions"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# STAR response critique (qualitative coaching, never a hiring score)
+# ---------------------------------------------------------------------------
+
+CRITIQUE_SYSTEM_INSTRUCTION = """You are a strict but supportive STAR interview coach inside CareerOS.
+Critique ONE candidate practice response against the STAR method (Situation, Task, Action, Result).
+
+HARD RULES — never violate these:
+1. Judge ONLY the response text provided. NEVER invent candidate experience beyond it.
+2. NEVER output numeric scores, percentages, readiness ratings, or hiring decisions. Coverage must be exactly present, partial, or missing per dimension.
+3. Each dimension needs: coverage, feedback (what the response does), suggestion (one concrete next sentence or edit), evidence_quote (a short verbatim substring of the response, or empty string when missing).
+4. strengths lists what is concretely working (2-4 items). improvements lists the highest-leverage fixes (2-4 items, STAR-ordered).
+5. honest_note states plainly what is still unproven when evidence is thin — never bluff for the candidate.
+6. Return ONLY a single JSON object with fields: dimensions (array of {dimension, coverage, feedback, suggestion, evidence_quote}), strengths (array), improvements (array), honest_note (string)."""
+
+MAX_CRITIQUE_RESPONSE_CHARS = 4000
+
+
+def build_critique_prompt(
+    *,
+    question: str,
+    category: str,
+    response_text: str,
+    target_role: str | None = None,
+    job_description: str = "",
+) -> str:
+    """Build the minimized critique prompt (response + question only)."""
+    lines = [
+        f"Interview question ({category or 'behavioral'}): {question}",
+        f"Target role: {target_role or 'Not specified'}",
+        "CANDIDATE RESPONSE (judge only this):\n" + truncate(response_text or "", MAX_CRITIQUE_RESPONSE_CHARS),
+    ]
+    if (job_description or "").strip():
+        lines.append(
+            "JOB CONTEXT (excerpt, for relevance only):\n"
+            + truncate(job_description, MAX_DRILL_JD_CHARS)
+        )
+    lines.append(
+        "Critique the response dimension by dimension (Situation, Task, Action, Result). "
+        "Quote short verbatim evidence for each dimension you mark present or partial; "
+        "leave evidence_quote empty when missing."
+    )
+    return "\n\n".join(lines)
+
+
+def critique_response_schema() -> dict[str, Any]:
+    """JSON-schema hint for STAR critique output."""
+    return {
+        "type": "object",
+        "properties": {
+            "dimensions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "dimension": {"type": "string"},
+                        "coverage": {"type": "string"},
+                        "feedback": {"type": "string"},
+                        "suggestion": {"type": "string"},
+                        "evidence_quote": {"type": "string"},
+                    },
+                    "required": ["dimension", "coverage"],
+                },
+            },
+            "strengths": {"type": "array", "items": {"type": "string"}},
+            "improvements": {"type": "array", "items": {"type": "string"}},
+            "honest_note": {"type": "string"},
+        },
+        "required": ["dimensions"],
+    }

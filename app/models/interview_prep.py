@@ -34,6 +34,32 @@ VALID_DIFFICULTIES = ("foundational", "intermediate", "advanced")
 
 VALID_STATUSES = ("generating", "ready", "failed")
 
+VALID_SENIORITIES = ("intern", "junior", "mid", "senior", "staff", "principal")
+
+VALID_DRILL_TYPES = (
+    "technical_screen",
+    "behavioral_star",
+    "live_scenario",
+)
+
+DRILL_TYPE_LABELS: dict[str, str] = {
+    "technical_screen": "Technical Screen",
+    "behavioral_star": "Behavioral / STAR",
+    "live_scenario": "Live Prompt / Scenario",
+}
+
+# Each drill bucket maps to the canonical question categories so drills reuse
+# the same grounding + framework machinery as application-tied sessions.
+DRILL_TYPE_CATEGORIES: dict[str, list[str]] = {
+    "technical_screen": ["technical", "role_specific"],
+    "behavioral_star": ["behavioral", "situational"],
+    "live_scenario": ["situational", "resume_deep_dive"],
+}
+
+VALID_STAR_DIMENSIONS = ("Situation", "Task", "Action", "Result")
+
+VALID_COVERAGE = ("present", "partial", "missing")
+
 CATEGORY_LABELS: dict[str, str] = {
     "behavioral": "Behavioral",
     "technical": "Technical",
@@ -275,3 +301,72 @@ class InterviewPrepGenerateRequest(BaseModel):
 class InterviewPrepQuestionUpdate(BaseModel):
     is_prepared: Optional[bool] = None
     is_bookmarked: Optional[bool] = None
+
+
+# ---------------------------------------------------------------------------
+# Practice drills (role-specific simulation, no application required)
+# ---------------------------------------------------------------------------
+
+
+class DrillGenerateRequest(BaseModel):
+    """Role-specific practice drill request (stateless, no application needed)."""
+
+    target_role: str = ""
+    seniority: str = "mid"
+    job_description: str = ""
+    resume_id: Optional[str] = None
+    question_count: int = 6
+
+
+class DrillQuestion(BaseModel):
+    """One grounded practice drill grouped for the Practice Gauntlet UI."""
+
+    drill_type: str = Field(description="technical_screen | behavioral_star | live_scenario")
+    category: str = Field(description="Canonical interview-prep category")
+    question: str
+    difficulty: str = "intermediate"
+    rationale: str = ""
+    talking_points: list[str] = Field(default_factory=list)
+    answer_framework: dict[str, Any] = Field(default_factory=dict)
+    star_guidance: Optional[str] = None
+    resume_evidence: list[str] = Field(default_factory=list)
+    related_jd_requirements: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+
+
+class DrillGenerateResponse(BaseModel):
+    drills: list[DrillQuestion] = Field(default_factory=list)
+    target_role: str = ""
+    seniority: str = "mid"
+    gaps: list[str] = Field(default_factory=list)
+    assumption_note: str = ""
+
+
+# ---------------------------------------------------------------------------
+# STAR response critique (practice feedback, qualitative only — no scores)
+# ---------------------------------------------------------------------------
+
+
+class ResponseCritiqueRequest(BaseModel):
+    """Critique one typed practice response against STAR structure."""
+
+    question: str = ""
+    category: str = "behavioral"
+    response_text: str = ""
+    target_role: Optional[str] = None
+    job_description: str = ""
+
+
+class StarDimensionFeedback(BaseModel):
+    dimension: str = Field(description="Situation | Task | Action | Result")
+    coverage: str = Field(description="present | partial | missing")
+    feedback: str = ""
+    suggestion: str = ""
+    evidence_quote: str = ""
+
+
+class ResponseCritiqueResult(BaseModel):
+    dimensions: list[StarDimensionFeedback] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+    honest_note: str = ""
