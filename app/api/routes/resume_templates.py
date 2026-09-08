@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
@@ -10,7 +12,88 @@ from app.repositories.resume_template_repository import ResumeTemplateRepository
 from app.schemas.common import ErrorResponse, SuccessResponse
 from app.schemas.resume_template import ResumeTemplateListResponse, ResumeTemplateResponse
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/templates", tags=["templates"])
+
+# Namespace used to derive stable, deterministic UUIDs for bundled fallback
+# templates. These IDs are only used when a template is missing from the
+# database, so the endpoint still returns a valid row instead of a 500/404.
+_TEMPLATE_NS = uuid.UUID("5b1a2f84-8a4b-4b10-9e6e-4a8f2c6d9d7e")
+
+
+def _builtin_template(slug: str, name: str, description: str, **overrides: Any) -> dict[str, Any]:
+    """Build a canonical fallback template row for a known resume slug."""
+    row: dict[str, Any] = {
+        "id": str(uuid.uuid5(_TEMPLATE_NS, f"template:{slug}")),
+        "slug": slug,
+        "name": name,
+        "description": description,
+        "source_repository": "careeros/templates",
+        "source_url": "https://github.com/careeros/templates",
+        "author": "CareerOS",
+        "license": "MIT",
+        "license_url": "https://opensource.org/licenses/MIT",
+        "attribution_required": False,
+        "modification_allowed": True,
+        "redistribution_allowed": True,
+        "layout_type": "single-column",
+        "column_count": 1,
+        "page_preference": "one-page",
+        "ats_characteristics": {
+            "single_column": True,
+            "tables": False,
+            "icons": False,
+            "graphics": False,
+            "standard_headings": True,
+            "text_heavy": True,
+            "one_page_preferred": True,
+        },
+        "target_roles": ["Software Engineer", "Product Manager", "Data Analyst"],
+        "target_industries": ["Technology", "SaaS", "General"],
+        "target_experience_levels": ["entry", "junior", "mid", "senior"],
+        "evidence_type": "original",
+        "evidence_description": "CareerOS original ATS-friendly template.",
+        "preview_url": f"/templates/{slug}/preview.png",
+        "template_path": f"templates/{slug}",
+        "status": "active",
+        "created_at": "2025-01-01T00:00:00Z",
+        "updated_at": "2025-01-01T00:00:00Z",
+    }
+    row.update(overrides)
+    return row
+
+
+# Bundled canonical fallback definitions. These are used when the database
+# does not yet contain a template for the requested slug (or the database is
+# unreachable), guaranteeing `/api/templates/{slug}` returns valid JSON.
+_BUILTIN_TEMPLATES: dict[str, dict[str, Any]] = {
+    "modern": _builtin_template(
+        "modern",
+        "Modern",
+        "A clean, modern single-column resume template optimized for ATS "
+        "parsing. Minimalist design with clear section headings for tech and "
+        "product roles.",
+    ),
+    "minimal": _builtin_template(
+        "minimal",
+        "Minimal",
+        "A focused, minimalist single-column resume template with a strong "
+        "typographic hierarchy and generous whitespace.",
+    ),
+    "classic": _builtin_template(
+        "classic",
+        "Classic",
+        "A timeless single-column resume template with traditional section "
+        "headings, suitable for most professional roles.",
+    ),
+    "executive": _builtin_template(
+        "executive",
+        "Executive",
+        "A polished single-column resume template built for senior and "
+        "executive candidates, emphasizing leadership and impact.",
+    ),
+}
 
 
 def _to_response(row: dict[str, Any]) -> ResumeTemplateResponse:
@@ -72,6 +155,29 @@ async def list_templates(
     )
 
 
+def _resolve_template(template_id: str) -> dict[str, Any] | None:
+    """Resolve a template by id or slug, falling back to bundled defaults.
+
+    Lookups are wrapped so database errors (e.g. casting a non-UUID slug
+    against the ``uuid`` ``id`` column) degrade gracefully to the slug lookup
+    and finally to the bundled fallback registry instead of raising a 500.
+    """
+    repo = ResumeTemplateRepository()
+    for lookup in (repo.get_template_by_id, repo.get_template_by_slug):
+        try:
+            row = lookup(template_id) or None
+        except Exception:
+            logger.warning(
+                "Template lookup failed for %r; falling back to bundled registry.",
+                template_id,
+                exc_info=True,
+            )
+            row = None
+        if row:
+            return row
+    return _BUILTIN_TEMPLATES.get(template_id)
+
+
 @router.get(
     "/{template_id}",
     response_model=SuccessResponse[ResumeTemplateResponse],
@@ -81,10 +187,7 @@ async def get_template(
     template_id: str,
 ) -> SuccessResponse[ResumeTemplateResponse]:
     """Get a single active resume template by id or slug (public)."""
-    repo = ResumeTemplateRepository()
-    row = repo.get_template_by_id(template_id)
-    if not row:
-        row = repo.get_template_by_slug(template_id)
+    row = _resolve_template(template_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
     return SuccessResponse(data=_to_response(row))

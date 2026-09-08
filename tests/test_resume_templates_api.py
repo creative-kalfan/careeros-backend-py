@@ -121,3 +121,50 @@ def test_template_metadata_fields(
     assert tmpl["columnCount"] == 1
     assert tmpl["pagePreference"] == "one-page"
     assert tmpl["status"] == "active"
+
+
+def test_get_modern_template_returns_200_when_missing_from_db(client: TestClient) -> None:
+    """`/api/templates/modern` returns 200 with the bundled canonical default when
+    the template is not yet seeded in the database."""
+    with patch.object(ResumeTemplateRepository, "get_template_by_id", return_value=None):
+        with patch.object(ResumeTemplateRepository, "get_template_by_slug", return_value=None):
+            response = client.get("/api/templates/modern")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    tmpl = data["data"]
+    assert tmpl["slug"] == "modern"
+    assert tmpl["name"] == "Modern"
+    assert tmpl["status"] == "active"
+    assert tmpl["layoutType"] == "single-column"
+    assert tmpl["templatePath"] == "templates/modern"
+
+
+def test_get_modern_template_survives_id_lookup_error(client: TestClient) -> None:
+    """A non-UUID slug must not raise a 500 when the id lookup errors.
+
+    Regression for the reported `/api/templates/modern` 500: querying the
+    ``uuid`` ``id`` column with a slug (e.g. `modern`) raised an unhandled
+    Postgres cast error. Lookups must degrade to the slug path and bundled
+    default instead of surfacing as a 500.
+    """
+    with patch.object(
+        ResumeTemplateRepository,
+        "get_template_by_id",
+        side_effect=Exception("invalid input syntax for type uuid: \"modern\""),
+    ):
+        with patch.object(ResumeTemplateRepository, "get_template_by_slug", return_value=None):
+            response = client.get("/api/templates/modern")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["data"]["slug"] == "modern"
+
+
+def test_get_unknown_template_still_404(client: TestClient) -> None:
+    """Unknown slugs that are neither in the DB nor bundled must return 404."""
+    with patch.object(ResumeTemplateRepository, "get_template_by_id", return_value=None):
+        with patch.object(ResumeTemplateRepository, "get_template_by_slug", return_value=None):
+            response = client.get("/api/templates/definitely-not-a-template")
+    assert response.status_code == 404
+    assert response.json()["error"]["message"] == "Template not found"
