@@ -20,6 +20,7 @@ class LLMTask(str, Enum):
     ATS_SEMANTIC_REASONING = "ats_semantic_reasoning"
     RESUME_IMPROVEMENT_ASSESSMENT = "resume_improvement_assessment"
     INTERVIEW_PREP_GENERATION = "interview_prep_generation"
+    COPILOT_CHAT = "copilot_chat"
     # Future tasks: resume_summary, cover_letter, etc.
 
 
