@@ -1,50 +1,33 @@
-"""PDF Compilation and DOCX-to-PDF Conversion Engine for CareerOS.
+"""PDF Compilation Engine for CareerOS.
 
-Coordinates converting native DOCX to PDF (via headless LibreOffice when available,
-or high-fidelity PyMuPDF layout rendering fallback) and runs visual verification.
+Renders the canonical ``ResumeDocumentModel`` to PDF via instant Typst
+rendering (primary) with a high-fidelity PyMuPDF layout fallback, then runs
+visual verification.
+
+The legacy headless-LibreOffice DOCX-to-PDF conversion was removed: Typst
+needs no JRE, renders in milliseconds, and emits selectable ATS-friendly
+text directly from the document model.
 """
 
 from __future__ import annotations
 
 import io
 import logging
-import os
-import shutil
-import subprocess
-import tempfile
-import uuid
-from typing import Optional, Tuple
+from typing import Optional
 
 import fitz  # PyMuPDF
 
 from .document_model import ResumeDocumentModel
-from .docx_compiler import docx_compiler
 from .style_model import DocumentStyleModel
 from .visual_verification import VisualVerificationEngine, VisualVerificationResult
+from app.services.pdf.typst_compiler import (
+    TypstNotAvailableError,
+    TypstPageBudgetExceeded,
+    compile_typst_to_pdf,
+    render_document_model_to_typst,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _find_libreoffice_binary() -> Optional[str]:
-    """Locate headless LibreOffice executable across Linux and Windows systems."""
-    for cmd in ("soffice", "libreoffice"):
-        path = shutil.which(cmd)
-        if path:
-            return path
-
-    # Common standard paths
-    standard_paths = [
-        "/usr/bin/soffice",
-        "/usr/bin/libreoffice",
-        "/usr/local/bin/soffice",
-        "/opt/libreoffice/program/soffice",
-        r"C:\Program Files\LibreOffice\program\soffice.exe",
-        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
-    ]
-    for p in standard_paths:
-        if os.path.isfile(p):
-            return p
-    return None
 
 
 def _render_document_model_to_html(doc_model: ResumeDocumentModel) -> str:
@@ -320,53 +303,32 @@ def _render_plain_textbox_fallback(doc_model: ResumeDocumentModel, style) -> byt
 
 
 class PdfCompiler:
-    """Compiles Document Model and native DOCX into visually verified PDF bytes."""
+    """Compiles the Document Model to visually verified PDF bytes."""
 
     def compile(
         self,
         doc_model: ResumeDocumentModel,
         docx_bytes: Optional[bytes] = None,
     ) -> tuple[bytes, VisualVerificationResult]:
-        """Convert DOCX/DocumentModel to PDF and visually verify output."""
+        """Render the document model to PDF and visually verify output.
+
+        ``docx_bytes`` is accepted for backward compatibility and ignored:
+        both strategies render directly from the document model.
+        """
         style = doc_model.style or DocumentStyleModel()
-        if not docx_bytes:
-            docx_bytes = docx_compiler.compile(doc_model)
 
         pdf_bytes = None
-        soffice_bin = _find_libreoffice_binary()
 
-        # Strategy 1: Headless LibreOffice CLI if available (bounded 15s timeout with resource fallback)
-        if soffice_bin:
-            try:
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    in_path = os.path.join(tmpdir, "resume.docx")
-                    with open(in_path, "wb") as f:
-                        f.write(docx_bytes)
-                    proc = subprocess.run(
-                        [
-                            soffice_bin,
-                            "--headless",
-                            "--convert-to",
-                            "pdf",
-                            "--outdir",
-                            tmpdir,
-                            in_path,
-                        ],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=15,
-                    )
-                    out_path = os.path.join(tmpdir, "resume.pdf")
-                    if os.path.isfile(out_path):
-                        with open(out_path, "rb") as f:
-                            pdf_bytes = f.read()
-                        logger.info("Compiled PDF via LibreOffice successfully (%d bytes)", len(pdf_bytes))
-                    else:
-                        logger.warning("LibreOffice exited without producing output file; falling back to PyMuPDF layout")
-            except subprocess.TimeoutExpired:
-                logger.warning("LibreOffice conversion timed out after 15s; falling back to PyMuPDF layout engine")
-            except Exception as exc:
-                logger.warning("LibreOffice conversion failed (%s); falling back to PyMuPDF layout engine", exc)
+        # Strategy 1: Instant Typst rendering from the document model.
+        try:
+            pdf_bytes = compile_typst_to_pdf(render_document_model_to_typst(doc_model))
+            logger.info("Compiled PDF via Typst successfully (%d bytes)", len(pdf_bytes))
+        except TypstNotAvailableError:
+            logger.info("Typst binary unavailable; falling back to PyMuPDF layout engine")
+        except TypstPageBudgetExceeded as exc:
+            logger.warning("%s; falling back to PyMuPDF layout engine", exc)
+        except Exception as exc:  # noqa: BLE001 — fallback covers all Typst failures
+            logger.warning("Typst compilation failed (%s); falling back to PyMuPDF layout engine", exc)
 
         # Strategy 2: High-fidelity layout engine using PyMuPDF Story
         if not pdf_bytes:

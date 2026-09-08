@@ -372,7 +372,10 @@ def test_single_page_fit_loop_convergence_and_extent() -> None:
         assert b[3] <= page_h - 20.0, f"Block bottom ({b[3]}) overflows bottom margin ({page_h})"
     doc.close()
 
-    assert len(fit_result.audit) > 0
+    # Typst's tighter layout can converge with zero trims (audit records trims
+    # only when needed); the trim path itself is covered deterministically by
+    # test_fit_verifier_trims_then_returns_single_page.
+    assert fit_result.needs_manual_review is False
 
 
 # =========================================================================

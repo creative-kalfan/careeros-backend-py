@@ -301,12 +301,15 @@ def test_real_resume_and_jd_end_to_end_closed_loop(real_alex_morgan_resume):
     check_pdf = fitz.open(stream=compiled_pdf_bytes, filetype="pdf")
     pdf_text = check_pdf[0].get_text()
     check_pdf.close()
+    # Whitespace-normalized: layout engines (Typst vs PyMuPDF Story) break
+    # lines at different points, so a phrase may span a line break.
+    pdf_text_norm = " ".join(pdf_text.split())
 
-    assert "Site Reliability Engineer" in pdf_text
-    assert "Datadog observability" in pdf_text
+    assert "Site Reliability Engineer" in pdf_text_norm
+    assert "Datadog observability" in pdf_text_norm
     # Verify no fake placeholder exists
-    assert "Your Name" not in pdf_text
-    assert "Untitled Resume" not in pdf_text
+    assert "Your Name" not in pdf_text_norm
+    assert "Untitled Resume" not in pdf_text_norm
 
     # Step 7: Verify Modified Content PHYSICALLY Exists in Generated DOCX
     check_docx = DocxDocument(io.BytesIO(compiled_docx_bytes))

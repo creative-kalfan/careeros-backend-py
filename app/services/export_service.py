@@ -410,6 +410,20 @@ class ExportService:
     """Export resume versions to PDF and DOCX."""
 
     def export_pdf(self, content: ResumeContent, template: str = "minimal") -> bytes:
+        # Primary: instant Typst rendering from the canonical document model.
+        try:
+            from app.services.pdf.typst_compiler import (
+                compile_typst_to_pdf,
+                render_document_model_to_typst,
+            )
+            from app.services.resumes.document_model import build_document_model
+
+            return compile_typst_to_pdf(
+                render_document_model_to_typst(build_document_model(content, None))
+            )
+        except Exception as exc:
+            logger.warning("Typst PDF export failed (%s); falling back to PyMuPDF Story", exc)
+
         html = _render_html(content, template)
         try:
             import io
