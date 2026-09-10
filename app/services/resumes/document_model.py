@@ -147,9 +147,9 @@ CANONICAL_SECTION_ORDER = (
     "experience",
     "internships",
     "projects",
-    "education",
     "certifications",
     "additional",
+    "education",
 )
 
 
@@ -166,21 +166,27 @@ def get_canonical_section_order(
     4. Experience
     5. Internships (if present)
     6. Projects
-    7. Education
-    8. Certifications
-    9. Additional
-    Unknown/extra sections are appended deterministically in alphabetical order.
+    7. Other relevant sections (Certifications, Additional, etc.)
+    8. Education (strictly final)
+    Unknown/extra sections are appended deterministically before Education.
     Missing sections are omitted cleanly without producing empty headings.
     """
     avail = set(available_sections)
     if explicit_template_order:
         ordered = [s for s in explicit_template_order if s in avail]
         remaining = sorted([s for s in avail if s not in ordered])
-        return ordered + remaining
+        res = ordered + remaining
+        if "education" in res:
+            res.remove("education")
+            res.append("education")
+        return res
 
-    ordered = [s for s in CANONICAL_SECTION_ORDER if s in avail]
-    remaining = sorted([s for s in avail if s not in ordered])
-    return ordered + remaining
+    known_non_edu = [s for s in CANONICAL_SECTION_ORDER if s != "education" and s in avail]
+    extras = sorted([s for s in avail if s not in CANONICAL_SECTION_ORDER])
+    res = known_non_edu + extras
+    if "education" in avail:
+        res.append("education")
+    return res
 
 
 @dataclass

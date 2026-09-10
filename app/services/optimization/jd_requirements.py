@@ -55,6 +55,14 @@ _SHIFT_PATTERNS = (
     r"shift|rotational|night shift|weekend|public holiday|24x7|24/7|round-the-clock"
 )
 
+_APPLICATION_INSTRUCTION_PATTERNS = (
+    r"complete (?:your|the) application|submit (?:your|the) (?:application|resume|cv)|"
+    r"equal opportunity|eeo employer|affirmative action|accommodations? (?:available|upon request)|"
+    r"background check|drug (?:screen|test)|apply online|click (?:here to )?apply|"
+    r"must be legally authorized|will not sponsor|privacy policy|terms of (?:use|service)|"
+    r"how to apply|application process|recruitment process"
+)
+
 _SECTION_HEADER_ALIASES: Dict[str, str] = {
     "requirements": "hard",
     "basic qualifications": "hard",
@@ -314,6 +322,8 @@ def _split_statements(section_text: str) -> List[str]:
 def _classify_statement(statement: str, section_kind: str) -> tuple[str, str]:
     """Return (category, importance) using domain-independent cues."""
     low = statement.lower()
+    if re.search(_APPLICATION_INSTRUCTION_PATTERNS, low):
+        return "boilerplate", "low"
     if re.search(_EDUCATION_PATTERNS, low):
         return "education", "medium"
     if re.search(_CERT_PATTERNS, low):

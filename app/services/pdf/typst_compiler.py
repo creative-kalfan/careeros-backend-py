@@ -311,20 +311,21 @@ def render_document_model_to_typst(doc_model: ResumeDocumentModel) -> str:
                 out.extend(f"  [#t({p})]," for p in _paras("\n".join(bullets)))
                 out.append(")")
             sub_heading = getattr(exp, "sub_engagements_heading", "Key Sub-Engagements")
-            for sub in getattr(exp, "sub_engagements", None) or []:
-                if sub_heading:
-                    out.append(f'  #text(size: {subheading_pt - 1.0:.1f}pt, weight: "bold", fill: rgb("#{heading_color}"))[#t({_lit(sub_heading)})]')
-                    sub_heading = None
-                if sub.name:
-                    out.append(f'  #pad(left: 12pt)[#text(size: {subheading_pt:.1f}pt, weight: "bold")[#t({_lit(sub.name)})]]')
-                if sub.description:
-                    out.append(f'  #pad(left: 16pt)[#text(size: {meta_pt:.1f}pt, fill: rgb("#{meta_color}"))[#t({_lit(sub.description)})]]')
-                sub_bullets = [b.text for b in (sub.bullets or []) if (b.text or "").strip()]
-                if sub_bullets:
-                    out.append("  #pad(left: 12pt)[")
-                    out.append(f"  #list(marker: [•], spacing: {bullet_spacing:.1f}pt, indent: 12pt, body-indent: 6pt,")
-                    out.extend(f"    [#t({p})]," for p in _paras("\n".join(sub_bullets)))
-                    out.append("  )]")
+            subs = getattr(exp, "sub_engagements", None) or []
+            if subs:
+                out.append(f"#v(5pt)")
+                out.append(f'  #pad(left: 10pt)[#text(size: {body_pt * 0.85:.1f}pt, weight: "bold", fill: rgb("#{accent_color}"))[#upper[#t({_lit(sub_heading)})]]]')
+                for sub in subs:
+                    if sub.name:
+                        out.append(f'  #pad(left: 14pt)[#text(size: {body_pt * 0.95:.1f}pt, weight: "bold", fill: rgb("#{heading_color}"))[#t({_lit(sub.name)})]]')
+                    if sub.description:
+                        out.append(f'  #pad(left: 16pt)[#text(size: {meta_pt:.1f}pt, fill: rgb("#{meta_color}"))[#t({_lit(sub.description)})]]')
+                    sub_bullets = [b.text for b in (sub.bullets or []) if (b.text or "").strip()]
+                    if sub_bullets:
+                        out.append("  #pad(left: 14pt)[")
+                        out.append(f"  #list(marker: [•], spacing: {bullet_spacing * 0.85:.1f}pt, indent: 8pt, body-indent: 4pt,")
+                        out.extend(f"    [#t({p})]," for p in _paras("\n".join(sub_bullets)))
+                        out.append("  )]")
             out.append(f"#v({sec_after:.1f}pt)")
 
     for sec in doc_model.section_order:

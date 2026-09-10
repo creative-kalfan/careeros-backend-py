@@ -947,3 +947,58 @@ def test_tailoring_settings_field_exists() -> None:
     from app.config import Settings
 
     assert "tailoring_max_opportunities" in Settings.model_fields
+
+
+def test_application_instructions_suppressed_from_opportunities() -> None:
+    jd_with_boilerplate = (
+        "Software Engineer\n\nRequirements:\n"
+        "• To complete your application, please submit your resume and cover letter.\n"
+        "• We are an equal opportunity employer and value diversity.\n"
+        "• Strong proficiency in React and TypeScript.\n"
+        "• Experience with Docker and Kubernetes for containerized deployment.\n"
+        "• Must pass background check and drug screen before employment.\n"
+    )
+    opps = _discover(_software_resume(), jd_with_boilerplate)
+    labels = [o.display_label.lower() for o in opps]
+    for label in labels:
+        assert "complete your application" not in label
+        assert "equal opportunity" not in label
+        assert "background check" not in label
+    # Genuine technical requirements should be present
+    assert any("docker" in label or "kubernetes" in label for label in labels)
+
+
+def test_education_strictly_last_and_sub_engagements_hierarchy() -> None:
+    from app.services.resumes.document_model import (
+        build_document_model,
+        get_canonical_section_order,
+    )
+    from app.services.resumes.pdf_compiler import PdfCompiler
+
+    # Verify canonical order always puts education last
+    sections = ["education", "experience", "skills", "certifications", "summary", "projects", "additional"]
+    ordered = get_canonical_section_order(sections)
+    assert ordered[-1] == "education"
+    assert ordered[0] == "summary"
+
+    # Verify sub-engagements compile cleanly with distinctive styling
+    content = _software_resume()
+    from app.models.resume import EducationItem
+    content.profile.education = [
+        EducationItem(degree="B.Tech", field="Computer Science", institution="State University")
+    ]
+    doc = build_document_model(content, None)
+    from app.services.resumes.document_model import BulletElement, ProjectEntry
+    doc.experience[0].sub_engagements = [
+        ProjectEntry(
+            name="Syntheseed.com",
+            description="High-throughput client analytics web portal",
+            bullets=[BulletElement(id="b1", text="Engineered automated ingestion pipeline reducing latency by 40%.")],
+        )
+    ]
+    from app.services.resumes.pdf_compiler import _render_document_model_to_html
+    html = _render_document_model_to_html(doc)
+    assert "sub-engagements-group" in html
+    assert "sub-engagements-title" in html
+    assert "Syntheseed.com" in html
+    assert html.rfind("EDUCATION") > html.rfind("EXPERIENCE")

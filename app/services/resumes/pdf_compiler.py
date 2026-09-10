@@ -60,18 +60,20 @@ def _render_document_model_to_html(doc_model: ResumeDocumentModel) -> str:
                 sub_html = ""
                 if getattr(exp, "sub_engagements", None):
                     sub_heading = getattr(exp, "sub_engagements_heading", "Key Sub-Engagements")
-                    sub_html += f'<div style="font-weight: 600; font-size: {style.body_size_pt}pt; color: #{style.heading_color_hex}; margin-left: 12pt; margin-top: 4pt;">{sub_heading}</div>'
+                    sub_html += f'<div class="sub-engagements-group"><div class="sub-engagements-title">{sub_heading}</div>'
                     sub_items = []
                     for sub in exp.sub_engagements:
                         sub_bullets = "".join(f'<li>{b.text.strip()}</li>' for b in sub.bullets if b.text.strip())
+                        desc_html = f'<div class="sub-engagement-desc">{sub.description}</div>' if sub.description else ''
+                        b_html = f'<ul class="bullet-list sub-bullet-list">{sub_bullets}</ul>' if sub_bullets else ''
                         sub_items.append(
-                            f'<div class="sub-engagement" style="margin-left: 12pt; margin-top: 4pt;">'
-                            f'<div style="font-weight: 600; font-size: {style.body_size_pt}pt; color: #{style.heading_color_hex};">{sub.name}</div>'
-                            + (f'<div style="font-size: {style.meta_size_pt}pt; color: #{style.meta_color_hex}; margin-left: 4pt;">{sub.description}</div>' if sub.description else '')
-                            + (f'<ul class="bullet-list" style="margin-left: 8pt;">{sub_bullets}</ul>' if sub_bullets else '') +
+                            f'<div class="sub-engagement">'
+                            f'<div class="sub-engagement-name">{sub.name}</div>'
+                            f'{desc_html}'
+                            f'{b_html}'
                             f'</div>'
                         )
-                    sub_html += "".join(sub_items)
+                    sub_html += "".join(sub_items) + '</div>'
 
                 items.append(
                     f'<div class="entry">'
@@ -251,6 +253,43 @@ body {{
     font-size: {style.meta_size_pt}pt;
     color: #{style.meta_color_hex};
     margin: 1.5pt 0 0 0;
+}}
+.sub-engagements-group {{
+    margin-top: 6pt;
+    margin-bottom: 3pt;
+    padding-left: 10pt;
+    border-left: 1.5pt solid #{getattr(style, "divider_color_hex", "cbd5e1")};
+}}
+.sub-engagements-title {{
+    font-size: {style.body_size_pt * 0.85:.1f}pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #{getattr(style, "accent_color_hex", style.heading_color_hex)};
+    margin-bottom: 3pt;
+}}
+.sub-engagement {{
+    margin-top: 3pt;
+    margin-bottom: 3pt;
+}}
+.sub-engagement-name {{
+    font-size: {style.body_size_pt * 0.95:.1f}pt;
+    font-weight: 600;
+    color: #{style.heading_color_hex};
+}}
+.sub-engagement-desc {{
+    font-size: {style.meta_size_pt}pt;
+    color: #{style.meta_color_hex};
+    margin-top: 0.5pt;
+    margin-bottom: 1.5pt;
+}}
+.sub-bullet-list {{
+    margin: 1pt 0 2pt 0;
+    padding-left: {style.bullet_indent_pt * 0.85:.1f}pt;
+}}
+.sub-bullet-list li {{
+    font-size: {style.body_size_pt * 0.95:.1f}pt;
+    margin-bottom: {getattr(style, "bullet_spacing_pt", 2.0) * 0.85:.1f}pt;
 }}
 """
     return f"""<!DOCTYPE html>

@@ -167,7 +167,10 @@ def measure_pdf_layout(
                 break
 
         orphan_headings: List[str] = []
-        heading_keywords = {"summary", "skills", "experience", "projects", "education", "certifications", "internships"}
+        heading_keywords = {
+            "summary", "skills", "experience", "projects", "education",
+            "certifications", "internships", "key sub-engagements", "key engagements",
+        }
         for b in blocks:
             text_lines = [line.strip() for line in b[4].splitlines() if line.strip()]
             if len(text_lines) == 1:

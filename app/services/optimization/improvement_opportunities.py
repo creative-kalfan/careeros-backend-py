@@ -367,10 +367,13 @@ def discover_opportunities(
         impact = _potential_impact(match)
         if impact < min_impact:
             continue
-        # Trivially short / location / auth requirements are never worth a
+        # Trivially short / location / auth / boilerplate requirements are never worth a
         # question in a batch interaction.
         category = (req.category or "").lower()
-        if category in ("location", "work_authorization"):
+        if category in ("location", "work_authorization", "boilerplate", "administrative"):
+            continue
+        # Also check for application process phrases directly
+        if re.search(r"\b(complete (?:your|the) application|submit (?:your|the) (?:application|resume)|equal opportunity|background check|apply online)\b", req.text.lower()):
             continue
         if len(req.normalized_key.split()) == 0:
             continue

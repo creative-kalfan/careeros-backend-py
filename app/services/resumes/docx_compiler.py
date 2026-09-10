@@ -199,21 +199,21 @@ class DocxCompiler:
                     # Nested Sub-Engagements (e.g. Syntheseed.com, LearnSquare)
                     if getattr(exp, "sub_engagements", None):
                         p_sub_head = doc.add_paragraph()
-                        p_sub_head.paragraph_format.space_before = Pt(2.0)
-                        p_sub_head.paragraph_format.space_after = Pt(1.0)
-                        p_sub_head.paragraph_format.left_indent = Inches(0.15)
+                        p_sub_head.paragraph_format.space_before = Pt(6.0)
+                        p_sub_head.paragraph_format.space_after = Pt(2.0)
+                        p_sub_head.paragraph_format.left_indent = Inches(0.18)
                         r_sub_head = p_sub_head.add_run(
-                            getattr(exp, "sub_engagements_heading", "Key Sub-Engagements")
+                            getattr(exp, "sub_engagements_heading", "Key Sub-Engagements").upper()
                         )
                         r_sub_head.font.name = style.body_font
-                        r_sub_head.font.size = Pt(style.body_size_pt * 0.9)
+                        r_sub_head.font.size = Pt(style.body_size_pt * 0.85)
                         r_sub_head.font.bold = True
-                        r_sub_head.font.color.rgb = heading_rgb
+                        r_sub_head.font.color.rgb = accent_rgb
                         for sub in exp.sub_engagements:
                             p_sname = doc.add_paragraph()
-                            p_sname.paragraph_format.space_before = Pt(1.0)
+                            p_sname.paragraph_format.space_before = Pt(3.0)
                             p_sname.paragraph_format.space_after = Pt(1.0)
-                            p_sname.paragraph_format.left_indent = Inches(0.15)
+                            p_sname.paragraph_format.left_indent = Inches(0.22)
                             r_sname = p_sname.add_run(sub.name)
                             r_sname.font.name = style.body_font
                             r_sname.font.size = Pt(style.body_size_pt * 0.95)
