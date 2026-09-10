@@ -17,18 +17,39 @@ from app.services.jobs.job_service import JobService
 
 # Deterministic broad-query rotation for Adzuna (India-first, bounded).
 # One batch of ADZUNA_BATCH_SIZE queries is exercised per crawl cycle,
-# rotating by date so coverage is deterministic and restart-safe.
+# rotating by day-of-year so coverage is deterministic and restart-safe.
+# Categories: data analytics, data engineering, AI/ML, backend, SAP.
 ADZUNA_BROAD_QUERIES = [
-    "software engineer India",
-    "data engineer India",
-    "backend developer India",
-    "full stack developer India",
-    "machine learning engineer India",
-    "product manager India",
+    # Data analytics
     "data analyst India",
-    "devops engineer India",
+    "business analyst India",
+    "BI analyst India",
+    "reporting analyst India",
+    # Data engineering
+    "data engineer India",
+    "analytics engineer India",
+    "ETL developer India",
+    "data warehouse India",
+    # AI / ML
+    "machine learning engineer India",
+    "AI engineer India",
+    "data scientist India",
+    "generative AI India",
+    # Backend
+    "backend developer India",
+    "Python backend India",
+    "Java backend India",
+    "API developer India",
+    # SAP
+    "SAP ABAP India",
+    "ABAP developer India",
+    "SAP HANA India",
+    "SAP BW India",
 ]
-ADZUNA_BATCH_SIZE = 8
+ADZUNA_BATCH_SIZE = 2
+# Broad rotation is India-scoped only; the primary query already covers
+# remote/global. Keeps the free-tier budget bounded (~5 calls/crawl/day).
+ADZUNA_BROAD_COUNTRIES = ("in",)
 
 
 class JobIngestionService:
@@ -142,49 +163,105 @@ class JobIngestionService:
         ]
         return self.job_repository.upsert_jobs(normalized_jobs)
 
+    @staticmethod
+    def adzuna_rotation_batch(ordinal: int, batch_size: int = ADZUNA_BATCH_SIZE) -> list[str]:
+        """Deterministic rotating batch of broad queries for a day-of-year.
+
+        Fixed rotation bug: ``(ordinal * SIZE) % len`` is 0 on every call when
+        SIZE == len; ``ordinal % len`` rotates one step per day instead.
+        """
+        total = len(ADZUNA_BROAD_QUERIES)
+        size = max(1, min(int(batch_size), total))
+        start = int(ordinal) % total
+        return [ADZUNA_BROAD_QUERIES[(start + i) % total] for i in range(size)]
+
     async def ingest_adzuna_jobs(self, query: str = "software engineer", extra_queries: Optional[list[str]] = None) -> dict[str, int]:
         """Ingest jobs from Adzuna, India-first.
 
-        Adzuna's API is country-scoped via the URL path. We run a primary
+        Adzuna's API is country-scoped via the URL path
+        (``/v1/api/jobs/in/search/{page}`` for India). We run a primary
         search against India ("in") so real India-based roles appear, plus a
-        secondary remote/global search ("remote" keyword across gb/us) so
-        global/remote roles are still present — India-first, not India-only.
+        secondary remote/global search so global/remote roles are still
+        present — India-first, not India-only.
 
         ``extra_queries`` lets us broaden coverage for companies that don't
         expose a direct ATS board (e.g. banks, large enterprises on Workday).
         """
+        from app.config import get_settings
+
+        settings = get_settings()
+        per_page = getattr(settings, "adzuna_results_per_page", 50)
+        batch_size = getattr(settings, "adzuna_queries_per_crawl", ADZUNA_BATCH_SIZE)
         adapter = AdzunaAdapter()
         crawled_jobs: list = []
 
         # Primary: India-scoped search + secondary remote/global so non-India
         # remote work still shows (India-first, not India-only).
-        india_jobs = await adapter.search_by_query(query, country="in")
+        india_jobs = await adapter.search_by_query(query, country="in", results_per_page=per_page)
         crawled_jobs.extend(india_jobs)
-        remote_jobs = await adapter.search_by_query("remote", country="gb")
+        remote_jobs = await adapter.search_by_query("remote", country="gb", results_per_page=per_page)
         crawled_jobs.extend(remote_jobs)
-        global_jobs = await adapter.search_by_query(query, country="us")
+        global_jobs = await adapter.search_by_query(query, country="us", results_per_page=per_page)
         crawled_jobs.extend(global_jobs)
 
         # Tertiary: deterministic broad-query rotation (bounded budget).
-        # One batch of ADZUNA_BATCH_SIZE broad queries × 3 countries per run;
-        # the batch rotates by date so every query is exercised over time.
-        ordinal = datetime.utcnow().timetuple().tm_yday
-        batch_start = (ordinal * ADZUNA_BATCH_SIZE) % len(ADZUNA_BROAD_QUERIES)
-        batch = [
-            ADZUNA_BROAD_QUERIES[(batch_start + i) % len(ADZUNA_BROAD_QUERIES)]
-            for i in range(ADZUNA_BATCH_SIZE)
-        ]
-        for broad_query in batch:
-            for country in ("in", "gb", "us"):
-                crawled_jobs.extend(await adapter.search_by_query(broad_query, country=country))
+        # One batch of `batch_size` India-scoped queries per run; the batch
+        # rotates by day-of-year so every query is exercised over time.
+        # ponytail: 2 queries x 1 country = 2 calls/crawl (~150/mo), not 24.
+        ordinal = datetime.now(timezone.utc).timetuple().tm_yday
+        for broad_query in self.adzuna_rotation_batch(ordinal, batch_size):
+            for country in ADZUNA_BROAD_COUNTRIES:
+                crawled_jobs.extend(
+                    await adapter.search_by_query(broad_query, country=country, results_per_page=per_page)
+                )
 
         # Company-inclusive extras for enterprises without direct ATS boards.
         for extra in extra_queries or []:
-            crawled_jobs.extend(await adapter.search_by_query(extra, country="in"))
-            crawled_jobs.extend(await adapter.search_by_query(extra, country="us"))
+            crawled_jobs.extend(await adapter.search_by_query(extra, country="in", results_per_page=per_page))
+            crawled_jobs.extend(await adapter.search_by_query(extra, country="us", results_per_page=per_page))
 
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return self.job_repository.upsert_jobs(normalized_jobs)
+        return self.job_repository.upsert_jobs(self._drop_invalid(normalized_jobs))
+
+    @staticmethod
+    def _drop_invalid(jobs: list) -> list:
+        """Filter INVALID jobs; warnings/stale pass through to the lifecycle."""
+        from app.services.jobs.job_service import validate_job
+
+        kept = []
+        for job in jobs:
+            try:
+                status, _ = validate_job(job)
+            except Exception:
+                continue
+            if status == "INVALID":
+                continue
+            kept.append(job)
+        return kept
+
+    async def ingest_jobspy_jobs(
+        self,
+        query: str = "data analyst India",
+        location: str = "India",
+        results_wanted: Optional[int] = None,
+    ) -> dict[str, int]:
+        """Ingest Naukri/LinkedIn coverage via JobSpy into the canonical pipeline."""
+        from app.config import get_settings
+        from app.crawlers.adapters.jobspy import JobSpyAdapter
+
+        settings = get_settings()
+        if not getattr(settings, "jobspy_enabled", True):
+            return {"discovered": 0, "inserted": 0, "updated": 0,
+                    "unchanged": 0, "deduplicated": 0, "skipped": 0}
+        adapter = JobSpyAdapter(
+            query=query,
+            location=location,
+            results_wanted=results_wanted or getattr(settings, "jobspy_results_wanted", 50),
+            timeout_seconds=getattr(settings, "jobspy_timeout_seconds", 60.0),
+        )
+        crawled_jobs = await adapter.discover_jobs()
+        normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
+        return self.job_repository.upsert_jobs(self._drop_invalid(normalized_jobs))
 
     async def ingest_all(self) -> dict[str, dict[str, int]]:
         """Ingest jobs from all configured sources.

@@ -93,6 +93,8 @@ class ScheduledCrawlRunner:
             cfg = _PROVIDER_CONFIG.get(target.provider)
             if cfg and cfg[0] is not None and not getattr(settings, cfg[0]):
                 continue
+            if target.source == "jobspy" and not getattr(settings, "jobspy_enabled", True):
+                continue
             out.append((target.source, target.slug))
         return out
 

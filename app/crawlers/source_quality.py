@@ -81,6 +81,54 @@ def _host(url: Optional[str]) -> str:
         return ""
 
 
+# Tracking/marketing params stripped by canonicalize_url (never identity).
+_TRACKING_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "gclid", "fbclid", "msclkid", "mc_cid", "mc_eid",
+    "igshid", "ref", "referer", "referrer", "source",
+})
+
+
+def canonicalize_url(url: Optional[str]) -> str:
+    """Deterministic canonical URL for cross-source identity resolution.
+
+    Lowercases scheme/host, drops default ports, strips tracking params and
+    fragments, removes trailing slashes, sorts remaining query params.
+    Returns "" for missing/unparseable URLs. Conservative by design: two
+    genuinely different postings never canonicalize to the same value, but
+    the same posting shared with different tracking junk does.
+    """
+    if not url or not isinstance(url, str):
+        return ""
+    try:
+        from urllib.parse import parse_qsl, urlencode, urlunparse
+
+        parsed = urlparse(url.strip())
+    except Exception:
+        return ""
+    scheme = (parsed.scheme or "https").lower()
+    if scheme not in ("http", "https"):
+        return ""
+    host = (parsed.hostname or "").lower()
+    if not host or "." not in host:
+        return ""
+    port = parsed.port
+    if port and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
+        host = f"{host}:{port}"
+    path = parsed.path or ""
+    if len(path) > 1:
+        path = path.rstrip("/")
+    try:
+        kept = sorted(
+            (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=False)
+            if k not in _TRACKING_PARAMS
+        )
+        query = urlencode(kept)
+    except Exception:
+        query = ""
+    return urlunparse((scheme, host, path, "", query, ""))
+
+
 def stable_hash(value: str) -> str:
     """Deterministic FNV-1a 32-bit hash (stable across processes)."""
     h = 0x811C9DC5
@@ -187,6 +235,12 @@ def classify_source(
 
     if platform == "adzuna":
         return SourceProvenance(SOURCE_TIER_AGGREGATOR, TIER_LABELS[SOURCE_TIER_AGGREGATOR], "adzuna", False, True, 0.5)
+
+    if platform in {"jobspy", "naukri", "linkedin"}:
+        # JobSpy discovery (Naukri/LinkedIn coverage): established-aggregator
+        # tier with medium/high confidence — above a raw secondary scrape,
+        # below an official ATS board. Never official.
+        return SourceProvenance(SOURCE_TIER_AGGREGATOR, TIER_LABELS[SOURCE_TIER_AGGREGATOR], "jobspy", False, True, 0.65)
 
     if platform == "ycombinator":
         # A YC listing is a verified startup posting; when its apply URL

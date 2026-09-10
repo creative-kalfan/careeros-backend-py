@@ -96,6 +96,8 @@ class AdzunaAdapter(BaseCrawler):
         results_per_page: int = 50,
         country: Optional[str] = None,
         page: int = 1,
+        what_and: Optional[str] = None,
+        category: Optional[str] = None,
     ) -> list[CrawledJob]:
         """Search Adzuna by keyword query with retry and exponential backoff.
 
@@ -123,6 +125,10 @@ class AdzunaAdapter(BaseCrawler):
             "results_per_page": results_per_page,
             "content-type": "application/json",
         }
+        if what_and:
+            params["what_and"] = what_and
+        if category:
+            params["category"] = category
 
         client = self._client or httpx.AsyncClient()
         owned = self._client is None

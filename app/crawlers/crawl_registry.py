@@ -24,12 +24,22 @@ from typing import Optional
 class CrawlTarget:
     """One crawlable source endpoint."""
 
-    source: str  # adapter key: ycombinator|firecrawl|ashby|greenhouse|lever|smartrecruiters|adzuna
-    slug: str  # adapter payload (adzuna: search query; firecrawl: "<company>|<careers_url>")
+    source: str  # adapter key: ycombinator|firecrawl|ashby|greenhouse|lever|smartrecruiters|adzuna|jobspy
+    slug: str  # adapter payload (adzuna/jobspy: search query; firecrawl: "<company>|<careers_url>")
     provider: str  # provider family: yc|firecrawl|ats|aggregator
     priority: int = 50  # lower = higher priority (enqueue order)
     enabled: bool = True
     notes: str = ""
+    # Company source registry metadata (all optional; defaults keep existing
+    # positional construction working). ATS/API sources are preferred over
+    # Firecrawl; aggregators (Adzuna/JobSpy) cover the long tail.
+    country: str = "IN"
+    region: str = ""
+    source_type: str = ""  # ats|aggregator|career_page|firecrawl|api
+    crawl_frequency_hours: Optional[float] = None
+    firecrawl_enabled: bool = False
+    enrichment_enabled: bool = False
+    metadata: Optional[dict] = field(default=None)
 
     @property
     def key(self) -> str:
@@ -77,7 +87,14 @@ ATS_TARGETS: list[CrawlTarget] = [
 # ---------------------------------------------------------------------------
 AGGREGATOR_TARGETS: list[CrawlTarget] = [
     CrawlTarget("adzuna", "software engineer", "aggregator", 4,
-                notes="Slug is the primary search query; adapter rotates India-first queries."),
+                notes="Slug is the primary search query; adapter rotates India-first queries.",
+                source_type="aggregator"),
+    # JobSpy (Naukri/LinkedIn coverage) shares the aggregator cadence so the
+    # provider set stays {yc, firecrawl, ats, aggregator}. Bounded single
+    # query; broader coverage comes from the Adzuna rotation + ATS boards.
+    CrawlTarget("jobspy", "data analyst India", "aggregator", 4,
+                notes="JobSpy Naukri/LinkedIn discovery; optional dep (python-jobspy).",
+                source_type="aggregator"),
 ]
 
 

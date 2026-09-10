@@ -55,8 +55,8 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
 
     Payload:
         {
-            "source": "ashby" | "greenhouse" | "smartrecruiters" | "lever" | "adzuna",
-            "slug": "notion"  # for adzuna: the search query (optional)
+            "source": "ashby" | "greenhouse" | "smartrecruiters" | "lever" | "adzuna" | "jobspy" | "ycombinator" | "firecrawl",
+            "slug": "notion"  # for adzuna/jobspy: the search query (optional)
         }
 
     Reliability behavior:
@@ -92,6 +92,8 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             result = await ingestion.ingest_lever_jobs(slug)
         elif source == "adzuna":
             result = await ingestion.ingest_adzuna_jobs(slug or DEFAULT_ADZUNA_QUERY)
+        elif source == "jobspy":
+            result = await ingestion.ingest_jobspy_jobs(slug or "data analyst India")
         elif source == "ycombinator":
             result = await ingestion.ingest_ycombinator_jobs()
         elif source == "firecrawl":

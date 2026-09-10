@@ -62,6 +62,15 @@ class Settings(BaseSettings):
     # intervals above (kept for existing deployments).
     crawl_interval_hours: Optional[float] = Field(default=None, alias="CRAWL_INTERVAL_HOURS")
 
+    # Adzuna India budget (free-tier friendly; ~1000 calls/month).
+    adzuna_queries_per_crawl: int = Field(default=2, alias="ADZUNA_QUERIES_PER_CRAWL")
+    adzuna_results_per_page: int = Field(default=50, alias="ADZUNA_RESULTS_PER_PAGE")
+
+    # JobSpy (optional dep python-jobspy; missing dep = graceful empty crawl).
+    jobspy_enabled: bool = Field(default=True, alias="JOBSPY_ENABLED")
+    jobspy_results_wanted: int = Field(default=50, alias="JOBSPY_RESULTS_WANTED")
+    jobspy_timeout_seconds: float = Field(default=60.0, alias="JOBSPY_TIMEOUT_SECONDS")
+
     # Firecrawl (backend-only credential; empty key = Firecrawl unconfigured).
     firecrawl_api_key: str = Field(default="", alias="FIRECRAWL_API_KEY")
     firecrawl_api_url: str = Field(default="https://api.firecrawl.dev/v1", alias="FIRECRAWL_API_URL")
