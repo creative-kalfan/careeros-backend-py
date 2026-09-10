@@ -58,3 +58,19 @@ def source_quality_bonus(job: Any) -> float:
 def combined_rank_score(match_overall: float, job: Any) -> float:
     """Final ranking value: candidate match plus the source-quality bonus."""
     return float(match_overall or 0) + source_quality_bonus(job)
+
+
+# Deterministic source-selection order: official ATS/API first, then the
+# official career page, then existing aggregator coverage, then Firecrawl
+# retrieval. A company is never Firecrawled when a better structured source
+# is available; unknown/empty types rank last (never selected over known).
+_SOURCE_PREFERENCE_ORDER = ("ats", "api", "career_page", "aggregator", "firecrawl")
+
+
+def select_preferred_source(source_types: list[str] | tuple[str, ...]) -> str | None:
+    """Return the highest-priority source type present, or None."""
+    present = {str(s).lower() for s in (source_types or []) if s}
+    for candidate in _SOURCE_PREFERENCE_ORDER:
+        if candidate in present:
+            return candidate
+    return None

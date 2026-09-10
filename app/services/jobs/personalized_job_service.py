@@ -336,9 +336,11 @@ class PersonalizedJobService:
     def _score_company_preference(self, job: NormalizedJob, profile: UserProfile) -> float:
         if not profile.preferred_companies:
             return 50.0
-        company = (job.company or "").lower()
+        from app.services.jobs.job_service import normalize_company_name
+
+        company = (normalize_company_name(job.company) or "").lower()
         for preferred in profile.preferred_companies:
-            if preferred.lower() in company:
+            if (normalize_company_name(preferred) or "").lower() in company:
                 return 100.0
         return 0.0
 

@@ -63,23 +63,23 @@ YC_TARGET = CrawlTarget(
 # crawler code is required; the FirecrawlAdapter handles any careers URL.
 # ---------------------------------------------------------------------------
 FIRECRAWL_TARGETS: list[CrawlTarget] = [
-    CrawlTarget("firecrawl", "PostHog|https://posthog.com/careers", "firecrawl", 2),
-    CrawlTarget("firecrawl", "Linear|https://linear.app/careers", "firecrawl", 2),
-    CrawlTarget("firecrawl", "Razorpay|https://razorpay.com/jobs/", "firecrawl", 2),
-    CrawlTarget("firecrawl", "PhonePe|https://www.phonepe.com/careers/job-openings/", "firecrawl", 2),
-    CrawlTarget("firecrawl", "CRED|https://careers.cred.club/", "firecrawl", 2),
-    CrawlTarget("firecrawl", "Zerodha|https://zerodha.com/careers", "firecrawl", 2),
+    CrawlTarget("firecrawl", "PostHog|https://posthog.com/careers", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
+    CrawlTarget("firecrawl", "Linear|https://linear.app/careers", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
+    CrawlTarget("firecrawl", "Razorpay|https://razorpay.com/jobs/", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
+    CrawlTarget("firecrawl", "PhonePe|https://www.phonepe.com/careers/job-openings/", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
+    CrawlTarget("firecrawl", "CRED|https://careers.cred.club/", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
+    CrawlTarget("firecrawl", "Zerodha|https://zerodha.com/careers", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
 ]
 
 # ---------------------------------------------------------------------------
 # Priority 3: Direct official ATS boards.
 # ---------------------------------------------------------------------------
 ATS_TARGETS: list[CrawlTarget] = [
-    CrawlTarget("ashby", "notion", "ats", 3),
-    CrawlTarget("greenhouse", "stripe", "ats", 3),
-    CrawlTarget("smartrecruiters", "servicenow", "ats", 3),
-    CrawlTarget("lever", "coupa", "ats", 3),
-    CrawlTarget("smartrecruiters", "visa", "ats", 3),
+    CrawlTarget("ashby", "notion", "ats", 3, source_type="ats"),
+    CrawlTarget("greenhouse", "stripe", "ats", 3, source_type="ats"),
+    CrawlTarget("smartrecruiters", "servicenow", "ats", 3, source_type="ats"),
+    CrawlTarget("lever", "coupa", "ats", 3, source_type="ats"),
+    CrawlTarget("smartrecruiters", "visa", "ats", 3, source_type="ats"),
 ]
 
 # ---------------------------------------------------------------------------

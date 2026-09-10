@@ -38,6 +38,39 @@ INDIA_LOCATION_ALIASES = {
     "chandigarh": "Chandigarh, India",
 }
 
+# Deterministic company aliases: variant -> canonical employer name. Only
+# exact case-insensitive matches rewrite; unrelated legal entities never
+# merge. Improves cross-source dedup-adjacent matching without fuzzy logic.
+COMPANY_ALIASES = {
+    "j.p. morgan": "JPMorgan Chase",
+    "j. p. morgan": "JPMorgan Chase",
+    "jp morgan": "JPMorgan Chase",
+    "jpmorgan": "JPMorgan Chase",
+    "jpmorgan chase": "JPMorgan Chase",
+    "j.p. morgan chase": "JPMorgan Chase",
+    "ernst & young": "EY",
+    "ernst and young": "EY",
+    "ey": "EY",
+    "ey gds": "EY",
+    "tata consultancy services": "TCS",
+    "tcs": "TCS",
+    "hcl technologies": "HCLTech",
+    "hcltech": "HCLTech",
+    "pricewaterhousecoopers": "PwC",
+    "pwc": "PwC",
+}
+
+
+def normalize_company_name(company: Optional[str]) -> Optional[str]:
+    """Rewrite known company-name variants to one canonical label."""
+    if not company or not isinstance(company, str):
+        return company
+    collapsed = " ".join(company.strip().split())
+    if not collapsed:
+        return company
+    return COMPANY_ALIASES.get(collapsed.lower(), collapsed)
+
+
 _VALID = "VALID"
 _VALID_WITH_WARNINGS = "VALID_WITH_WARNINGS"
 _INVALID = "INVALID"
@@ -149,7 +182,7 @@ class JobService:
             external_job_id=crawled.external_job_id,
             source_platform=crawled.source_platform,
             title=crawled.title,
-            company=crawled.company,
+            company=normalize_company_name(crawled.company),
             description=crawled.description,
             location=normalize_india_location(crawled.location),
             canonical_url=canonical,
