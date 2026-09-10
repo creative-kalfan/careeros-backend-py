@@ -539,3 +539,212 @@ def test_cross_domain_matrix_questioning_and_suppression(
             surf.lower() in o.display_label.lower() or surf.lower() in o.requirement_id.lower()
             for o in opps
         ), f"Expected '{surf}' to be surfaced, but opportunities were: {[o.display_label for o in opps]}"
+
+
+# ===========================================================================
+# 6. Unseen Ecosystems & Generic Relationship Provider Tests
+# ===========================================================================
+
+def test_unseen_ecosystems_generic_inference() -> None:
+    # R: tidyverse, ggplot2
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"R"}, "tidyverse")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+    assert root.lower() == "r"
+
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"R"}, "ggplot2")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+
+    # Go: Gin, GORM
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"Go"}, "Gin")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+    assert root.lower() == "go"
+
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"Go"}, "GORM")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+
+    # Rust: Tokio, Axum
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"Rust"}, "Tokio")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+    assert root.lower() == "rust"
+
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"Rust"}, "Axum")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+
+    # Ruby: Rails
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"Ruby"}, "Rails")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+    assert root.lower() == "ruby"
+
+    # PHP: Laravel
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"PHP"}, "Laravel")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+    assert root.lower() == "php"
+
+    # Kotlin: Ktor
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"Kotlin"}, "Ktor")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+    assert root.lower() == "kotlin"
+
+    # Scala: Spark
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"Scala"}, "Spark")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+    assert root.lower() == "scala"
+
+    # Dart: Flutter
+    strength, root, _ = skill_relationship_engine.evaluate_relationship({"Dart"}, "Flutter")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+    assert root.lower() == "dart"
+
+
+def test_extensibility_dynamic_ecosystem_registration() -> None:
+    from app.services.optimization.skill_relationships import GenericEcosystemSpec
+    # Register a new ecosystem that was never seen before
+    spec = GenericEcosystemSpec(
+        id="zig",
+        root="zig",
+        aliases={"ziglang"},
+        core_libraries={"zls", "zig build", "mach"},
+        associated_tooling={"zap", "gyro"},
+        specializations={"zig compiler internals"},
+    )
+    skill_relationship_engine.register_ecosystem(spec)
+
+    strength, root, fam = skill_relationship_engine.evaluate_relationship({"Zig"}, "zls")
+    assert strength == RelationshipStrength.STRONG_ECOSYSTEM
+    assert root.lower() == "zig"
+    assert fam is not None and fam.id == "zig"
+
+    strength, _, _ = skill_relationship_engine.evaluate_relationship({"Zig"}, "zig compiler internals")
+    assert strength == RelationshipStrength.SPECIALIZATION
+
+
+def test_conservative_thresholds_never_group_unrelated_technologies() -> None:
+    # Python + Java -> INDEPENDENT
+    assert skill_relationship_engine.get_relationship_strength("Python", "Java") == RelationshipStrength.INDEPENDENT
+
+    # React + Python -> INDEPENDENT
+    assert skill_relationship_engine.get_relationship_strength("Python", "React") == RelationshipStrength.INDEPENDENT
+
+    # AWS + Python -> INDEPENDENT
+    assert skill_relationship_engine.get_relationship_strength("Python", "AWS") == RelationshipStrength.INDEPENDENT
+
+    # Go + Rust -> INDEPENDENT
+    assert skill_relationship_engine.get_relationship_strength("Go", "Rust") == RelationshipStrength.INDEPENDENT
+
+    # PHP + Ruby -> INDEPENDENT
+    assert skill_relationship_engine.get_relationship_strength("PHP", "Ruby") == RelationshipStrength.INDEPENDENT
+
+
+def test_ecosystem_skills_grouped_collectively_for_candidate() -> None:
+    content = ResumeContent(
+        profile=ResumeProfile(
+            personal=PersonalInfo(full_name="Alex Dev", email="alex@example.com"),
+            summary="Python developer building CLI utilities.",
+            skills=SkillCategory(technical=["Python"]),
+            experience=[
+                ExperienceItem(
+                    company="DevCo",
+                    role="Junior Developer",
+                    responsibilities=[BulletItem(text="Built internal automation scripts with Python.")],
+                    tools=["Python"],
+                )
+            ],
+        )
+    )
+    # JD asks for Python, Pandas, NumPy, Matplotlib (no context cues in resume)
+    jd = (
+        "Data Software Engineer\n\nRequirements:\n"
+        "• Python programming.\n"
+        "• Pandas, NumPy, and Matplotlib data tools.\n"
+        "• Docker containerization.\n"
+    )
+    universal = parse_universal_jd(jd, "Data Software Engineer", "DataCo")
+    index = build_evidence_index(content)
+    report = match_requirements(universal, index)
+    opps = discover_opportunities(universal, report, index)
+
+    # Instead of 3 separate cards for Pandas, NumPy, and Matplotlib:
+    # They should be grouped into ONE collective card!
+    grouped_opps = [o for o in opps if "pandas" in o.display_label.lower()]
+    assert len(grouped_opps) == 1
+    grouped = grouped_opps[0]
+    assert "numpy" in grouped.display_label.lower()
+    assert "matplotlib" in grouped.display_label.lower()
+    assert "Your Python experience is already relevant here" in grouped.friendly_prompt
+
+
+def test_related_skill_never_auto_claimed_without_confirmation() -> None:
+    # Candidate only has Python
+    content = ResumeContent(
+        profile=ResumeProfile(
+            personal=PersonalInfo(full_name="Karan Dev", email="karan@example.com"),
+            summary="Software developer with Python experience.",
+            skills=SkillCategory(technical=["Python"]),
+            experience=[
+                ExperienceItem(
+                    company="BetaCo",
+                    role="Developer",
+                    responsibilities=[BulletItem(text="Maintained core Python backend services.")],
+                    tools=["Python"],
+                )
+            ],
+        )
+    )
+    jd = (
+        "Data Engineer\n\nRequirements:\n"
+        "• Python, Pandas, and NumPy.\n"
+    )
+    from app.services.optimization.universal_tailoring_engine import run_universal_tailoring
+    universal = parse_universal_jd(jd, "Data Engineer", "BetaCo")
+    index = build_evidence_index(content)
+    report = match_requirements(universal, index)
+    tailored_dict, plan, _, _ = run_universal_tailoring(
+        content.profile, universal, report, index
+    )
+
+    # Even though Pandas and NumPy are strong ecosystem skills of Python:
+    # They must NEVER be automatically claimed or added to skills without candidate evidence!
+    tailored_skills = [str(s).lower() for s in (tailored_dict.get("skills") or {}).get("technical", [])]
+    assert "pandas" not in tailored_skills
+    assert "numpy" not in tailored_skills
+
+
+def test_multi_source_evidence_search_finds_buried_context() -> None:
+    from app.services.optimization.resume_reconstruction import search_all_candidate_sources
+    content = ResumeContent(
+        profile=ResumeProfile(
+            personal=PersonalInfo(full_name="Jordan Lee", email="jordan@example.com"),
+            summary="Engineer with cloud background.",
+            skills=SkillCategory(technical=["Linux"]),
+            projects=[
+                ProjectItem(
+                    name="Data Pipeline",
+                    description="ETL pipeline processing events.",
+                    technologies=["PostgreSQL", "Redis"],
+                )
+            ],
+        )
+    )
+    # Search for Redis in projects
+    match = search_all_candidate_sources("Redis", content.profile)
+    assert match is not None and match.found
+    assert "projects" in match.source_section
+
+    # Search for Linux in skills
+    match_linux = search_all_candidate_sources("Linux", content.profile)
+    assert match_linux is not None and match_linux.found
+    assert "skills" in match_linux.source_section
+
+
+def test_problem_action_technology_outcome_reconstruction() -> None:
+    from app.services.optimization.resume_reconstruction import reconstruct_bullet
+    raw_bullet = "Handled recurring data inconsistencies by validating source records with SQL and Python."
+    rebuilt = reconstruct_bullet(raw_bullet, {"SQL", "Python"}, {"SQL", "Python"})
+    assert "Resolved" in rebuilt or "Validated" in rebuilt
+    assert "data inconsistencies" in rebuilt
+    assert "SQL" in rebuilt
+    assert "Python" in rebuilt
+    # No invented % or numbers
+    assert "%" not in rebuilt
+    assert not extract_real_metrics(rebuilt)
+

@@ -192,6 +192,9 @@ class _ScoredCandidate:
     score: float
     opportunity_type: OpportunityType
     related: List[str]
+    friendly_title: Optional[str] = None
+    friendly_prompt: Optional[str] = None
+    friendly_helper: Optional[str] = None
 
 
 def _classify_opportunity_type(match: RequirementMatch) -> OpportunityType:
@@ -410,6 +413,77 @@ def discover_opportunities(
             best.score = round(best.score + 0.1, 3)
         deduped.append(best)
 
+    # 4b. Generalize Candidate Question Grouping (Section 4)
+    # If candidate has a verified root language (e.g. Python, Go, Rust, React, etc.)
+    # and multiple JD requirements are related ecosystem tools, group them collectively
+    # into a single card rather than separate repetitive interrogation cards.
+    root_groups: Dict[str, List[_ScoredCandidate]] = {}
+    non_grouped: List[_ScoredCandidate] = []
+    for cand in deduped:
+        req_text = cand.match.requirement.text
+        strength, root, fam = skill_relationship_engine.evaluate_relationship(index.skill_set, req_text)
+        is_actual_cand_skill = bool(
+            root and any(c.lower().strip() == root.lower().strip() for c in index.skill_set)
+        )
+        if (
+            strength == RelationshipStrength.STRONG_ECOSYSTEM
+            and root
+            and is_actual_cand_skill
+            and fam
+            and fam.id not in ("cloud_devops", "soft_skills", "productivity_office")
+        ):
+            root_groups.setdefault(root, []).append(cand)
+        else:
+            non_grouped.append(cand)
+
+    consolidated_cands: List[_ScoredCandidate] = list(non_grouped)
+    for root, cands in root_groups.items():
+        if len(cands) >= 2:
+            labels = [_display_label(c.match.requirement.text) for c in cands]
+            combined_label = ", ".join(labels)
+            combined_req_text = ", ".join(c.match.requirement.text for c in cands)
+            combined_norm = " ".join(c.match.requirement.normalized_key for c in cands)
+            combined_related = [f"Verified {root} experience on your resume"]
+            for c in cands:
+                combined_related.extend(c.related)
+            combined_related = combined_related[:3]
+            score = max(c.score for c in cands) + 0.3
+            from app.services.optimization.jd_requirements import UniversalRequirement
+            comp_req = UniversalRequirement(
+                text=combined_req_text,
+                normalized_key=combined_norm,
+                importance=cands[0].match.requirement.importance,
+                category="tool",
+            )
+            comp_match = RequirementMatch(
+                requirement=comp_req,
+                provenance="UNSUPPORTED",
+                strength=0.0,
+            )
+            root_disp = root.title() if len(root) > 1 else root.upper()
+            friendly_title = f"Tools commonly used with {root_disp}"
+            friendly_prompt = (
+                f"Your {root_disp} experience is already relevant here. "
+                f"This role also mentions a few tools commonly used alongside {root_disp}. "
+                f"Have you used any of these?"
+            )
+            friendly_helper = "Tell us a little about where you used them, if you remember."
+            consolidated_cands.append(
+                _ScoredCandidate(
+                    match=comp_match,
+                    score=score,
+                    opportunity_type=OpportunityType.TOOL_EXPOSURE,
+                    related=combined_related,
+                    friendly_title=friendly_title,
+                    friendly_prompt=friendly_prompt,
+                    friendly_helper=friendly_helper,
+                )
+            )
+        else:
+            consolidated_cands.extend(cands)
+
+    deduped = consolidated_cands
+
     # 5. Rank by value, suppress long statements already covered by selected
     # short cards ("Strong experience with React..." is covered once "React"
     # and "TypeScript" cards are selected), then cap.
@@ -432,6 +506,12 @@ def discover_opportunities(
         match = cand.match
         label = _display_label(match.requirement.text)
         title, prompt, helper = _friendly_copy(label, cand.opportunity_type)
+        if cand.friendly_title:
+            title = cand.friendly_title
+        if cand.friendly_prompt:
+            prompt = cand.friendly_prompt
+        if cand.friendly_helper:
+            helper = cand.friendly_helper
         for text in (title, prompt, helper):
             _assert_friendly(text)
         opportunities.append(
@@ -479,7 +559,8 @@ _CONTEXT_CUES: List[Tuple[ExperienceContext, Tuple[str, ...]]] = [
 _UNCERTAIN_RECALL_RE = re.compile(
     r"\b(don't remember|do not remember|can't remember|cannot remember|"
     r"not sure where|not sure which|can't recall|cannot recall|hard to recall|"
-    r"forgot where|forgot which|don't recall|do not recall)\b",
+    r"forgot where|forgot which|don't recall|do not recall|"
+    r"used before|used it before|worked with before|worked with it before|years ago)\b",
     re.IGNORECASE,
 )
 _NEGATION_RE = re.compile(
@@ -690,6 +771,77 @@ def extract_facts_from_response(
         fine_groups = [[free_text]]
 
     for opp in selected:
+        sub_tools = [s.strip() for s in opp.display_label.split(",") if s.strip()]
+        if len(sub_tools) > 1:
+            has_general_affirmation = any(
+                aff in free_text.lower()
+                for aff in ("used all", "used both", "worked with all", "worked with these", "used these", "experience with all", "used each", "used them")
+            )
+            has_general_decline = (
+                bool(_NEGATION_RE.search(free_text))
+                and any(dec in free_text.lower() for dec in ("none of", "never used any", "haven't used any", "no experience with any", "neither"))
+            )
+            if has_general_decline:
+                result.declined_ids.append(opp.id)
+                continue
+
+            sub_facts_added = 0
+            for sub_tool in sub_tools:
+                sub_norm = normalize_key(sub_tool)
+                sub_verdict = _area_verdict(fine_groups, free_text, sub_norm, sub_tool)
+                if sub_verdict == "decline":
+                    continue
+                if sub_verdict == "uncertain_recall":
+                    context = response.context_hints.get(opp.id) or ExperienceContext.OTHER
+                    result.facts.append(
+                        CandidateConfirmedFact(
+                            opportunity_id=opp.id,
+                            requirement_id=sub_tool,
+                            normalized_requirement=sub_norm,
+                            display_label=sub_tool,
+                            selected=True,
+                            candidate_context=context,
+                            candidate_description=f"Confirmed familiarity with {sub_tool} from background",
+                            project_name=None,
+                            provenance="candidate_confirmed",
+                            confidence=0.55,
+                        )
+                    )
+                    sub_facts_added += 1
+                    continue
+                is_mentioned = _mentions_requirement(free_text, sub_norm, sub_tool)
+                if is_mentioned or has_general_affirmation:
+                    mentioning = [
+                        seg for group in fine_groups for seg in group
+                        if _mentions_requirement(seg, sub_norm, sub_tool) and not _NEGATION_RE.search(seg)
+                    ]
+                    if not mentioning and has_general_affirmation:
+                        mentioning = [free_text]
+                    siblings = _sibling_segments(fine_groups, mentioning)
+                    context = _classify_context_for(
+                        mentioning,
+                        siblings,
+                        response.context_hints.get(opp.id),
+                    )
+                    result.facts.append(
+                        CandidateConfirmedFact(
+                            opportunity_id=opp.id,
+                            requirement_id=sub_tool,
+                            normalized_requirement=sub_norm,
+                            display_label=sub_tool,
+                            selected=True,
+                            candidate_context=context,
+                            candidate_description=" ".join(mentioning)[:500],
+                            project_name=_project_name_for_clauses(mentioning, siblings, project_name),
+                            provenance="candidate_confirmed",
+                            confidence=0.75 if context != ExperienceContext.OTHER else 0.6,
+                        )
+                    )
+                    sub_facts_added += 1
+            if sub_facts_added == 0 and not has_general_decline:
+                ambiguous.append(opp)
+            continue
+
         verdict = _area_verdict(
             fine_groups, free_text, opp.normalized_requirement, opp.display_label
         )
