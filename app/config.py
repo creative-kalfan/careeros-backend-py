@@ -85,6 +85,14 @@ class Settings(BaseSettings):
         alias="MAX_RESUME_UPLOAD_BYTES",
     )
 
+    # Friendly batch evidence discovery: maximum improvement opportunities
+    # surfaced in ONE collective interaction (default 5, hard cap 6).
+    # Configurable via TAILORING_MAX_OPPORTUNITIES; per-request override wins.
+    tailoring_max_opportunities: int = Field(
+        default=5,
+        alias="TAILORING_MAX_OPPORTUNITIES",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
