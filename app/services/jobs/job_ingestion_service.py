@@ -260,7 +260,10 @@ class JobIngestionService:
             timeout_seconds=getattr(settings, "jobspy_timeout_seconds", 60.0),
         )
         crawled_jobs = await adapter.discover_jobs()
-        normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
+        normalized_jobs = [
+            self._apply_source_quality(self.job_service.normalize_and_classify(j))
+            for j in crawled_jobs
+        ]
         return self.job_repository.upsert_jobs(self._drop_invalid(normalized_jobs))
 
     async def ingest_all(self) -> dict[str, dict[str, int]]:

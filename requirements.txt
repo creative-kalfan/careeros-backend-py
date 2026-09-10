@@ -16,3 +16,4 @@ python-docx==1.1.2
 PyJWT[crypto]==2.13.0
 parsel==1.11.0
 sentry-sdk==2.19.2
+python-jobspy==1.1.82

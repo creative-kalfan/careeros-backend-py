@@ -19,7 +19,7 @@ This document is the single source of truth for the entire CareerOS codebase. It
 - **Current HEAD:** `a8595338d4b1ca2436c4685d040b5d87bdb6d76b`
 - **Commit Message:** `feat(ingestion): upgrade India-first multi-source job pipeline`
 - **Preceding Base Release:** `980772448d9f8eba5c972f167b826949500b0e41`
-- **Technology:** Python 3.11.9, FastAPI 0.115.6, Uvicorn 0.34.0, Pydantic v2 (2.10.4), Supabase Python client 2.11.0, PyMuPDF 1.25.3, python-docx 1.1.2, ARQ 0.26.1, Redis 5.3.1, APScheduler 3.11.3, PyJWT[crypto] 2.13.0, Sentry SDK 2.19.2.
+- **Technology:** Python 3.11.9, FastAPI 0.115.6, Uvicorn 0.34.0, Pydantic v2 (2.10.4), Supabase Python client 2.11.0, PyMuPDF 1.25.3, python-docx 1.1.2, ARQ 0.26.1, Redis 5.3.1, APScheduler 3.11.3, PyJWT[crypto] 2.13.0, Sentry SDK 2.19.2, python-jobspy 1.1.82 (worker dependency for Naukri/LinkedIn discovery; deferred import keeps startup safe when absent).
 - **Rule:** Exact repository name is `careeros-backend-py`. Never create `backend-v2`, `careos-backend-py`, or duplicate folders.
 
 ### 1.2 Canonical Frontend: `careeros-frontend` (also referenced as `careos-frontend`)
@@ -174,7 +174,7 @@ resume-pilot/ (Parent Wrapper)
 │
 ├── careeros-backend-py/ (Canonical Backend — FastAPI)
 │   ├── Dockerfile
-│   ├── requirements.txt (PyJWT[crypto]==2.13.0)
+│   ├── requirements.txt (PyJWT[crypto]==2.13.0, python-jobspy==1.1.82)
 │   ├── pytest.ini
 │   ├── .env.example
 │   ├── app/
@@ -232,7 +232,7 @@ resume-pilot/ (Parent Wrapper)
 | `app/db/supabase.py` | Singletons for administrative service client and authenticated client | Repositories, Auth |
 | `app/services/ats/ats_analyzer.py` | 5-subscore ATS evaluation against requirement lexicon (1016 lines) | `app/api/routes/ats.py` |
 | `app/services/ats/semantic_reasoner.py` | Sliced LLM reasoning with hallucination verification | `app/services/ats/ats_analyzer.py` |
-| `app/services/jobs/job_ingestion_service.py` | Ingestion pipeline orchestration, source quality tagging, dedup; Adzuna India rotation (`adzuna_rotation_batch`, 20 India queries, 2/crawl, India-only broad scope), validation filter (`_drop_invalid`), JobSpy ingest | `app/workers/jobs/crawl_jobs.py` |
+| `app/services/jobs/job_ingestion_service.py` | Ingestion pipeline orchestration, source quality tagging, dedup; Adzuna India rotation (`adzuna_rotation_batch`, 20 India queries, 2/crawl, India-only broad scope), validation filter (`_drop_invalid`), JobSpy ingest (with `_apply_source_quality` provenance: tier 5 / provider `jobspy` / 0.65 confidence) | `app/workers/jobs/crawl_jobs.py` |
 | `app/services/jobs/ingestion_validation.py` | Bounded dry-run + pure metric aggregation (`dry_run_provider`, `summarize_jobs`, `dedup_report`, `firecrawl_report`, `role_coverage`, `company_coverage`, `source_report`); hard caps (≤5 queries, 1 page/query, ≤50/query, ≤20 Firecrawl); dry-run never writes DB, persist delegates to `JobIngestionService` | CLI (`python -m`), validation runs |
 | `app/services/jobs/job_service.py` | Normalization + `normalize_india_location()` (Bangalore→Bengaluru etc., intl passthrough), `validate_job()` (VALID/WARNINGS/INVALID/STALE), `needs_enrichment()`/`merge_enrichment()` (selective Firecrawl gate, never overwrites structured data), canonical URL wiring | `app/services/jobs/job_ingestion_service.py` |
 | `app/crawlers/adapters/jobspy.py` | JobSpy discovery (Naukri/LinkedIn) behind BaseCrawler; optional `python-jobspy` dep, `map_jobspy_record()`, timeout/failure isolation to `[]` | `app/services/jobs/job_ingestion_service.py` |
@@ -340,14 +340,14 @@ resume-pilot/ (Parent Wrapper)
 ## 9. Current Testing & Validation State
 
 ### 9.1 Backend Testing (`careeros-backend-py`)
-- **Suite:** 56 Pytest test files + `__init__.py` under `tests/` (incl. `test_job_ingestion_2o.py`: 15 tests; `test_ingestion_validation.py`: 8 tests for limits/metrics/dry-run safety).
+- **Suite:** 56 Pytest test files + `__init__.py` under `tests/` (incl. `test_job_ingestion_2o.py`: 18 tests; `test_ingestion_validation.py`: 8 tests for limits/metrics/dry-run safety).
 - **Framework:** Pytest 8.3.4, `pytest-asyncio` 0.24.0 (auto mode).
-- **Latest Verified Execution (2026-09-10, with ingestion-validation changes):**
-  - **Collected:** 1007 items.
-  - **Passed:** 993 tests passed (incl. all 8 new + all 15 ingestion-2.0 tests).
-  - **Skipped:** 0 collected as skipped (live-credential tests exercised skip paths inline).
+- **Latest Verified Execution (2026-09-10, with JobSpy enablement changes):**
+  - **Collected:** 1010 items.
+  - **Passed:** 996 tests passed (incl. all 3 new JobSpy tests + all 15 ingestion-2.0 + all 8 validation tests + all 76 ingestion/crawler/scheduler/repo targeted).
+  - **Skipped:** 0 collected as skipped (live-credential tests exercised skip paths inline; the missing-dep test runs wherever `jobspy` is unimportable and self-skips where installed).
   - **Failed:** 14 failed — SAME 14 pre-existing failures as the 2026-09-10 Ingestion 2.0 baseline (no regressions, no new failures): 6× `test_copilot.py` (`/api/copilot/chat` route unmounted → 404, stub-only per §10), 8× resume visual/style golden tests (Groq rate-limit → legacy-parser fallback + pixel diffs).
-  - **Runtime:** ~296 seconds.
+  - **Runtime:** ~304 seconds.
 - **Prerequisite:** Fresh virtual environments require setting test Supabase environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) as documented in backend `README.md`.
 
 ### 9.2 Frontend Testing (`careeros-frontend`)
@@ -417,7 +417,7 @@ resume-pilot/ (Parent Wrapper)
 8. **Missing Consolidated Dashboard Endpoint:** The frontend makes 4 independent queries on dashboard load (`/applications/stats`, `/recommendations/top`, `/jobs/saved`, `/jobs`) because no dedicated `/api/dashboard` endpoint exists.
 9. **Process-Local Event Bus:** The in-process `EventBus` does not survive server restarts and cannot publish domain events across distributed background workers.
 10. **Uncommitted Obsolete Frontend Components:** 6 obsolete resume/optimization prototype files (`ats-dashboard.tsx`, `optimization-workspace.tsx`, etc.) and 1 build log (`vite.err`) remain uncommitted in the frontend working tree.
-11. **JobSpy Optional Dependency:** `python-jobspy` is intentionally NOT in `requirements.txt`. The adapter degrades to an empty (logged) crawl when uninstalled; install it only on workers that run JobSpy discovery. No RLS/schema impact (reuses `JobIngestionService` → `JobRepository.upsert_jobs`). Live-validated 2026-09-10: NOT VALIDATED — package not installed in this environment (`importlib.find_spec('jobspy') is None`), so JobSpy discovery returns `[]` by design; integration intact, no fake results recorded.
+11. **JobSpy Worker Dependency (RESOLVED 2026-09-10):** `python-jobspy==1.1.82` is now declared in `requirements.txt` (exact pin, matching project policy), so Docker builds and fresh environments install it. The adapter keeps its deferred `from jobspy import scrape_jobs` import inside `_scrape_sync()`, so application startup never depends on it: missing dep → logged `[]` → other providers continue (verified live: `find_spec('jobspy') is None` → `discover_jobs() == []`). Live validation: LinkedIn VALIDATED (5/5 real India records through the canonical pipeline, §14); Naukri BLOCKED by provider anti-bot (HTTP 406 recaptcha, §14) — no code workaround, no custom scraping. Provenance gap fixed: `ingest_jobspy_jobs` now wraps normalization with `_apply_source_quality` (tier 5 / `jobspy` / 0.65), matching the YC/Firecrawl paths.
 12. **No New Migrations for Ingestion 2.0:** Provenance (`source_history`), freshness (`last_seen_at`), and dedup (migration 013 index) already cover multi-source needs. Cross-source duplicates stay conservative (separate rows) until a `canonical_url` unique constraint is proven safe — no fuzzy merging.
 13. **Adzuna Credentials Read Directly From Process Env:** `AdzunaAdapter.__init__` reads `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` via `os.getenv`, not via `Settings` (which loads `.env`). Under plain `python` runs the adapter reports "credentials not configured" unless something loads `.env` first (e.g. `dotenv.load_dotenv`); in deployed workers the vars are exported so ingestion is unaffected. No change made (out of scope); validation runs load `.env` explicitly.
 14. **Canonical URLs Keep Non-Tracking Params (`se`, `v`):** Observed 2026-09-10 on real Adzuna URLs — only the documented tracking set is stripped. Conservative (same posting re-shared with different `se`/`v` stays separate) — accepted, matches the no-fuzzy-merge policy.
@@ -430,7 +430,7 @@ resume-pilot/ (Parent Wrapper)
 - **Frontend Head:** `64cd6e6c4e348973f1003cb0354dc999c6b66af1` (`main`, untouched — no frontend changes).
 - **Job Ingestion 2.0 (prior update):** Production code + tests modified (no migrations): Adzuna India rotation fix + bounded budget, JobSpy adapter (optional dep), `canonicalize_url()`, `validate_job()`, India location normalization, selective Firecrawl enrichment guards, registry metadata fields, `jobspy` worker branch, provider-scoped scheduling flag. All providers flow through `JobIngestionService` → `JobRepository.upsert_jobs`; API contracts unchanged.
 - **Ingestion Validation (this update, 2026-09-10):** +2 files, no migrations, no endpoint, no frontend changes: `app/services/jobs/ingestion_validation.py` (bounded dry-run CLI + pure metric aggregation reusing canonical primitives) and `tests/test_ingestion_validation.py` (8 mocked tests). Full suite: 993 passed / 14 pre-existing failures (identical to baseline, §9.1). Live evidence in §13; nothing was persisted by validation runs (dry-run only, 2 Adzuna calls + 1 Firecrawl probe call).
-- **Git State:** Backend changes committed + pushed to `careeros-backend-py@main`. This document's canonical home is now `careeros-backend-py/COMPLETE_SYSTEM.md` (relocated from the wrapper per task §21 — the wrapper repo carries large unrelated unstaged legacy deletions and is not a safe commit target; the wrapper copy is left untouched and stale by design). No push to the legacy backend, no force-push. See commit SHAs in the completion report.
+- **JobSpy Enablement (this update, 2026-09-10):** +3 files, no migrations, no endpoint, no frontend changes: `requirements.txt` (+`python-jobspy==1.1.82`), `app/services/jobs/job_ingestion_service.py` (provenance wrapper on the JobSpy path, 1 line), `tests/test_job_ingestion_2o.py` (+3 tests: missing-dep fallback, timeout isolation, provenance attach). Live evidence in §13.2/§13.11 (LinkedIn 5 real records, Naukri 406-blocked, 0 DB writes); full suite 996 passed / same 14 pre-existing failures (§9.1).- **Git State:** Backend changes committed + pushed to `careeros-backend-py@main`. This document's canonical home is now `careeros-backend-py/COMPLETE_SYSTEM.md` (relocated from the wrapper per task §21 — the wrapper repo carries large unrelated unstaged legacy deletions and is not a safe commit target; the wrapper copy is left untouched and stale by design). No push to the legacy backend, no force-push. See commit SHAs in the completion report.
 
 ---
 
@@ -446,8 +446,13 @@ Method: `dry_run_provider("adzuna", [...], ValidationLimits(max_queries=2, resul
 - Roles: analytics 8, ai_ml 6, other 3, data_engineering 0, backend 0, sap 0 — query-targeted sample, not a coverage census; the 20-query rotation covers the remaining domains over successive crawls.
 - Live DB cross-check (read-only): 668 active jobs in DB (sampled mix: 477 greenhouse, 17 ycombinator, 4 firecrawl, 2 workday); overlap with the 17 Adzuna canonicals: **0** → the Adzuna sample is 100% incremental vs current DB content.
 
-### 13.2 JobSpy / Naukri / LinkedIn (NOT VALIDATED — reason recorded)
-- `python-jobspy` is not installed in this environment, so `JobSpyAdapter.discover_jobs()` returns `[]` by design (logged, isolated). Integration is intact (`ingest_jobspy_jobs` → canonical pipeline, covered by mocked tests). No fake results recorded. Validate on a worker with the optional dep installed.
+### 13.2 JobSpy / Naukri / LinkedIn (live-validated 2026-09-10, bounded)
+- Method: isolated `python-jobspy==1.1.82` venv (Python 3.11.9, same as backend) so the dev env's numpy/pandas set was untouched; 1 query × 1 site × `results_wanted=5` per probe. Real records fed through the canonical pipeline in the main env (`map_jobspy_record` → `normalize_and_classify` → `validate_job` → `summarize/dedup/role` metrics, zero DB writes). DB overlap checked read-only against live Supabase (2851 total / 668 active jobs).
+- **Naukri: BLOCKED — provider anti-bot, no workaround.** `scrape_jobs(site_name=["naukri"], search_term="data analyst", location="India")` returned HTTP 406 `{"message":"recaptcha required"}` in 2.1s → 0 records. Reason recorded, no fake results, no custom scraping (per policy the JobSpy abstraction stays responsible for provider access). Re-validate quarterly or from a worker network with different egress; do not schedule Naukri crawls until a probe succeeds.
+- **LinkedIn: VALIDATED.** Same bounds returned 5 real records in 2.8s (Americana Restaurants/Mohali, SLB/Dehradun, Arcana/Coimbatore, Colosseus/Ajmer, Arcgate/Udaipur — long-tail India cities ATS boards miss). Pipeline: raw 5 → mapped 5 → valid-with-warnings 4 (thin: no description, `linkedin_fetch_description` needs auth so stays off) → stale 1 (posted 2025-05-02, >90d) → invalid 0. Unique canonical 5/5, India-relevant 5/5, in-sample dup 0%.
+- **Incremental value: 5/5 (100%) vs live DB** — 0/5 LinkedIn canonical URLs overlap the 668 active jobs (greenhouse 615, firecrawl 31, ycombinator 20, workday 2, adzuna 0, jobspy 0). Same pattern as the Adzuna sample (17/17 incremental): aggregators cover sets disjoint from the ATS-heavy DB.
+- **Provenance (after fix):** rows carry `source_platform=jobspy`, `source_provider=jobspy`, `source_tier=5` (aggregator), `source_confidence=0.65`, stable `external_job_id` (`li-<linkedin-id>`), `canonical_url=https://www.linkedin.com/jobs/view/<id>`. Multi-source rule unchanged: a later JobSpy sighting of an existing job updates `last_seen_at` via `(source_platform, external_job_id)` identity; same canonical URL across providers stays separate rows (no fuzzy merge).
+- **Firecrawl interaction:** `ingest_jobspy_jobs` never calls `needs_enrichment`/Firecrawl (verified by code read). Thin LinkedIn records flag `requiring_enrichment` under the generic gate, but aggregator URLs are NOT enrichment targets — Firecrawl stays scoped to official career pages (§13.6 conclusion stands).
 
 ### 13.3 Cross-Source Deduplication (measured on real sample + DB)
 - Within-sample: 17 raw → 17 canonical (0% dup, single-source each).
@@ -473,7 +478,8 @@ Method: `dry_run_provider("adzuna", [...], ValidationLimits(max_queries=2, resul
 | Provider | Analytics | Data Eng | AI/ML | Backend | SAP | Other |
 |----------|-----------|----------|-------|---------|-----|-------|
 | Adzuna (2-query sample) | 8 | 0 | 6 | 0 | 0 | 3 |
-| JobSpy | NOT VALIDATED | — | — | — | — | — |
+| JobSpy/LinkedIn (1-query live sample) | 4 | 0 | 0 | 0 | 0 | 1 |
+| JobSpy/Naukri | BLOCKED (406) | — | — | — | — | — |
 | ATS (DB mix) | — | — | — | — | — | — (not bucketed this pass; titles are SE-heavy by registry) |
 
 ### 13.9 Company Coverage Gaps (registry vs Adzuna sample)
@@ -484,3 +490,22 @@ Method: `dry_run_provider("adzuna", [...], ValidationLimits(max_queries=2, resul
 - No public/internal report endpoint (§15-optional): existing crawl-status Redis records + DB rows + dry-run CLI output provide equivalent observability; an endpoint adds attack surface for no new capability. Add when an admin UI needs it.
 - No full 20-query Adzuna census: would spend ~20+ calls for a census a rotating daily crawl produces for free over time.
 - No JSearch integration (§13 of task): decision stands, documented above.
+- No new `JOBSPY_MAX_RESULTS / JOBSPY_MAX_QUERIES / JOBSPY_CONCURRENCY` settings: existing `JOBSPY_RESULTS_WANTED` (adapter-clamped ≤200) + `JOBSPY_TIMEOUT_SECONDS` + `JOBSPY_ENABLED` kill-switch + `ValidationLimits` hard caps (≤5 queries, 1 page, ≤50/query) already bound every axis; aliases would duplicate one value under two names. Add only if a second JobSpy query-per-crawl is ever scheduled.
+- No per-resume/role hard-coding, no second ingestion path, no custom LinkedIn scraping, no Firecrawl follow-up on aggregator URLs, no migrations (provenance/freshness/dedup columns already cover JobSpy rows).
+
+### 13.11 JobSpy Production Crawl Strategy (evidence-based, 2026-09-10)
+- **LinkedIn: ENABLED at aggregator cadence (lowest priority).** 5/5 India-relevant, 100% incremental vs DB, 2.8s for 5 results. Keep the single registry target (`jobspy` / `data analyst India`, provider `aggregator`, 24h) with defaults (`JOBSPY_RESULTS_WANTED=50`, `JOBSPY_TIMEOUT_SECONDS=60`). Worker safety already in place: ARQ `timeout=300`/`max_tries=2`, Redis `crawl_lock:{source}:{slug}` (300s TTL), adapter timeout → `[]`, failure isolation, idempotent upsert, crawl-status recording. `JOBSPY_ENABLED=false` is the kill-switch.
+- **Naukri: NOT SCHEDULED until a probe succeeds.** HTTP 406 recaptcha block; re-probe quarterly. No code changes for it.
+- **Do not raise frequency or query count without new evidence.** One thin-description LinkedIn query per day is proportionate to its incremental yield; Adzuna rotation + ATS boards remain the primary India engines.
+- **Adzuna vs JobSpy (actuals):**
+
+| Metric | Adzuna (2-query sample) | JobSpy/LinkedIn (1-query live) | JobSpy/Naukri |
+|--------|------------------------:|-------------------------------:|---------------|
+| Raw results | 17 | 5 | BLOCKED (406) |
+| Valid (+warnings) | 15 | 4 | — |
+| Unique canonical | 17 | 5 | — |
+| Incremental vs DB | 17/17 (100%) | 5/5 (100%) | — |
+| India relevance | 17/17 (100%) | 5/5 (100%) | — |
+| Duplicate rate | 0.0% | 0.0% | — |
+| Target-role coverage | analytics 8, ai_ml 6 | analytics 4, other 1 | — |
+| Errors | 0 | 0 (Naukri probe: 406 recaptcha) | 406 recaptcha |

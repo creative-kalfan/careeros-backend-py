@@ -258,3 +258,58 @@ async def test_worker_jobspy_branch_idempotent():
         mod.JobIngestionService = orig
     assert result["success"] is True
     ingestion.ingest_jobspy_jobs.assert_awaited_once_with("data analyst India")
+
+
+def test_jobspy_missing_dependency_degrades_to_empty():
+    """Without python-jobspy installed, discovery returns [] (never raises)."""
+    import importlib.util
+
+    if importlib.util.find_spec("jobspy") is not None:
+        pytest.skip("python-jobspy installed; unavailable-path not exercisable here")
+    from app.crawlers.adapters.jobspy import JobSpyAdapter
+
+    assert JobSpyAdapter()._scrape_sync() == []
+
+
+@pytest.mark.asyncio
+async def test_jobspy_timeout_isolated_to_empty():
+    """A hung provider hits the adapter timeout and isolates to [] (never raises)."""
+    import asyncio
+
+    from app.crawlers.adapters.jobspy import JobSpyAdapter
+
+    async def slow(**kw):
+        await asyncio.sleep(5)
+        return [{"title": "x"}]
+
+    adapter = JobSpyAdapter(fetch_fn=slow, timeout_seconds=0.05)
+    assert await adapter.discover_jobs() == []
+
+
+@pytest.mark.asyncio
+async def test_jobspy_ingest_attaches_provenance():
+    """JobSpy rows carry tier/provider/confidence via the shared quality wrapper."""
+    service = JobIngestionService()
+    service.job_repository = MagicMock()
+    service.job_repository.upsert_jobs.return_value = {"inserted": 1}
+    import app.crawlers.adapters.jobspy as jobspy_mod
+    from app.crawlers.adapters.jobspy import JobSpyAdapter
+
+    async def fake_fetch(**kw):
+        return [
+            {"title": "Data Analyst", "company": "Zoho", "location": "Chennai",
+             "description": "SQL " * 60, "job_url": "https://www.linkedin.com/jobs/view/9",
+             "site": "linkedin", "id": "li-9"},
+        ]
+
+    orig = jobspy_mod.JobSpyAdapter
+    try:
+        jobspy_mod.JobSpyAdapter = lambda **kw: JobSpyAdapter(fetch_fn=fake_fetch, **{k: v for k, v in kw.items() if k in ("query", "location", "results_wanted")})
+        await service.ingest_jobspy_jobs("data analyst India")
+    finally:
+        jobspy_mod.JobSpyAdapter = orig
+    rows = service.job_repository.upsert_jobs.call_args.args[0]
+    assert len(rows) == 1
+    assert rows[0].source_provider == "jobspy" and rows[0].source_tier == 5
+    assert rows[0].source_confidence == 0.65
+    assert rows[0].canonical_url == "https://www.linkedin.com/jobs/view/9"
