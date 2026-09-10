@@ -283,13 +283,6 @@ def parsed_resume_to_resume_content(parsed: ParsedResume) -> ResumeContent:
     to the existing application schema.
     """
     effective_projects = map_projects(parsed.projects)
-    if not effective_projects:
-        sub_projects = [
-            sub for exp in parsed.experience for sub in getattr(exp, "sub_engagements", [])
-        ]
-        if sub_projects:
-            effective_projects = map_projects(sub_projects)
-
     profile = ResumeProfile(
         personal=map_contact(parsed.contact),
         target_role=None,

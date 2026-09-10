@@ -104,6 +104,7 @@ class ExperiencePosition:
     date_range: str = ""
     bullets: list[BulletElement] = field(default_factory=list)
     sub_engagements: list[ProjectEntry] = field(default_factory=list)
+    sub_engagements_heading: str = "Key Sub-Engagements"
 
 
 @dataclass
@@ -361,6 +362,7 @@ def build_document_model(
 
     # Build Experience
     experience_positions: list[ExperiencePosition] = []
+    _sub_engagement_names: set[str] = set()
     for exp in profile.experience:
         bullets = [
             BulletElement(id=b.id, text=b.text)
@@ -369,6 +371,7 @@ def build_document_model(
         ]
         sub_entries: list[ProjectEntry] = []
         for sub in getattr(exp, "sub_engagements", []):
+            _sub_engagement_names.add((sub.name or "").strip().lower())
             sub_b = [
                 BulletElement(id=b.id, text=b.text)
                 for b in getattr(sub, "responsibilities", [])
@@ -392,6 +395,7 @@ def build_document_model(
                 date_range=dates,
                 bullets=bullets,
                 sub_engagements=sub_entries,
+                sub_engagements_heading="Key Sub-Engagements",
             )
         )
 
@@ -425,6 +429,9 @@ def build_document_model(
                 break
 
     for proj in profile.projects:
+        proj_name = (proj.name or "").strip().lower()
+        if proj_name and proj_name in _sub_engagement_names:
+            continue
         bullets = []
         if hasattr(proj, "responsibilities") and proj.responsibilities:
             for b in proj.responsibilities:

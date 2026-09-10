@@ -198,6 +198,17 @@ class DocxCompiler:
 
                     # Nested Sub-Engagements (e.g. Syntheseed.com, LearnSquare)
                     if getattr(exp, "sub_engagements", None):
+                        p_sub_head = doc.add_paragraph()
+                        p_sub_head.paragraph_format.space_before = Pt(2.0)
+                        p_sub_head.paragraph_format.space_after = Pt(1.0)
+                        p_sub_head.paragraph_format.left_indent = Inches(0.15)
+                        r_sub_head = p_sub_head.add_run(
+                            getattr(exp, "sub_engagements_heading", "Key Sub-Engagements")
+                        )
+                        r_sub_head.font.name = style.body_font
+                        r_sub_head.font.size = Pt(style.body_size_pt * 0.9)
+                        r_sub_head.font.bold = True
+                        r_sub_head.font.color.rgb = heading_rgb
                         for sub in exp.sub_engagements:
                             p_sub = doc.add_paragraph()
                             p_sub.paragraph_format.space_before = Pt(2.0)

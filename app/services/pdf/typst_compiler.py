@@ -270,7 +270,11 @@ def render_document_model_to_typst(doc_model: ResumeDocumentModel) -> str:
                 out.append("#list(marker: [•], spacing: 2pt, indent: 12pt, body-indent: 6pt,")
                 out.extend(f"  [#t({p})]," for p in _paras("\n".join(bullets)))
                 out.append(")")
+            sub_heading = getattr(exp, "sub_engagements_heading", "Key Sub-Engagements")
             for sub in getattr(exp, "sub_engagements", None) or []:
+                if sub_heading:
+                    out.append(f'  #text(size: 9pt, weight: "bold", fill: rgb("#0f172a"))[#t({_lit(sub_heading)})]')
+                    sub_heading = None
                 if sub.name:
                     out.append(f'  #pad(left: 12pt)[#text(size: 9.5pt, weight: "bold")[#t({_lit(sub.name)})]]')
                 if sub.description:

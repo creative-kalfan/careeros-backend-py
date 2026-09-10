@@ -59,6 +59,8 @@ def _render_document_model_to_html(doc_model: ResumeDocumentModel) -> str:
                 bullets = "".join(f'<li>{b.text.strip()}</li>' for b in exp.bullets if b.text.strip())
                 sub_html = ""
                 if getattr(exp, "sub_engagements", None):
+                    sub_heading = getattr(exp, "sub_engagements_heading", "Key Sub-Engagements")
+                    sub_html += f'<div style="font-weight: 600; font-size: {style.body_size_pt}pt; color: #{style.heading_color_hex}; margin-left: 12pt; margin-top: 4pt;">{sub_heading}</div>'
                     sub_items = []
                     for sub in exp.sub_engagements:
                         sub_bullets = "".join(f'<li>{b.text.strip()}</li>' for b in sub.bullets if b.text.strip())
@@ -69,7 +71,7 @@ def _render_document_model_to_html(doc_model: ResumeDocumentModel) -> str:
                             + (f'<ul class="bullet-list" style="margin-left: 8pt;">{sub_bullets}</ul>' if sub_bullets else '') +
                             f'</div>'
                         )
-                    sub_html = "".join(sub_items)
+                    sub_html += "".join(sub_items)
 
                 items.append(
                     f'<div class="entry">'
