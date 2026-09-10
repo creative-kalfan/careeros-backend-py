@@ -65,6 +65,8 @@ class DocumentStyleModel:
     paragraph_after_pt: float = 2.5
     section_before_pt: float = 7.0
     section_after_pt: float = 3.5
+    bullet_spacing_pt: float = 2.0
+    header_spacing_pt: float = 2.0
 
     # Dividers and Bullets
     heading_has_divider: bool = True
@@ -99,6 +101,8 @@ class DocumentStyleModel:
             "paragraph_after_pt": self.paragraph_after_pt,
             "section_before_pt": self.section_before_pt,
             "section_after_pt": self.section_after_pt,
+            "bullet_spacing_pt": self.bullet_spacing_pt,
+            "header_spacing_pt": self.header_spacing_pt,
             "heading_has_divider": self.heading_has_divider,
             "columns": self.columns,
             "page_width_pt": self.page_width_pt,

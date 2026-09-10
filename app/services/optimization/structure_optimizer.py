@@ -15,8 +15,8 @@ from app.services.optimization.content_prioritizer import ContentScore
 
 # Canonical section keys in document-model order (fallback when values tie).
 _CANONICAL_ORDER = (
-    "summary", "experience", "internships", "projects",
-    "education", "skills", "certifications", "additional",
+    "summary", "skills", "experience", "internships", "projects",
+    "education", "certifications", "additional",
 )
 
 # Minimum aggregate value for a section to survive (avoids rendering

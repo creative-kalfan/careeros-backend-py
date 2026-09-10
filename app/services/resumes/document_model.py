@@ -141,6 +141,48 @@ class SkillGroup:
     skills: list[str] = field(default_factory=list)
 
 
+CANONICAL_SECTION_ORDER = (
+    "summary",
+    "skills",
+    "experience",
+    "internships",
+    "projects",
+    "education",
+    "certifications",
+    "additional",
+)
+
+
+def get_canonical_section_order(
+    available_sections: Any,
+    explicit_template_order: Optional[list[str]] = None,
+) -> list[str]:
+    """Determine deterministic, universal section order.
+
+    Unless a template explicitly defines another structure, canonical order is:
+    1. Header / Name / Contact (rendered at document top)
+    2. Professional Summary
+    3. Skills
+    4. Experience
+    5. Internships (if present)
+    6. Projects
+    7. Education
+    8. Certifications
+    9. Additional
+    Unknown/extra sections are appended deterministically in alphabetical order.
+    Missing sections are omitted cleanly without producing empty headings.
+    """
+    avail = set(available_sections)
+    if explicit_template_order:
+        ordered = [s for s in explicit_template_order if s in avail]
+        remaining = sorted([s for s in avail if s not in ordered])
+        return ordered + remaining
+
+    ordered = [s for s in CANONICAL_SECTION_ORDER if s in avail]
+    remaining = sorted([s for s in avail if s not in ordered])
+    return ordered + remaining
+
+
 @dataclass
 class ResumeDocumentModel:
     """Canonical Document Model for CareerOS.
@@ -162,15 +204,7 @@ class ResumeDocumentModel:
     additional: list[BulletElement] = field(default_factory=list)
     additional_heading: str = "Additional Knowledge"
     section_order: list[str] = field(
-        default_factory=lambda: [
-            "summary",
-            "experience",
-            "projects",
-            "education",
-            "skills",
-            "certifications",
-            "additional",
-        ]
+        default_factory=lambda: list(CANONICAL_SECTION_ORDER)
     )
     style: DocumentStyleModel = field(default_factory=DocumentStyleModel)
 
@@ -548,36 +582,30 @@ def build_document_model(
             )
         )
 
-    # Determine dynamic section order, following source document geometry when available
+    # Determine universal canonical section order
     available_sections = set()
     if summary_el:
         available_sections.add("summary")
-    if experience_positions:
-        available_sections.add("experience")
-    if projects:
-        available_sections.add("projects")
-    if additional_elements:
-        available_sections.add("additional")
-    if education:
-        available_sections.add("education")
     if skills_groups:
         available_sections.add("skills")
+    if experience_positions:
+        available_sections.add("experience")
     if internship_positions:
         available_sections.add("internships")
+    if projects:
+        available_sections.add("projects")
+    if education:
+        available_sections.add("education")
     if certs:
         available_sections.add("certifications")
+    if additional_elements:
+        available_sections.add("additional")
 
-    section_order: list[str] = []
-    if geometry and "sections" in geometry:
-        for s in geometry["sections"]:
-            k = s.get("section_key")
-            if k in available_sections and k not in section_order:
-                section_order.append(k)
+    explicit_template_order = None
+    if geometry and isinstance(geometry, dict) and geometry.get("template_section_order"):
+        explicit_template_order = geometry["template_section_order"]
 
-    # Append any remaining available sections not captured by geometry
-    for default_k in ("summary", "experience", "projects", "additional", "education", "skills", "internships", "certifications"):
-        if default_k in available_sections and default_k not in section_order:
-            section_order.append(default_k)
+    section_order = get_canonical_section_order(available_sections, explicit_template_order)
 
     return ResumeDocumentModel(
         header=header,

@@ -81,7 +81,7 @@ class DocxCompiler:
             p_name = doc.add_paragraph()
             p_name.alignment = WD_ALIGN_PARAGRAPH.CENTER
             p_name.paragraph_format.space_before = Pt(0)
-            p_name.paragraph_format.space_after = Pt(1.5)
+            p_name.paragraph_format.space_after = Pt(getattr(style, "header_spacing_pt", 1.5))
             r_name = p_name.add_run(hdr.full_name)
             r_name.font.name = style.heading_font
             r_name.font.size = Pt(style.name_size_pt)
@@ -92,7 +92,7 @@ class DocxCompiler:
             p_head = doc.add_paragraph()
             p_head.alignment = WD_ALIGN_PARAGRAPH.CENTER
             p_head.paragraph_format.space_before = Pt(0)
-            p_head.paragraph_format.space_after = Pt(2.0)
+            p_head.paragraph_format.space_after = Pt(getattr(style, "header_spacing_pt", 2.0))
             r_head = p_head.add_run(hdr.headline)
             r_head.font.name = style.body_font
             r_head.font.size = Pt(style.headline_size_pt)
@@ -189,7 +189,7 @@ class DocxCompiler:
                             continue
                         p_b = doc.add_paragraph(style='List Bullet')
                         p_b.paragraph_format.space_before = Pt(0)
-                        p_b.paragraph_format.space_after = Pt(1.5)
+                        p_b.paragraph_format.space_after = Pt(getattr(style, "bullet_spacing_pt", 1.5))
                         p_b.paragraph_format.line_spacing = style.line_spacing
                         r_b = p_b.add_run(b.text.strip())
                         r_b.font.name = style.body_font
@@ -210,20 +210,20 @@ class DocxCompiler:
                         r_sub_head.font.bold = True
                         r_sub_head.font.color.rgb = heading_rgb
                         for sub in exp.sub_engagements:
-                            p_sub = doc.add_paragraph()
-                            p_sub.paragraph_format.space_before = Pt(2.0)
-                            p_sub.paragraph_format.space_after = Pt(1.0)
-                            p_sub.paragraph_format.left_indent = Inches(0.15)
-                            r_sname = p_sub.add_run(sub.name)
+                            p_sname = doc.add_paragraph()
+                            p_sname.paragraph_format.space_before = Pt(1.0)
+                            p_sname.paragraph_format.space_after = Pt(1.0)
+                            p_sname.paragraph_format.left_indent = Inches(0.15)
+                            r_sname = p_sname.add_run(sub.name)
                             r_sname.font.name = style.body_font
-                            r_sname.font.size = Pt(style.subheading_size_pt * 0.95)
+                            r_sname.font.size = Pt(style.body_size_pt * 0.95)
                             r_sname.font.bold = True
                             r_sname.font.color.rgb = heading_rgb
 
                             if sub.description:
                                 p_sdesc = doc.add_paragraph(style='List Bullet')
                                 p_sdesc.paragraph_format.left_indent = Inches(0.25)
-                                p_sdesc.paragraph_format.space_after = Pt(1.5)
+                                p_sdesc.paragraph_format.space_after = Pt(getattr(style, "bullet_spacing_pt", 1.5))
                                 r_sd = p_sdesc.add_run(sub.description)
                                 r_sd.font.name = style.body_font
                                 r_sd.font.size = Pt(style.body_size_pt)
@@ -234,7 +234,7 @@ class DocxCompiler:
                                     continue
                                 p_sb = doc.add_paragraph(style='List Bullet')
                                 p_sb.paragraph_format.left_indent = Inches(0.25)
-                                p_sb.paragraph_format.space_after = Pt(1.5)
+                                p_sb.paragraph_format.space_after = Pt(getattr(style, "bullet_spacing_pt", 1.5))
                                 r_sb = p_sb.add_run(sb.text.strip())
                                 r_sb.font.name = style.body_font
                                 r_sb.font.size = Pt(style.body_size_pt)
@@ -264,7 +264,7 @@ class DocxCompiler:
 
                     for b in exp.bullets:
                         p_b = doc.add_paragraph(style='List Bullet')
-                        p_b.paragraph_format.space_after = Pt(1.5)
+                        p_b.paragraph_format.space_after = Pt(getattr(style, "bullet_spacing_pt", 1.5))
                         r_b = p_b.add_run(b.text.strip())
                         r_b.font.size = Pt(style.body_size_pt)
 
@@ -290,7 +290,7 @@ class DocxCompiler:
                     if prj.description:
                         p_desc = doc.add_paragraph(style='List Bullet')
                         p_desc.paragraph_format.space_before = Pt(0)
-                        p_desc.paragraph_format.space_after = Pt(1.5)
+                        p_desc.paragraph_format.space_after = Pt(getattr(style, "bullet_spacing_pt", 1.5))
                         p_desc.paragraph_format.line_spacing = style.line_spacing
                         r_desc = p_desc.add_run(prj.description)
                         r_desc.font.name = style.body_font
@@ -301,7 +301,7 @@ class DocxCompiler:
                         if not b.text.strip() or b.text.strip() == prj.description.strip():
                             continue
                         p_b = doc.add_paragraph(style='List Bullet')
-                        p_b.paragraph_format.space_after = Pt(1.5)
+                        p_b.paragraph_format.space_after = Pt(getattr(style, "bullet_spacing_pt", 1.5))
                         r_b = p_b.add_run(b.text.strip())
                         r_b.font.name = style.body_font
                         r_b.font.size = Pt(style.body_size_pt)
@@ -364,7 +364,7 @@ class DocxCompiler:
                 add_section_heading(getattr(doc_model, "additional_heading", "Additional Knowledge"))
                 for item in doc_model.additional:
                     p_add = doc.add_paragraph(style='List Bullet')
-                    p_add.paragraph_format.space_after = Pt(1.5)
+                    p_add.paragraph_format.space_after = Pt(getattr(style, "bullet_spacing_pt", 1.5))
                     r_add = p_add.add_run(item.text.strip())
                     r_add.font.name = style.body_font
                     r_add.font.size = Pt(style.body_size_pt)
@@ -394,7 +394,7 @@ class DocxCompiler:
                 add_section_heading("Certifications")
                 for c in doc_model.certifications:
                     p_c = doc.add_paragraph(style='List Bullet')
-                    p_c.paragraph_format.space_after = Pt(1.5)
+                    p_c.paragraph_format.space_after = Pt(getattr(style, "bullet_spacing_pt", 1.5))
                     r_c = p_c.add_run(c.text)
                     r_c.font.name = style.body_font
                     r_c.font.size = Pt(style.body_size_pt)

@@ -178,13 +178,13 @@ body {{
     font-size: {style.name_size_pt}pt;
     font-weight: bold;
     color: #{style.heading_color_hex};
-    margin: 0 0 2pt 0;
+    margin: 0 0 {getattr(style, "header_spacing_pt", 2.0)}pt 0;
 }}
 .header-headline {{
     font-size: {style.headline_size_pt}pt;
     font-weight: bold;
     color: #{style.accent_color_hex};
-    margin: 0 0 2pt 0;
+    margin: 0 0 {getattr(style, "header_spacing_pt", 2.0)}pt 0;
 }}
 .header-contact {{
     font-size: {style.meta_size_pt}pt;
@@ -241,7 +241,7 @@ body {{
 .bullet-list li {{
     font-size: {style.body_size_pt}pt;
     color: #{style.body_color_hex};
-    margin-bottom: 1.5pt;
+    margin-bottom: {getattr(style, "bullet_spacing_pt", 2.0)}pt;
 }}
 .skill-row {{
     font-size: {style.body_size_pt}pt;
@@ -271,21 +271,54 @@ def _render_plain_textbox_fallback(doc_model: ResumeDocumentModel, style) -> byt
     if hdr.contact_line():
         lines.append(hdr.contact_line())
     lines.append("")
-    if doc_model.summary and doc_model.summary.text.strip():
-        lines += ["PROFESSIONAL SUMMARY", doc_model.summary.text.strip(), ""]
-    for exp in doc_model.experience:
-        lines.append(f"{exp.role} | {exp.company}".strip(" |"))
-        if exp.date_range or exp.location:
-            lines.append(" | ".join(filter(None, [exp.date_range, exp.location])))
-        lines += [f"- {b.text.strip()}" for b in exp.bullets if b.text.strip()]
-        lines.append("")
-    for edu in doc_model.education:
-        deg = " in ".join(filter(None, [edu.degree, edu.field_of_study])) or "Degree"
-        lines.append(f"{deg} - {edu.institution}".strip(" -"))
-        lines.append("")
-    for grp in doc_model.skills:
-        if grp.skills:
-            lines.append(f"{grp.category}: " + ", ".join(grp.skills))
+
+    for sec in doc_model.section_order:
+        if sec == "summary" and doc_model.summary and doc_model.summary.text.strip():
+            lines += ["PROFESSIONAL SUMMARY", doc_model.summary.text.strip(), ""]
+        elif sec == "skills" and doc_model.skills:
+            rows = [f"{grp.category}: " + ", ".join(grp.skills) for grp in doc_model.skills if grp.skills]
+            if rows:
+                lines += ["SKILLS"] + rows + [""]
+        elif sec == "experience" and doc_model.experience:
+            lines.append("EXPERIENCE")
+            for exp in doc_model.experience:
+                lines.append(f"{exp.role} | {exp.company}".strip(" |"))
+                if exp.date_range or exp.location:
+                    lines.append(" | ".join(filter(None, [exp.date_range, exp.location])))
+                lines += [f"- {b.text.strip()}" for b in exp.bullets if b.text.strip()]
+            lines.append("")
+        elif sec == "internships" and doc_model.internships:
+            lines.append("INTERNSHIPS")
+            for exp in doc_model.internships:
+                lines.append(f"{exp.role} | {exp.company}".strip(" |"))
+                if exp.date_range or exp.location:
+                    lines.append(" | ".join(filter(None, [exp.date_range, exp.location])))
+                lines += [f"- {b.text.strip()}" for b in exp.bullets if b.text.strip()]
+            lines.append("")
+        elif sec == "projects" and doc_model.projects:
+            lines.append("PROJECTS")
+            for prj in doc_model.projects:
+                tech = f" ({', '.join(prj.technologies)})" if prj.technologies else ""
+                lines.append(f"{prj.name}{tech}")
+                if prj.description:
+                    lines.append(f"- {prj.description}")
+                lines += [f"- {b.text.strip()}" for b in prj.bullets if b.text.strip() and b.text.strip() != (prj.description or "").strip()]
+            lines.append("")
+        elif sec == "education" and doc_model.education:
+            lines.append("EDUCATION")
+            for edu in doc_model.education:
+                deg = " in ".join(filter(None, [edu.degree, getattr(edu, 'field_of_study', getattr(edu, 'field', ''))])) or "Degree"
+                lines.append(f"{deg} - {edu.institution}".strip(" -"))
+            lines.append("")
+        elif sec == "certifications" and doc_model.certifications:
+            lines.append("CERTIFICATIONS")
+            lines += [f"- {c.text}" for c in doc_model.certifications if c.text]
+            lines.append("")
+        elif sec == "additional" and getattr(doc_model, "additional", None):
+            lines.append("ADDITIONAL KNOWLEDGE")
+            lines += [f"- {a.text}" for a in doc_model.additional if a.text]
+            lines.append("")
+
     text = "\n".join(lines) or "Resume"
     doc = fitz.open()
     page = doc.new_page(width=style.page_width_pt, height=style.page_height_pt)

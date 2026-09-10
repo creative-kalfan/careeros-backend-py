@@ -60,6 +60,48 @@ def _render_html(content: ResumeContent, template: str = "minimal") -> str:
             f'</div>'
         )
 
+    # Skills
+    if profile.skills and any([
+        profile.skills.technical,
+        profile.skills.tools,
+        profile.skills.languages,
+        profile.skills.databases,
+        profile.skills.analytics,
+        profile.skills.soft_skills,
+        profile.skills.custom,
+    ]):
+        items = []
+        # ponytail: raw export path bypasses document_model — reclassify here
+        # so technical terms in soft_skills never render as "Soft Skills:".
+        _tech_like, _genuine_soft = partition_soft_skills(list(profile.skills.soft_skills or []))
+        _extra_tech = [s for s in _tech_like if s not in (profile.skills.technical or [])]
+        categories = [
+            ("technical", "Technical Skills"),
+            ("tools", "Tools & Frameworks"),
+            ("languages", "Languages"),
+            ("databases", "Databases"),
+            ("analytics", "Analytics"),
+            ("soft_skills", "Soft Skills"),
+        ]
+        for cat_key, cat_label in categories:
+            vals = getattr(profile.skills, cat_key, [])
+            if cat_key == "technical":
+                vals = [*(vals or []), *_extra_tech]
+            elif cat_key == "soft_skills":
+                vals = _genuine_soft
+            if vals:
+                items.append(
+                    f'<div class="skill-row"><strong>{cat_label}:</strong> {", ".join(vals)}</div>'
+                )
+        if profile.skills.custom:
+            for custom_label, custom_vals in profile.skills.custom.items():
+                if custom_vals:
+                    items.append(
+                        f'<div class="skill-row"><strong>{custom_label}:</strong> {", ".join(custom_vals)}</div>'
+                    )
+        if items:
+            sections.append(f'<div class="section"><h2 class="section-title">Skills</h2>{"".join(items)}</div>')
+
     # Experience
     if profile.experience:
         items = []
@@ -181,47 +223,6 @@ def _render_html(content: ResumeContent, template: str = "minimal") -> str:
             )
         sections.append(f'<div class="section"><h2 class="section-title">Education</h2>{"".join(items)}</div>')
 
-    # Skills
-    if profile.skills and any([
-        profile.skills.technical,
-        profile.skills.tools,
-        profile.skills.languages,
-        profile.skills.databases,
-        profile.skills.analytics,
-        profile.skills.soft_skills,
-        profile.skills.custom,
-    ]):
-        items = []
-        # ponytail: raw export path bypasses document_model — reclassify here
-        # so technical terms in soft_skills never render as "Soft Skills:".
-        _tech_like, _genuine_soft = partition_soft_skills(list(profile.skills.soft_skills or []))
-        _extra_tech = [s for s in _tech_like if s not in (profile.skills.technical or [])]
-        categories = [
-            ("technical", "Technical Skills"),
-            ("tools", "Tools & Frameworks"),
-            ("languages", "Languages"),
-            ("databases", "Databases"),
-            ("analytics", "Analytics"),
-            ("soft_skills", "Soft Skills"),
-        ]
-        for cat_key, cat_label in categories:
-            vals = getattr(profile.skills, cat_key, [])
-            if cat_key == "technical":
-                vals = [*(vals or []), *_extra_tech]
-            elif cat_key == "soft_skills":
-                vals = _genuine_soft
-            if vals:
-                items.append(
-                    f'<div class="skill-row"><strong>{cat_label}:</strong> {", ".join(vals)}</div>'
-                )
-        if profile.skills.custom:
-            for custom_label, custom_vals in profile.skills.custom.items():
-                if custom_vals:
-                    items.append(
-                        f'<div class="skill-row"><strong>{custom_label}:</strong> {", ".join(custom_vals)}</div>'
-                    )
-        if items:
-            sections.append(f'<div class="section"><h2 class="section-title">Skills</h2>{"".join(items)}</div>')
 
     # Certifications
     if profile.certifications:
@@ -417,9 +418,19 @@ class ExportService:
                 render_document_model_to_typst,
             )
             from app.services.resumes.document_model import build_document_model
+            from app.services.resumes.fit_verifier import fit_verifier
 
+            doc_model = build_document_model(content, None)
+            fit_result = fit_verifier.fit(
+                doc_model,
+                lambda m: compile_typst_to_pdf(
+                    render_document_model_to_typst(m), enforce_single_page=False
+                ),
+                max_pages=1,
+            )
             return compile_typst_to_pdf(
-                render_document_model_to_typst(build_document_model(content, None))
+                render_document_model_to_typst(fit_result.document),
+                enforce_single_page=False,
             )
         except Exception as exc:
             logger.warning("Typst PDF export failed (%s); falling back to PyMuPDF Story", exc)
@@ -481,6 +492,22 @@ class ExportService:
             doc.add_heading("Professional Summary", level=1)
             doc.add_paragraph(profile.summary)
 
+        if profile.skills and any([profile.skills.technical, profile.skills.tools, profile.skills.languages, profile.skills.databases, profile.skills.analytics, profile.skills.soft_skills]):
+            doc.add_heading("Skills", level=1)
+            _tech_like, _genuine_soft = partition_soft_skills(list(profile.skills.soft_skills or []))
+            _extra_tech = [s for s in _tech_like if s not in (profile.skills.technical or [])]
+            for category, label in [
+                ("technical", "Technical"), ("tools", "Tools"), ("languages", "Languages"),
+                ("databases", "Databases"), ("analytics", "Analytics"), ("soft_skills", "Soft Skills"),
+            ]:
+                values = getattr(profile.skills, category, [])
+                if category == "technical":
+                    values = [*(values or []), *_extra_tech]
+                elif category == "soft_skills":
+                    values = _genuine_soft
+                if values:
+                    doc.add_paragraph("{label}: {values}".format(label=label, values=", ".join(values)))
+
         if profile.experience:
             doc.add_heading("Experience", level=1)
             for exp in profile.experience:
@@ -528,22 +555,6 @@ class ExportService:
                 if edu.achievements:
                     for ach in edu.achievements:
                         doc.add_paragraph(ach, style="List Bullet")
-
-        if profile.skills and any([profile.skills.technical, profile.skills.tools, profile.skills.languages, profile.skills.databases, profile.skills.analytics, profile.skills.soft_skills]):
-            doc.add_heading("Skills", level=1)
-            _tech_like, _genuine_soft = partition_soft_skills(list(profile.skills.soft_skills or []))
-            _extra_tech = [s for s in _tech_like if s not in (profile.skills.technical or [])]
-            for category, label in [
-                ("technical", "Technical"), ("tools", "Tools"), ("languages", "Languages"),
-                ("databases", "Databases"), ("analytics", "Analytics"), ("soft_skills", "Soft Skills"),
-            ]:
-                values = getattr(profile.skills, category, [])
-                if category == "technical":
-                    values = [*(values or []), *_extra_tech]
-                elif category == "soft_skills":
-                    values = _genuine_soft
-                if values:
-                    doc.add_paragraph("{label}: {values}".format(label=label, values=", ".join(values)))
 
         if profile.certifications:
             doc.add_heading("Certifications", level=1)
