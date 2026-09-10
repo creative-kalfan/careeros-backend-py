@@ -233,9 +233,11 @@ resume-pilot/ (Parent Wrapper)
 | `app/services/ats/ats_analyzer.py` | 5-subscore ATS evaluation against requirement lexicon (1016 lines) | `app/api/routes/ats.py` |
 | `app/services/ats/semantic_reasoner.py` | Sliced LLM reasoning with hallucination verification | `app/services/ats/ats_analyzer.py` |
 | `app/services/jobs/job_ingestion_service.py` | Ingestion pipeline orchestration, source quality tagging, dedup; Adzuna India rotation (`adzuna_rotation_batch`, 20 India queries, 2/crawl, India-only broad scope), validation filter (`_drop_invalid`), JobSpy ingest (with `_apply_source_quality` provenance: tier 5 / provider `jobspy` / 0.65 confidence) | `app/workers/jobs/crawl_jobs.py` |
-| `app/services/jobs/ingestion_validation.py` | Bounded dry-run + pure metric aggregation (`dry_run_provider`, `summarize_jobs`, `dedup_report`, `firecrawl_report`, `role_coverage`, `company_coverage`, `source_report`); hard caps (≤5 queries, 1 page/query, ≤50/query, ≤20 Firecrawl); dry-run never writes DB, persist delegates to `JobIngestionService` | CLI (`python -m`), validation runs |
+| `app/services/jobs/ingestion_validation.py` | Bounded dry-run + pure metric aggregation (`dry_run_provider`, `summarize_jobs` with strict india/foreign/ambiguous/unknown + india_pct, `dedup_report`, `firecrawl_report`, `role_coverage`, `company_coverage`, `source_report`, `geography_breakdown`, `provider_geography_report`, `incremental_report`, `validate_firecrawl_candidate` with max_pages=15 official-only guard); hard caps (≤5 queries, 1 page/query, ≤50/query, ≤20 Firecrawl); dry-run never writes DB, persist delegates to `JobIngestionService` | CLI (`python -m`), validation runs |
+| `app/services/jobs/india_geography.py` | Strict India/foreign/ambiguous/unknown classifier (`classify_india_relevance`, word-boundary India, Indiana guard), `filter_india_only`, `india_first_rank` (3/2/1/0), `geography_report` (India %, top cities/countries, by provider/company/role); preserves original locations | Ingestion metrics, ranking, filtering |
 | `app/services/jobs/job_service.py` | Normalization + `normalize_india_location()` (Bangalore→Bengaluru etc., intl passthrough), `normalize_company_name()` (J.P. Morgan→JPMorgan Chase, EY GDS→EY, Tata Consultancy Services→TCS; exact-match only, no fuzzy merges), `validate_job()` (VALID/WARNINGS/INVALID/STALE), `needs_enrichment()`/`merge_enrichment()` (selective Firecrawl gate, never overwrites structured data), canonical URL wiring | `app/services/jobs/job_ingestion_service.py` |
-| `app/services/jobs/company_coverage.py` | India company source audit (57 companies): classification/coverage/status rows + `coverage_report()`; preferred source derived from `select_preferred_source()`; internal use only, no DB table, no API route | Docs, ops |
+| `app/services/jobs/company_coverage.py` | India company source audit (57 companies): §3 classification (incl. OFFICIAL_INDIA_CAREER_PAGE, OFFICIAL_GLOBAL_CAREER_PAGE_WITH_INDIA_FILTER) / coverage / status rows + `coverage_report()` + §8 `classify_provider_coverage()`; preferred source derived from `select_preferred_source()`; internal use only, no DB table, no API route | Docs, ops |
+| `app/services/jobs/india_coverage_score.py` | India-first source prioritization (`SourceSignals`, `score_source` 0-100 with 0.35 India weight, `rank_sources`); pipeline-independent, no DB/HTTP | Discovery ranking, cost/value |
 | `app/crawlers/adapters/jobspy.py` | JobSpy discovery (Naukri/LinkedIn) behind BaseCrawler; optional `python-jobspy` dep, `map_jobspy_record()`, timeout/failure isolation to `[]` | `app/services/jobs/job_ingestion_service.py` |
 | `app/services/jobs/personalized_job_service.py` | 8-factor matching algorithm with India-first geographic tiebreaker | `app/api/routes/jobs.py`, Recs |
 | `app/services/jobs/scheduled_crawl_runner.py` | APScheduler provider configuration (24h intervals) | `app/main.py` lifespan |
@@ -341,14 +343,14 @@ resume-pilot/ (Parent Wrapper)
 ## 9. Current Testing & Validation State
 
 ### 9.1 Backend Testing (`careeros-backend-py`)
-- **Suite:** 57 Pytest test files + `__init__.py` under `tests/` (incl. `test_job_ingestion_2o.py`, `test_india_source_registry.py`: 16 tests for aliases, source priority, registry metadata, Firecrawl official-only guard, dedup conservatism, audit honesty).
+- **Suite:** 58 Pytest test files + `__init__.py` under `tests/` (incl. `test_job_ingestion_2o.py`, `test_india_source_registry.py`: 16 tests, `test_india_first_discovery.py`: 19 tests for strict India/foreign/ambiguous classification, India-only filtering, multi-location India, source selection, provider audit, coverage scoring, geography/incremental reports, Firecrawl guards).
 - **Framework:** Pytest 8.3.4, `pytest-asyncio` 0.24.0 (auto mode).
-- **Latest Verified Execution (2026-09-10, with India company source registry changes):**
-  - **Collected:** 1026 items.
-  - **Passed:** 1014 tests passed (incl. all 16 new + all ingestion/crawler/scheduler suites: 93/93 targeted).
+- **Latest Verified Execution (2026-09-10, with India-first discovery changes, this update):**
+  - **Collected:** 1045 items.
+  - **Passed:** 1033 tests passed (incl. all 19 new + all 60 targeted ingestion/crawler/ranking suites).
   - **Skipped:** 0 collected as skipped (live-credential tests exercised skip paths inline).
-  - **Failed:** 12 failed — strict SUBSET of the 14 pre-existing baseline failures (no regressions, 2 golden visuals now pass): 6× `test_copilot.py` (`/api/copilot/chat` route unmounted → 404, stub-only per §10), 6× resume visual/style golden tests (pixel diffs vs threshold).
-  - **Runtime:** ~292 seconds.
+  - **Failed:** 12 failed — identical pre-existing set, no regressions: 6× `test_copilot.py` (`/api/copilot/chat` route unmounted → 404, stub-only per §10), 6× resume visual/style golden tests (pixel diffs vs threshold).
+  - **Runtime:** ~269 seconds.
 - **Prerequisite:** Fresh virtual environments require setting test Supabase environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) as documented in backend `README.md`.
 
 ### 9.2 Frontend Testing (`careeros-frontend`)
@@ -513,3 +515,126 @@ Method: `dry_run_provider("adzuna", [...], ValidationLimits(max_queries=2, resul
 | Duplicate rate | 0.0% | 0.0% | — |
 | Target-role coverage | analytics 8, ai_ml 6 | analytics 4, other 1 | — |
 | Errors | 0 | 0 (Naukri probe: 406 recaptcha) | 406 recaptcha |
+
+---
+
+## 14. India-First Discovery & Selective Enablement (2026-09-10, this update)
+
+Policy: **Indian coverage is the primary optimization target; foreign-only
+jobs are deprioritized at the ranking/query boundary, never deleted from the
+canonical DB.** No second pipeline, no custom LinkedIn scraping, no Naukri
+workarounds, no JSearch, no aggregator → Firecrawl chaining, no migrations,
+no frontend changes.
+
+### 14.1 What was implemented (+3 files, ~5 modified, no migrations)
+
+- New `app/services/jobs/india_geography.py`: strict classifier
+  `classify_india_relevance()` → INDIA (explicit India/city/multi-location
+  incl. India) | FOREIGN (known foreign markers) | AMBIGUOUS (Remote,
+  Worldwide, Global, Multiple Locations, EMEA, APAC — never Indian) |
+  UNKNOWN. Plus `filter_india_only()`, `india_first_rank()` (3/2/1/0),
+  and `geography_report()` (totals, India %, top cities/countries,
+  by provider/company/role). Original location strings are preserved.
+- New `app/services/jobs/india_coverage_score.py`: `SourceSignals` +
+  `score_source()` (0-100, India relevance weight 0.35 dominates) +
+  `rank_sources()`. A 10k-global/20-Indian source scores ~31 vs ~87 for
+  300 highly relevant Indian jobs (verified).
+- Extended `CrawlTarget` (§14 registry fields, all optional):
+  `company`, `aliases`, `url`, `india_only`, `india_filter`,
+  `coverage_status`, `coverage_score` + `company_name`/`careers_url`
+  helpers (Firecrawl slug-compatible). Firecrawl/ATS targets backfilled
+  with explicit company/url/india_filter.
+- `company_coverage.py`: §3 vocabulary now includes
+  `OFFICIAL_INDIA_CAREER_PAGE` and
+  `OFFICIAL_GLOBAL_CAREER_PAGE_WITH_INDIA_FILTER` (legacy
+  `OFFICIAL_CAREER_PAGE` kept as alias); new §8
+  `PROVIDER_COVERAGE_LEVELS` + `classify_provider_coverage()` (>=10
+  well / >=3 partial / >=1 poor / 0 not / unverifiable → UNVERIFIED).
+- `source_priority.py`: order is now ats > api > india_career_page >
+  career_page > global_with_india_filter > aggregator > firecrawl.
+- Ranking hardened (`job_relevance_service.py`, `recommendation_engine.py`):
+  both `_india_first_score()` now share the centralized city list and a
+  word-boundary India test, so "Indiana, USA" never ranks as India while
+  "Bengaluru, India" (3), other explicit India incl. "US / India" (2),
+  generic remote (1), foreign/unknown (0) keep their order.
+- `ingestion_validation.py`: `summarize_jobs()` now also emits
+  india/foreign/ambiguous/unknown + india_pct (legacy `india_relevant`
+  preserved); new `geography_breakdown()`,
+  `provider_geography_report()`, `incremental_report()` (headline:
+  incremental unique useful Indian jobs), and
+  `validate_firecrawl_candidate()` (official-page-only, max_pages=15,
+  no aggregator follow-up).
+- New `tests/test_india_first_discovery.py`: 19 offline tests (aliases
+  via existing suite, registry config, priority, India/foreign/ambiguous,
+  Indiana guard, multi-location, filtering, ranking order, vocab, provider
+  audit, scoring dominance + cost-awareness, geography, incremental,
+  Firecrawl guards, dedup/provenance).
+
+### 14.2 Provider geography (live DB read-only, 2026-09-10)
+
+668 active jobs: **India 40 (6.0%)**, foreign 399, ambiguous 15, unknown
+214. By provider: greenhouse 615 (India 40 / foreign 398 / unknown 170),
+firecrawl 31 (India 0 / unknown 30), ycombinator 20 (India 0), workday 2
+(India 0), adzuna 0, jobspy 0. Top Indian city: Bengaluru (34 + 6
+Bangalore alias). Top foreign: USA 93, Canada 54, Ireland 45, Singapore
+44 (rest Other/unspecified 101). Conclusion: the greenhouse foreign
+boards dominate raw inventory, so the India-first ranking/filtering
+boundary (§14.4) does the work — no canonical deletions.
+
+### 14.3 Bounded live probes (this pass, 0 DB writes)
+
+- **Adzuna India** (`data analyst India`, 1 query × 1 page × 5, 1 API
+  call): raw 5 → valid 4, stale 1, invalid 0; unique 5/5; India 5/5
+  (100%, strict classifier); roles analytics 5/5; incremental vs the 668
+  DB canonicals **5/5 unique, 5/5 incremental India** — disjoint from the
+  ATS-heavy DB, same pattern as §13. Selective enablement: keep the
+  existing Adzuna India rotation (already enabled); no new crawler.
+- **JobSpy** (today): `data analyst India` / India / 3 wanted → 0 records
+  (adapter failure-isolation to `[]`; prior §13.2 LinkedIn 5/5 India
+  incremental stands, today's 0 is recorded as transient/blocked, not
+  fabricated). No new JobSpy queries scheduled; existing single target +
+  kill-switch retained.
+- **Firecrawl**: no live crawl this pass (cost + §13.6 already showed
+  aggregator-URL enrichment yields nothing). Guard verified offline
+  (official-only, ≤15 pages, per-page isolation, protected-field merge).
+
+### 14.4 India-first ranking/filtering boundary
+
+Canonical rows untouched. Surfacing order: explicit India (Bangalore 3 >
+other India 2, incl. multi-location with India) > generic remote (1) >
+foreign/unknown (0), layered after match score + bounded source bonus
+(±4) + freshness. `filter_india_only()` exists for India-only views.
+Ambiguous globals never count as India in metrics or filters.
+
+### 14.5 Source decisions (selective, evidence-based)
+
+- **Keep enabled (already covered):** Adzuna India rotation (score ~89,
+  5/5 incremental India today), JobSpy long-tail target (~78, prior 5/5;
+  monitor), 4 Firecrawl official pages + 3 Adzuna company extras (config
+  retained, inventory unverified here), 5 ATS boards (foreign-heavy by
+  measurement — retained for global inventory, outranked for India).
+- **Deferred:** 26 aggregator-only MNCs (unsupported portals, long-tail
+  only); 24 unverified startup Firecrawl candidates (URL/inventory not
+  confirmable offline — probe before scheduling).
+- **Blocked:** Naukri via JobSpy (406 recaptcha, no workaround).
+- **Newly scheduled targets: 0** — deliberate (no verified slugs; guessing
+  is prohibited and prior Lever/Greenhouse probes 404'd).
+
+### 14.6 Cost/value (scored, §12)
+
+`adzuna_india_rotation` 89.3 > `jobspy_linkedin_longtail` 78.4 >
+`firecrawl_razorpay_official` 67.7 > `unverified_startup_page` 41.2 >
+`greenhouse_foreign_board` 25.9. Incremental-India-per-request drives the
+order; headline volume without India relevance scores lowest.
+
+### 14.7 Tests & remaining gaps
+
+New: 19/19 pass. Targeted ingestion/crawler/ranking suites: 60/60 pass.
+Full suite (this update): 1045 collected, 1033 passed, 12 failed — the
+identical 12 pre-existing failures (6 copilot 404 stub-only, 6 visual
+golden pixel diffs), no regressions (§9.1). Gaps:
+(1) Firecrawl official-page live inventory still unverified in this env —
+verify 1–2 pages + sample crawl when keys/quota allow; (2) ATS↔aggregator
+overlap at scale needs a persisted multi-day sample, not a dry-run;
+(3) JobSpy LinkedIn flakiness needs a quarterly re-probe from worker
+egress. No fake coverage claimed anywhere.

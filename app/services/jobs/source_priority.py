@@ -60,11 +60,21 @@ def combined_rank_score(match_overall: float, job: Any) -> float:
     return float(match_overall or 0) + source_quality_bonus(job)
 
 
-# Deterministic source-selection order: official ATS/API first, then the
-# official career page, then existing aggregator coverage, then Firecrawl
+# Deterministic source-selection order (task §9): official ATS/API first,
+# then the official India career page, then the official global page with a
+# reliable India filter, then existing aggregator coverage, then Firecrawl
 # retrieval. A company is never Firecrawled when a better structured source
 # is available; unknown/empty types rank last (never selected over known).
-_SOURCE_PREFERENCE_ORDER = ("ats", "api", "career_page", "aggregator", "firecrawl")
+# Legacy "career_page" sorts with "india_career_page" for backwards compat.
+_SOURCE_PREFERENCE_ORDER = (
+    "ats",
+    "api",
+    "india_career_page",
+    "career_page",
+    "global_with_india_filter",
+    "aggregator",
+    "firecrawl",
+)
 
 
 def select_preferred_source(source_types: list[str] | tuple[str, ...]) -> str | None:

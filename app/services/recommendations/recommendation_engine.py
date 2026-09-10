@@ -12,14 +12,17 @@ from app.services.jobs.source_priority import combined_rank_score
 from app.services.recommendations.recommendation_reason_generator import RecommendationReasonGenerator
 from app.services.recommendations.recommendation_scorer import RecommendationScorer
 
-# India tokens mirror job_relevance_service._INDIA_TOKENS
+# India tokens centralize on india_geography (word-boundary "india" so
+# "Indiana, USA" never ranks as India; ambiguous globals never score 2).
 _BANGALORE_TOKENS = ["bengaluru", "bangalore"]
-_INDIA_TOKENS = [
-    "india", "bengaluru", "bangalore", "hyderabad", "mumbai", "pune",
-    "chennai", "delhi", "gurgaon", "gurugram", "noida", "kolkata",
-    "ahmedabad", "kochi", "cochin", "indore", "jaipur", "chandigarh",
-    "remote - india", "remote india",
-]
+
+try:
+    from app.services.jobs.india_geography import contains_india_marker as _contains_india
+except Exception:  # pragma: no cover - import-time safety
+
+    def _contains_india(text: str) -> bool:  # type: ignore[misc]
+        lowered = (text or "").lower()
+        return "india" in lowered and "indiana" not in lowered
 
 
 def _india_first_score(job: NormalizedJob) -> int:
@@ -30,7 +33,7 @@ def _india_first_score(job: NormalizedJob) -> int:
 
     if any(token in text for token in _BANGALORE_TOKENS):
         return 3
-    if any(token in text for token in _INDIA_TOKENS):
+    if _contains_india(text):
         return 2
     if job.remote or "remote" in text:
         return 1

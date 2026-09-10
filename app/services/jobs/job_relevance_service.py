@@ -11,41 +11,37 @@ from app.repositories.profile_repository import ProfileRepository
 from app.services.jobs.personalized_job_service import PersonalizedJobService
 from app.services.jobs.source_priority import combined_rank_score, source_quality_bonus
 
-# India-indicative location tokens used for the India-first ranking boost.
-# Matches city names, "India", "Remote - India", etc. so India-based roles
-# rank higher without hiding global/remote roles entirely.
+# India-indicative tokens for the India-first ranking boost. City list is the
+# single source of truth in india_geography (task §1 high-value cities);
+# "india" itself is matched on word boundaries so "Indiana, USA" never
+# ranks as India. Ambiguous globals (Remote/Worldwide/APAC/...) score 1
+# at most — never as India.
 _BANGALORE_TOKENS = ["bengaluru", "bangalore"]
-_INDIA_TOKENS = [
-    "india",
-    "bengaluru",
-    "bangalore",
-    "hyderabad",
-    "mumbai",
-    "pune",
-    "chennai",
-    "delhi",
-    "gurgaon",
-    "gurugram",
-    "noida",
-    "kolkata",
-    "ahmedabad",
-    "kochi",
-    "cochin",
-    "indore",
-    "jaipur",
-    "chandigarh",
-    "remote - india",
-    "remote india",
-]
+
+try:  # centralize the city list; fall back to the inline set if unavailable
+    from app.services.jobs.india_geography import INDIAN_CITY_TOKENS as _CITY_TOKENS
+    from app.services.jobs.india_geography import contains_india_marker as _contains_india
+except Exception:  # pragma: no cover - import-time safety
+    _CITY_TOKENS = (
+        "bengaluru", "bangalore", "hyderabad", "mumbai", "pune", "chennai",
+        "delhi", "gurgaon", "gurugram", "noida", "kolkata", "ahmedabad",
+        "kochi", "cochin", "indore", "jaipur", "chandigarh",
+    )
+
+    def _contains_india(text: str) -> bool:  # type: ignore[misc]
+        lowered = (text or "").lower()
+        return "india" in lowered and "indiana" not in lowered or any(
+            city in lowered for city in _CITY_TOKENS
+        )
 
 
 def _india_first_score(job: NormalizedJob) -> int:
     """Return a 0-3 India-first ranking score for a job.
 
     3 = Bangalore / Bengaluru (premier tech hub),
-    2 = other explicitly India-based location,
-    1 = remote (global/remote roles still rank above non-India on-site),
-    0 = non-India on-site.
+    2 = other explicitly India-based location (incl. multi-location with India),
+    1 = generic remote/ambiguous (above foreign, below India),
+    0 = foreign / unknown on-site. Ambiguous globals never score as India.
     """
     location = (job.location or "").lower()
     title = (job.title or "").lower()
@@ -54,7 +50,7 @@ def _india_first_score(job: NormalizedJob) -> int:
 
     if any(token in text for token in _BANGALORE_TOKENS):
         return 3
-    if any(token in text for token in _INDIA_TOKENS):
+    if _contains_india(text):
         return 2
     if job.remote or "remote" in text:
         return 1

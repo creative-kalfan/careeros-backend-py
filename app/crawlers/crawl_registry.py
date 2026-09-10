@@ -22,7 +22,13 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class CrawlTarget:
-    """One crawlable source endpoint."""
+    """One crawlable source endpoint.
+
+    India-first registry fields (task §14): adding a company is
+    configuration — set ``company``/``url``/``india_only``/``india_filter``
+    plus coverage metadata. All new fields are optional so existing
+    positional construction keeps working.
+    """
 
     source: str  # adapter key: ycombinator|firecrawl|ashby|greenhouse|lever|smartrecruiters|adzuna|jobspy
     slug: str  # adapter payload (adzuna/jobspy: search query; firecrawl: "<company>|<careers_url>")
@@ -35,15 +41,42 @@ class CrawlTarget:
     # Firecrawl; aggregators (Adzuna/JobSpy) cover the long tail.
     country: str = "IN"
     region: str = ""
-    source_type: str = ""  # ats|aggregator|career_page|firecrawl|api
+    source_type: str = ""  # ats|api|india_career_page|career_page|global_with_india_filter|aggregator|firecrawl
     crawl_frequency_hours: Optional[float] = None
     firecrawl_enabled: bool = False
     enrichment_enabled: bool = False
     metadata: Optional[dict] = field(default=None)
+    # India-first discovery fields (§14): company identity, aliases, official
+    # URL, India scoping, and audit coverage. Defaults preserve behaviour.
+    company: str = ""
+    aliases: tuple[str, ...] = ()
+    url: str = ""
+    india_only: bool = False
+    india_filter: str = ""
+    coverage_status: str = ""
+    coverage_score: Optional[float] = None
 
     @property
     def key(self) -> str:
         return f"{self.source}:{self.slug}"
+
+    @property
+    def company_name(self) -> str:
+        """Best-known company label (explicit field, else Firecrawl slug head)."""
+        if self.company:
+            return self.company
+        if self.source == "firecrawl" and "|" in self.slug:
+            return self.slug.split("|", 1)[0].strip()
+        return ""
+
+    @property
+    def careers_url(self) -> str:
+        """Best-known official careers URL (explicit field, else slug tail)."""
+        if self.url:
+            return self.url
+        if self.source == "firecrawl" and "|" in self.slug:
+            return self.slug.split("|", 1)[1].strip()
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -63,23 +96,29 @@ YC_TARGET = CrawlTarget(
 # crawler code is required; the FirecrawlAdapter handles any careers URL.
 # ---------------------------------------------------------------------------
 FIRECRAWL_TARGETS: list[CrawlTarget] = [
-    CrawlTarget("firecrawl", "PostHog|https://posthog.com/careers", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
-    CrawlTarget("firecrawl", "Linear|https://linear.app/careers", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
-    CrawlTarget("firecrawl", "Razorpay|https://razorpay.com/jobs/", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
-    CrawlTarget("firecrawl", "PhonePe|https://www.phonepe.com/careers/job-openings/", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
-    CrawlTarget("firecrawl", "CRED|https://careers.cred.club/", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
-    CrawlTarget("firecrawl", "Zerodha|https://zerodha.com/careers", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True),
+    CrawlTarget("firecrawl", "PostHog|https://posthog.com/careers", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True,
+                company="PostHog", url="https://posthog.com/careers", india_filter="India"),
+    CrawlTarget("firecrawl", "Linear|https://linear.app/careers", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True,
+                company="Linear", url="https://linear.app/careers", india_filter="India"),
+    CrawlTarget("firecrawl", "Razorpay|https://razorpay.com/jobs/", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True,
+                company="Razorpay", url="https://razorpay.com/jobs/", country="IN", india_only=True, india_filter="India"),
+    CrawlTarget("firecrawl", "PhonePe|https://www.phonepe.com/careers/job-openings/", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True,
+                company="PhonePe", url="https://www.phonepe.com/careers/job-openings/", country="IN", india_only=True, india_filter="India"),
+    CrawlTarget("firecrawl", "CRED|https://careers.cred.club/", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True,
+                company="CRED", url="https://careers.cred.club/", country="IN", india_only=True, india_filter="India"),
+    CrawlTarget("firecrawl", "Zerodha|https://zerodha.com/careers", "firecrawl", 2, source_type="firecrawl", firecrawl_enabled=True,
+                company="Zerodha", url="https://zerodha.com/careers", country="IN", india_only=True, india_filter="India"),
 ]
 
 # ---------------------------------------------------------------------------
 # Priority 3: Direct official ATS boards.
 # ---------------------------------------------------------------------------
 ATS_TARGETS: list[CrawlTarget] = [
-    CrawlTarget("ashby", "notion", "ats", 3, source_type="ats"),
-    CrawlTarget("greenhouse", "stripe", "ats", 3, source_type="ats"),
-    CrawlTarget("smartrecruiters", "servicenow", "ats", 3, source_type="ats"),
-    CrawlTarget("lever", "coupa", "ats", 3, source_type="ats"),
-    CrawlTarget("smartrecruiters", "visa", "ats", 3, source_type="ats"),
+    CrawlTarget("ashby", "notion", "ats", 3, source_type="ats", company="Notion", india_filter="India"),
+    CrawlTarget("greenhouse", "stripe", "ats", 3, source_type="ats", company="Stripe", india_filter="India"),
+    CrawlTarget("smartrecruiters", "servicenow", "ats", 3, source_type="ats", company="ServiceNow", india_filter="India"),
+    CrawlTarget("lever", "coupa", "ats", 3, source_type="ats", company="Coupa", india_filter="India"),
+    CrawlTarget("smartrecruiters", "visa", "ats", 3, source_type="ats", company="Visa", india_filter="India"),
 ]
 
 # ---------------------------------------------------------------------------

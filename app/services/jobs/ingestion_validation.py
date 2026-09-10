@@ -12,8 +12,13 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
 from app.crawlers.models import CrawledJob
-from app.crawlers.source_quality import canonicalize_url, classify_source
+from app.crawlers.source_quality import canonicalize_url, classify_source, is_aggregator_url
 from app.models.job import NormalizedJob
+from app.services.jobs.india_geography import (
+    classify_india_relevance,
+    geography_report as _geography_report,
+    is_india_job,
+)
 from app.services.jobs.job_service import needs_enrichment, validate_job
 
 logger = logging.getLogger(__name__)
@@ -60,13 +65,23 @@ class ValidationLimits:
 
 
 def _india_relevant(job: NormalizedJob) -> bool:
-    text = f"{job.location or ''} {job.title or ''} {(job.raw or {}).get('location', '')}".lower()
-    return any(tok in text for tok in _INDIA_TOKENS)
+    """Strict India check: explicit India only (never Remote/Global/APAC)."""
+    try:
+        return is_india_job(job.location, getattr(job, "remote", None))
+    except Exception:
+        text = f"{job.location or ''} {job.title or ''} {(job.raw or {}).get('location', '')}".lower()
+        return any(tok in text for tok in _INDIA_TOKENS) and "indiana" not in text
 
 
 def summarize_jobs(jobs: list[NormalizedJob]) -> dict[str, Any]:
-    """Per-provider counts reusing validate_job + canonicalize_url."""
-    valid = warnings = invalid = stale = india = 0
+    """Per-provider counts reusing validate_job + canonicalize_url.
+
+    Geography uses the strict classifier: only explicit India counts as
+    India; Remote/Worldwide/Global/APAC are ambiguous, never Indian.
+    Extra keys (india/foreign/ambiguous/unknown) extend the legacy
+    india_relevant count without breaking existing consumers.
+    """
+    valid = warnings = invalid = stale = india = foreign = ambiguous = unknown = 0
     canonicals: set[str] = set()
     for job in jobs:
         try:
@@ -85,12 +100,25 @@ def summarize_jobs(jobs: list[NormalizedJob]) -> dict[str, Any]:
         canon = job.canonical_url or canonicalize_url(job.apply_url or job.url)
         if canon:
             canonicals.add(canon)
-        if _india_relevant(job):
+        try:
+            label = classify_india_relevance(job.location, getattr(job, "remote", None))
+        except Exception:
+            label = "UNKNOWN"
+        if label == "INDIA":
             india += 1
+        elif label == "FOREIGN":
+            foreign += 1
+        elif label == "AMBIGUOUS":
+            ambiguous += 1
+        else:
+            unknown += 1
+    total = len(jobs)
     return {
-        "raw": len(jobs), "valid": valid, "warnings": warnings,
+        "raw": total, "valid": valid, "warnings": warnings,
         "invalid": invalid, "stale": stale,
         "unique_canonical": len(canonicals), "india_relevant": india,
+        "india": india, "foreign": foreign, "ambiguous": ambiguous, "unknown": unknown,
+        "india_pct": round(100.0 * india / total, 1) if total else 0.0,
     }
 
 
@@ -185,6 +213,137 @@ def source_report(provider_jobs: dict[str, list[NormalizedJob]]) -> dict[str, di
             "confidence": round(sum(confs) / len(confs), 3) if confs else PROVIDER_DEFAULT_CONFIDENCE.get(provider, 0.4),
         }
     return out
+
+
+def geography_breakdown(jobs: list[NormalizedJob]) -> dict[str, Any]:
+    """Strict India/foreign/ambiguous/unknown split (task §5, pure)."""
+    return _geography_report(jobs)
+
+
+def provider_geography_report(provider_jobs: dict[str, list[NormalizedJob]]) -> dict[str, dict[str, Any]]:
+    """Per-provider geography: total/india/foreign/ambiguous/unknown + India %."""
+    return {provider: _geography_report(jobs) for provider, jobs in provider_jobs.items()}
+
+
+def incremental_report(
+    new_jobs: list[NormalizedJob],
+    existing_canonicals: set[str] | list[str],
+) -> dict[str, Any]:
+    """Incremental value of a source vs already-known inventory (task §11, pure).
+
+    Identity is the canonical URL (fallback: source_platform:external_job_id),
+    matching the conservative dedup policy — no fuzzy merging. The headline
+    metric is incremental unique useful Indian jobs.
+    """
+    existing = set(existing_canonicals or [])
+
+    def _identity(job: NormalizedJob) -> str:
+        canon = job.canonical_url or canonicalize_url(job.apply_url or job.url or "")
+        if canon:
+            return canon
+        return f"{job.source_platform}:{job.external_job_id}"
+
+    seen: set[str] = set()
+    unique = dupes = 0
+    incremental_unique = incremental_india = 0
+    india_total = foreign_total = 0
+    target_roles = role_coverage(new_jobs)
+    target_total = sum(v for k, v in target_roles.items() if k != "other")
+
+    for job in new_jobs:
+        key = _identity(job)
+        if key in seen:
+            dupes += 1
+            continue
+        seen.add(key)
+        unique += 1
+        if key not in existing:
+            incremental_unique += 1
+            try:
+                if is_india_job(job.location, getattr(job, "remote", None)):
+                    incremental_india += 1
+            except Exception:
+                pass
+        try:
+            label = classify_india_relevance(job.location, getattr(job, "remote", None))
+        except Exception:
+            label = "UNKNOWN"
+        if label == "INDIA":
+            india_total += 1
+        elif label == "FOREIGN":
+            foreign_total += 1
+
+    # Validation split for the §11 raw/valid/stale/invalid row.
+    summary = summarize_jobs(new_jobs)
+    return {
+        "raw": summary["raw"],
+        "valid": summary["valid"] + summary["warnings"],
+        "stale": summary["stale"],
+        "invalid": summary["invalid"],
+        "india": india_total,
+        "foreign": foreign_total,
+        "unique_canonical": unique,
+        "duplicates": dupes,
+        "incremental_unique": incremental_unique,
+        "incremental_india": incremental_india,
+        "target_role_jobs": target_total,
+        "target_roles": target_roles,
+    }
+
+
+# Firecrawl remains official-page-only and bounded (task §10). This guard is
+# the single checklist a candidate URL must pass before scheduling.
+FIRECRAWL_MAX_PAGES = 15
+
+
+def validate_firecrawl_candidate(
+    url: Optional[str],
+    company: Optional[str] = None,
+    expected_india_volume: int = 0,
+    expected_requests: int = FIRECRAWL_MAX_PAGES,
+    aggregator_followup: bool = False,
+) -> dict[str, Any]:
+    """Decide whether a Firecrawl candidate may be scheduled (pure).
+
+    Rejects aggregator URLs, unbounded page budgets, and aggregator
+    redirect-chasing. Returns the decision plus the bounded crawl plan.
+    """
+    reasons: list[str] = []
+    allowed = True
+    if not url or not isinstance(url, str):
+        allowed, reasons = False, ["missing official URL"]
+    else:
+        if is_aggregator_url(url):
+            allowed = False
+            reasons.append("aggregator URL: Firecrawl is official-page-only")
+        if aggregator_followup:
+            allowed = False
+            reasons.append("aggregator redirect follow-up is prohibited")
+        try:
+            pages = int(expected_requests)
+        except (TypeError, ValueError):
+            pages = FIRECRAWL_MAX_PAGES + 1
+        if pages > FIRECRAWL_MAX_PAGES:
+            allowed = False
+            reasons.append(f"unbounded pages: max_pages={FIRECRAWL_MAX_PAGES}")
+        if expected_india_volume <= 0:
+            # Not a hard reject — volume unknown means "verify with a probe
+            # first", recorded explicitly so unverified pages never schedule.
+            reasons.append("India volume unverified: probe before scheduling")
+    return {
+        "allowed": allowed and not is_aggregator_url(url or ""),
+        "url": url,
+        "company": company,
+        "max_pages": min(int(expected_requests or 0), FIRECRAWL_MAX_PAGES)
+        if isinstance(expected_requests, int) else FIRECRAWL_MAX_PAGES,
+        "expected_india_volume": expected_india_volume,
+        "india_filter": "India",
+        "extraction": "map official careers page -> scrape bounded job URLs -> parse title/company/location/description/apply_url",
+        "required_fields": ["title", "company", "location", "description", "apply_url"],
+        "crawl_frequency": "24h",
+        "failure_behavior": "per-page isolation; failures never destroy usable jobs; retry bounded",
+        "reasons": reasons,
+    }
 
 
 async def dry_run_provider(

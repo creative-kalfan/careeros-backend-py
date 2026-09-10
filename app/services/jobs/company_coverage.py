@@ -23,8 +23,12 @@ from dataclasses import dataclass
 from app.services.jobs.source_priority import select_preferred_source
 
 # Classification axis: best available automated source for the company.
+# Task §3 vocabulary. OFFICIAL_CAREER_PAGE is the legacy alias for
+# OFFICIAL_INDIA_CAREER_PAGE (kept so existing rows/tests keep working).
 CLASSIFICATIONS = (
     "OFFICIAL_ATS",
+    "OFFICIAL_INDIA_CAREER_PAGE",
+    "OFFICIAL_GLOBAL_CAREER_PAGE_WITH_INDIA_FILTER",
     "OFFICIAL_CAREER_PAGE",
     "AGGREGATOR_COVERED",
     "MULTI_SOURCE",
@@ -35,18 +39,55 @@ CLASSIFICATIONS = (
 # Coverage axis: observed or strongly supported inventory level.
 COVERAGE_LEVELS = ("GOOD", "PARTIAL", "POOR", "NONE", "UNVERIFIED")
 
+# Provider audit axis (task §8): is the company already captured by an
+# existing provider (Adzuna/JobSpy/ATS/Firecrawl) without a new source?
+PROVIDER_COVERAGE_LEVELS = (
+    "ALREADY_WELL_COVERED",
+    "PARTIALLY_COVERED",
+    "POORLY_COVERED",
+    "NOT_COVERED",
+    "UNVERIFIED",
+)
+
 # Status axis: the §18 decision per company.
 STATUSES = ("already_covered", "implemented", "deferred", "blocked", "unverified")
 
 # Classification -> source types available, for preferred-source derivation.
+# New India-specific classifications sort above the legacy generic page
+# (see source_priority order); MULTI_SOURCE keeps its legacy mapping so
+# existing Firecrawl+aggregator rows still resolve to "career_page".
 _CLASSIFICATION_SOURCE_TYPES: dict[str, tuple[str, ...]] = {
     "OFFICIAL_ATS": ("ats",),
+    "OFFICIAL_INDIA_CAREER_PAGE": ("india_career_page",),
+    "OFFICIAL_GLOBAL_CAREER_PAGE_WITH_INDIA_FILTER": ("global_with_india_filter",),
     "OFFICIAL_CAREER_PAGE": ("career_page",),
     "AGGREGATOR_COVERED": ("aggregator",),
     "MULTI_SOURCE": ("career_page", "aggregator"),
     "NO_RELIABLE_AUTOMATION": (),
     "UNVERIFIED": (),
 }
+
+
+def classify_provider_coverage(jobs_discovered: int | None, verified: bool = True) -> str:
+    """Map an observed per-company job count to the §8 provider audit level.
+
+    Thresholds mirror the validation company_coverage buckets: >=10 well
+    covered, >=3 partial, >=1 poor, 0 not covered. Unverifiable counts
+    (None or explicitly unverified) map to UNVERIFIED rather than a guess.
+    """
+    if jobs_discovered is None or not verified:
+        return "UNVERIFIED"
+    try:
+        count = int(jobs_discovered)
+    except (TypeError, ValueError):
+        return "UNVERIFIED"
+    if count >= 10:
+        return "ALREADY_WELL_COVERED"
+    if count >= 3:
+        return "PARTIALLY_COVERED"
+    if count >= 1:
+        return "POORLY_COVERED"
+    return "NOT_COVERED"
 
 
 @dataclass(frozen=True)
