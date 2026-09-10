@@ -50,6 +50,12 @@ from app.services.optimization.jd_requirements import (
     group_equivalent_requirements,
     normalize_key,
 )
+from app.services.optimization.skill_relationships import (
+    RequirementCategory,
+    RelationshipStrength,
+    classify_requirement_type,
+    skill_relationship_engine,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +331,7 @@ def discover_opportunities(
     declined_ids = set(declined_requirement_ids or [])
 
     scored: List[_ScoredCandidate] = []
+    has_office_card: bool = False
     for match in report.matches:
         req = match.requirement
         req_id = req.text
@@ -337,7 +344,23 @@ def discover_opportunities(
             continue
         if match.is_claimable and float(match.strength or 0.0) >= 0.8:
             continue
-        # 2. Low-impact suppression.
+        # 2. Intelligent questioning suppression (Soft skills, Office tools, Reconstructable ecosystem)
+        is_direct_or_claimable = (match.provenance == "DIRECT") or (
+            match.is_claimable and float(match.strength or 0.0) >= 0.8
+        )
+        if not skill_relationship_engine.should_question_candidate(
+            req.text, req.category, index, is_direct_or_claimable
+        ):
+            continue
+
+        # If office requirement, consolidate so we never ask per-tool questions (Section 2.B)
+        req_type, _ = classify_requirement_type(req.text, req.category)
+        if req_type == RequirementCategory.PRODUCTIVITY_OFFICE:
+            if has_office_card:
+                continue
+            has_office_card = True
+
+        # 3. Low-impact suppression.
         impact = _potential_impact(match)
         if impact < min_impact:
             continue
@@ -453,10 +476,16 @@ _CONTEXT_CUES: List[Tuple[ExperienceContext, Tuple[str, ...]]] = [
     (ExperienceContext.PROFESSIONAL, ("at work", "in my role", "my employer", "full-time", "full time", "on the job", "professionally", "production", "my team at", "at my company")),
 ]
 
+_UNCERTAIN_RECALL_RE = re.compile(
+    r"\b(don't remember|do not remember|can't remember|cannot remember|"
+    r"not sure where|not sure which|can't recall|cannot recall|hard to recall|"
+    r"forgot where|forgot which|don't recall|do not recall)\b",
+    re.IGNORECASE,
+)
 _NEGATION_RE = re.compile(
-    r"\b(haven't|have not|hasn't|has not|don't|do not|doesn't|does not|"
-    r"never used|never worked|no experience|not familiar|don't know|no idea|"
-    r"not used|didn't|did not)\b",
+    r"\b(haven't|have not|hasn't|has not|never used|never worked|"
+    r"no experience|not familiar|not used|did not use|haven't used|"
+    r"don't know|no idea|didn't|did not|don't|do not|doesn't|does not)\b",
     re.IGNORECASE,
 )
 _PROJECT_NAME_RE = re.compile(
@@ -575,27 +604,33 @@ def _area_verdict(
     normalized_key: str,
     display_label: str,
 ) -> str:
-    """Per-area verdict for one shared answer: "confirm" | "decline" | "ambiguous".
+    """Per-area verdict for one shared answer: "confirm" | "decline" | "uncertain_recall" | "ambiguous".
 
     Fine segments mentioning the area are split by negation: affirmed
     mentions confirm, negated mentions decline, and negation wins ties (never
-    add on doubt). An unmentioned area is ambiguous — except under a short
-    global negation ("Haven't used any"), which declines it without
-    interrogation.
+    add on doubt). If candidate expresses difficulty remembering the specific
+    project/place, it is marked as "uncertain_recall" rather than "decline".
     """
     affirmed: List[str] = []
     negated: List[str] = []
+    uncertain: List[str] = []
     for group in fine_groups:
         for segment in group:
             if _mentions_requirement(segment, normalized_key, display_label):
-                if _NEGATION_RE.search(segment):
+                if _UNCERTAIN_RECALL_RE.search(segment):
+                    uncertain.append(segment)
+                elif _NEGATION_RE.search(segment):
                     negated.append(segment)
                 else:
                     affirmed.append(segment)
     if affirmed and not negated:
         return "confirm"
+    if uncertain and not negated:
+        return "uncertain_recall"
     if negated:
         return "decline"
+    if _UNCERTAIN_RECALL_RE.search(free_text or "") and len((free_text or "").split()) <= 14:
+        return "uncertain_recall"
     if _NEGATION_RE.search(free_text or "") and len((free_text or "").split()) <= 12:
         return "decline"
     return "ambiguous"
@@ -623,6 +658,8 @@ def extract_facts_from_response(
       generic cues; never invented detail).
     - Selected + negated, or explicitly unselected with negation -> declined
       (stays unsupported, never re-asked via declined_ids).
+    - Selected + uncertain recall ("don't remember where") -> confirmed
+      familiarity without false project claims; never mass-declined.
     - Selected but unmentioned/ambiguous -> at most ONE compact clarification
       for the whole batch (never per-skill interrogation).
     """
@@ -658,6 +695,25 @@ def extract_facts_from_response(
         )
         if verdict == "decline":
             result.declined_ids.append(opp.id)
+            continue
+        if verdict == "uncertain_recall":
+            # Candidate recalled using it, but couldn't remember where.
+            # Do NOT decline (never treat 'don't remember where' as 'never used').
+            context = response.context_hints.get(opp.id) or ExperienceContext.OTHER
+            result.facts.append(
+                CandidateConfirmedFact(
+                    opportunity_id=opp.id,
+                    requirement_id=opp.requirement_id,
+                    normalized_requirement=opp.normalized_requirement,
+                    display_label=opp.display_label,
+                    selected=True,
+                    candidate_context=context,
+                    candidate_description=f"Confirmed familiarity with {opp.display_label} from background",
+                    project_name=None,
+                    provenance="candidate_confirmed",
+                    confidence=0.55,
+                )
+            )
             continue
         if verdict == "ambiguous":
             ambiguous.append(opp)

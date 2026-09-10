@@ -294,7 +294,25 @@ def run_universal_tailoring(
             )
         )
 
-    # -- 3. Experience: emphasize highest-value entry (no bullet fabrication) --
+    # -- 3. Reconstruction: Problem -> Action -> Technology -> Outcome --
+    from app.services.optimization.resume_reconstruction import (
+        reconstruct_profile_projects_and_experience,
+    )
+
+    tailored, recon_notes = reconstruct_profile_projects_and_experience(
+        tailored, universal_jd, evidence_index
+    )
+    for note in recon_notes[:2]:
+        plan.append(
+            TailoringPlanItemSchema(
+                section="experience",
+                action="REWRITE",
+                reasoning=note,
+                keywords_addressed=[k for _, k in strengths][:2],
+            )
+        )
+
+    # -- 4. Experience: emphasize highest-value entry (no bullet fabrication) --
     entries = list(tailored.experience or [])
     if entries:
         recency = recency_weights_for_entries(len(entries))
