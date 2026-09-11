@@ -84,10 +84,10 @@ async def test_ingest_adzuna_jobs(ingestion_service: JobIngestionService) -> Non
         result = await ingestion_service.ingest_adzuna_jobs("software engineer")
 
     mock_adzuna_cls.assert_called_once_with()
-    # Bounded budget: 3 primary (in + gb-remote + us) + 2 rotated India broad
-    # queries x 1 country = 5 calls. Each returns 3 jobs -> 15 normalizations.
-    assert mock_adapter.search_by_query.await_count == 5
-    assert ingestion_service.job_service.normalize_and_classify.call_count == 15
+    # Bounded budget: 3 primary (in + gb-remote + us) + 3 rotated India broad
+    # queries x 1 country = 6 calls. Each returns 3 jobs -> 18 normalizations.
+    assert mock_adapter.search_by_query.await_count == 6
+    assert ingestion_service.job_service.normalize_and_classify.call_count == 18
     ingestion_service.job_repository.upsert_jobs.assert_called_once()
     assert result == {"inserted": 1, "updated": 0}
 
@@ -136,7 +136,7 @@ async def test_ingest_all(ingestion_service: JobIngestionService) -> None:
                         result = await ingestion_service.ingest_all()
 
     mock_ashby_cls.assert_called_once_with("notion")
-    mock_greenhouse_cls.assert_called_once_with("stripe")
+    mock_greenhouse_cls.assert_called_once_with("stripe", india_only=False)
     # SmartRecruiters is called for both servicenow and visa
     assert mock_smartrecruiters_cls.call_count == 2
     mock_smartrecruiters_cls.assert_any_call("servicenow")

@@ -18,37 +18,63 @@ from app.services.jobs.job_service import JobService
 # Deterministic broad-query rotation for Adzuna (India-first, bounded).
 # One batch of ADZUNA_BATCH_SIZE queries is exercised per crawl cycle,
 # rotating by day-of-year so coverage is deterministic and restart-safe.
-# Categories: data analytics, data engineering, AI/ML, backend, SAP.
+# The matrix covers the task §5 priority domains (data analytics, BI, data
+# engineering, AI/ML, backend, software engineering, SAP, risk & financial
+# analytics) plus the city-scoped queries that live probes showed to be
+# GENUINELY incremental (unique India jobs beyond the role+India baseline —
+# see scripts/probe_adzuna_city_yield.py). Budget: batch is bounded and the
+# rotation cycles over this matrix within the staleness window.
 ADZUNA_BROAD_QUERIES = [
-    # Data analytics
+    # Data analytics & BI (task priority)
     "data analyst India",
-    "business analyst India",
+    "data analytics India",
+    "business intelligence India",
     "BI analyst India",
+    "business analyst India",
     "reporting analyst India",
+    "risk analyst India",
+    "risk analytics India",
+    "financial analyst India",
     # Data engineering
     "data engineer India",
+    "data engineering India",
     "analytics engineer India",
     "ETL developer India",
     "data warehouse India",
     # AI / ML
-    "machine learning engineer India",
+    "machine learning India",
     "AI engineer India",
+    "artificial intelligence India",
     "data scientist India",
     "generative AI India",
-    # Backend
-    "backend developer India",
+    # Backend / software engineering
+    "backend engineer India",
+    "software engineer India",
     "Python backend India",
     "Java backend India",
     "API developer India",
     # SAP
+    "SAP India",
     "SAP ABAP India",
     "ABAP developer India",
     "SAP HANA India",
-    "SAP BW India",
+    # City-scoped (measured incremental India coverage, task §7)
+    "data analyst Hyderabad",
+    "data analyst Pune",
+    "data analyst Mumbai",
+    "data analyst Chennai",
+    "data analyst Bengaluru",
+    "data analyst Gurugram",
+    "data engineer Bengaluru",
+    "software engineer Bengaluru",
+    "software engineer Hyderabad",
+    "software engineer Pune",
+    "software engineer Chennai",
 ]
-ADZUNA_BATCH_SIZE = 2
+ADZUNA_BATCH_SIZE = 3
 # Broad rotation is India-scoped only; the primary query already covers
-# remote/global. Keeps the free-tier budget bounded (~5 calls/crawl/day).
+# remote/global. Keeps the free-tier budget bounded (primary 3 + batch 3 =
+# ~6 calls/crawl/day, ~180/mo, well inside the ~1000/mo free allowance).
 ADZUNA_BROAD_COUNTRIES = ("in",)
 
 
@@ -70,9 +96,14 @@ class JobIngestionService:
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         return self.job_repository.upsert_jobs(normalized_jobs)
 
-    async def ingest_greenhouse_jobs(self, slug: str) -> dict[str, int]:
-        """Ingest jobs from Greenhouse."""
-        adapter = GreenhouseAdapter(slug)
+    async def ingest_greenhouse_jobs(self, slug: str, india_only: bool = False) -> dict[str, int]:
+        """Ingest jobs from Greenhouse.
+
+        ``india_only=True`` keeps only India-classified postings (deterministic
+        location filter). Default False preserves the full board inventory —
+        the canonical global set is never destroyed by ingestion.
+        """
+        adapter = GreenhouseAdapter(slug, india_only=india_only)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         return self.job_repository.upsert_jobs(normalized_jobs)
@@ -207,7 +238,8 @@ class JobIngestionService:
         # Tertiary: deterministic broad-query rotation (bounded budget).
         # One batch of `batch_size` India-scoped queries per run; the batch
         # rotates by day-of-year so every query is exercised over time.
-        # ponytail: 2 queries x 1 country = 2 calls/crawl (~150/mo), not 24.
+        # ponytail: 3 queries x 1 country = 3 calls/crawl (~180/mo), not the
+        # full matrix.
         ordinal = datetime.now(timezone.utc).timetuple().tm_yday
         for broad_query in self.adzuna_rotation_batch(ordinal, batch_size):
             for country in ADZUNA_BROAD_COUNTRIES:

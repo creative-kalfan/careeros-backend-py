@@ -21,6 +21,34 @@ DEFAULT_ADZUNA_QUERY = "software engineer"
 CRAWL_STATUS_PREFIX = "crawl_status"
 CRAWL_STATUS_TTL_SECONDS = 7 * 24 * 3600
 
+# Provider families whose discovery return is a COMPLETE inventory of that
+# source (an ATS board, the YC board, or one company's careers page). For
+# these, "not seen in this crawl" is strong evidence the posting disappeared,
+# so the not-seen reconciliation deactivates it (Firecrawl is additionally
+# scoped to the crawled careers URL).
+_COMPLETE_INVENTORY_SOURCES = frozenset(
+    {"greenhouse", "ashby", "lever", "smartrecruiters", "ycombinator", "workday", "icims", "firecrawl"}
+)
+
+# Query-based providers (Adzuna search, JobSpy Naukri/LinkedIn): each crawl
+# exercises a bounded ROTATION of queries, never the full source inventory.
+# A job absent from today's query subset is NOT evidence it disappeared —
+# it simply was not requested. Applying not-seen deactivation here would
+# cull otherwise-fresh jobs (observed Adzuna churn: 1066 inactive, 0 active).
+# The age-based stale window (JOB_STALE_AFTER_DAYS) remains the deactivation
+# boundary for these providers.
+_QUERY_BASED_SOURCES = frozenset({"adzuna", "jobspy"})
+
+
+def _uses_complete_inventory(source: str) -> bool:
+    """True when a crawl of this source sees the whole postings inventory.
+
+    ATS boards / YC / Firecrawl careers pages: yes (Firecrawl is scoped to
+    the crawled careers URL). Query-based aggregators (Adzuna/JobSpy): no —
+    not-seen never implies gone for a bounded query rotation.
+    """
+    return source in _COMPLETE_INVENTORY_SOURCES
+
 
 async def _record_crawl_status(
     source: str,
@@ -127,10 +155,14 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
 
     # Lifecycle hygiene (successful crawls only):
     #   1. NO-LONGER-SEEN reconciliation: jobs from this source not observed
-    #      since crawl_started_at are deactivated. For Firecrawl the scope is
-    #      additionally narrowed to the crawled careers URL so one company's
-    #      success can never deactivate another company's jobs.
-    #   2. Age-based staleness (JOB_STALE_AFTER_DAYS) as a final backstop.
+    #      since crawl_started_at are deactivated — but ONLY for providers
+    #      whose crawl sees the complete inventory (ATS boards / YC). Firecrawl
+    #      is additionally narrowed to the crawled careers URL so one company's
+    #      success can never deactivate another company's jobs. Query-based
+    #      aggregators (Adzuna/JobSpy) are EXEMPT: today's query rotation not
+    #      containing a job is not evidence the job disappeared.
+    #   2. Age-based staleness (JOB_STALE_AFTER_DAYS) as a final backstop (all
+    #      providers, including query-based ones).
     # Best-effort: never fails the crawl.
     deactivated_not_seen = 0
     deactivated = 0
@@ -141,11 +173,18 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         if source == "firecrawl":
             _, _, careers_url_scope = slug.partition("|")
             not_seen_kwargs["careers_url"] = careers_url_scope
-        deactivated_not_seen = ingestion.job_repository.deactivate_not_seen_since(
-            source_platform=source,
-            since_iso=crawl_started_at,
-            **not_seen_kwargs,
-        )
+        if _uses_complete_inventory(source):
+            deactivated_not_seen = ingestion.job_repository.deactivate_not_seen_since(
+                source_platform=source,
+                since_iso=crawl_started_at,
+                **not_seen_kwargs,
+            )
+        else:
+            logger.info(
+                "Skipping not-seen deactivation for %s (query-based provider: "
+                "today's bounded query rotation is not the full inventory)",
+                source,
+            )
         deactivated = ingestion.job_repository.deactivate_stale_jobs(
             source_platform=source,
             max_age_days=get_settings().job_stale_after_days,

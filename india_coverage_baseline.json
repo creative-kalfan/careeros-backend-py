@@ -1,0 +1,102 @@
+{
+  "captured_at": "2026-09-11T03:29:16.538526+00:00",
+  "totals": {
+    "total_active_jobs": 668,
+    "inactive_jobs": 2183,
+    "india": 40,
+    "foreign": 399,
+    "ambiguous": 15,
+    "unknown": 214,
+    "india_pct": 6.0,
+    "foreign_pct": 59.7,
+    "unknown_pct": 32.0
+  },
+  "by_provider": {
+    "greenhouse": {
+      "total": 615,
+      "india": 40,
+      "foreign": 398,
+      "ambiguous": 7,
+      "unknown": 170,
+      "india_pct": 6.5
+    },
+    "ycombinator": {
+      "total": 20,
+      "india": 0,
+      "foreign": 0,
+      "ambiguous": 7,
+      "unknown": 13,
+      "india_pct": 0.0
+    },
+    "firecrawl": {
+      "total": 31,
+      "india": 0,
+      "foreign": 0,
+      "ambiguous": 1,
+      "unknown": 30,
+      "india_pct": 0.0
+    },
+    "workday": {
+      "total": 2,
+      "india": 0,
+      "foreign": 1,
+      "ambiguous": 0,
+      "unknown": 1,
+      "india_pct": 0.0
+    }
+  },
+  "by_company": {
+    "Stripe": 615,
+    "PostHog": 15,
+    "Linear": 12,
+    "Zerodha": 2,
+    "Airhart Aeronautics": 1,
+    "Luthor": 1,
+    "Encord": 1,
+    "Diode Computers Inc": 1,
+    "Replo": 1,
+    "Tekton Dynamics": 1,
+    "Kilvin": 1,
+    "Numeral": 1,
+    "Saturn": 1,
+    "Medplum": 1,
+    "Entangl": 1,
+    "Truewind": 1,
+    "Authologic": 1,
+    "Aviator": 1,
+    "Onechronos": 1,
+    "Giga": 1,
+    "Litellm": 1,
+    "Razorpay": 1,
+    "Amazon": 1,
+    "Apple": 1,
+    "Landeed": 1,
+    "Postscript": 1,
+    "Great Question": 1,
+    "TestCo": 1
+  },
+  "india_by_company": {
+    "Stripe": 40
+  },
+  "india_by_role": {
+    "Other": 11,
+    "Customer & Operations": 10,
+    "Management": 6,
+    "Product & Business": 6,
+    "Software Engineering": 4,
+    "Design & Creative": 1,
+    "Finance & BFSI": 1,
+    "Data & Analytics": 1
+  },
+  "by_target_role": {
+    "backend": 22,
+    "ai_ml": 16,
+    "analytics": 12
+  },
+  "india_by_target_role": {
+    "analytics": 1
+  },
+  "india_by_city": {
+    "Bengaluru": 40
+  }
+}

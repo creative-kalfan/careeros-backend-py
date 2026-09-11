@@ -124,6 +124,14 @@ FOREIGN_MARKERS = (
     "dubai",
 )
 
+# Deterministic US-only marker (word-boundary "us"/"usa"/"u.s.a"). Checked
+# only after the India + ambiguous tests, and guarded against bare
+# "remote ..." forms ("Remote in the US" stays AMBIGUOUS per the conservative
+# remote policy — it is never promoted to India). This resolves clear
+# US-only location strings ("US", "US-Remote", "US-SF...") from UNKNOWN to
+# FOREIGN with high confidence.
+_US_FOREIGN = re.compile(r"\bus\b|\busa\b|\bu\.?s\.?a\b", re.IGNORECASE)
+
 _INDIA_WORD = re.compile(r"\bindia\b", re.IGNORECASE)
 
 # Relevance labels (task §6 + §5 reporting).
@@ -187,6 +195,10 @@ def classify_india_relevance(
 
     # 3. Explicit foreign geography.
     if any(marker in lowered for marker in FOREIGN_MARKERS):
+        return FOREIGN
+    # Deterministic US-only strings ("US", "US-Remote", "US-SF..."). The
+    # bare-remote guard keeps "Remote in the US" AMBIGUOUS per policy.
+    if not lowered.startswith("remote") and _US_FOREIGN.search(lowered):
         return FOREIGN
     # Lone "remote ..." with a foreign qualifier handled above; a location
     # that names a foreign marker anywhere is foreign.

@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     crawl_interval_hours: Optional[float] = Field(default=None, alias="CRAWL_INTERVAL_HOURS")
 
     # Adzuna India budget (free-tier friendly; ~1000 calls/month).
-    adzuna_queries_per_crawl: int = Field(default=2, alias="ADZUNA_QUERIES_PER_CRAWL")
+    adzuna_queries_per_crawl: int = Field(default=3, alias="ADZUNA_QUERIES_PER_CRAWL")
     adzuna_results_per_page: int = Field(default=50, alias="ADZUNA_RESULTS_PER_PAGE")
 
     # JobSpy (optional dep python-jobspy; missing dep = graceful empty crawl).

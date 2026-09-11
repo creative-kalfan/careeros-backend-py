@@ -291,6 +291,107 @@ def incremental_report(
     }
 
 
+def india_kpis(
+    new_jobs: list[NormalizedJob],
+    existing_canonicals: set[str] | list[str],
+    provider_calls: int = 0,
+) -> dict[str, Any]:
+    """Incremental India coverage KPIs (task §16, pure).
+
+    Single internal metric family:
+
+        incremental_unique_india_jobs            (headline)
+        incremental_unique_india_target_role_jobs
+        india_jobs_per_provider_call
+        india_jobs_per_crawl
+        india_job_percentage
+        india_target_role_percentage
+
+    ``existing_canonicals`` is the already-known canonical URL set for the
+    SAME provider, so incrementality is measured against prior inventory, not
+    against the other providers. Identity is canonical URL (conservative).
+    """
+    existing = set(existing_canonicals or [])
+    calls = max(1, int(provider_calls or 0))
+
+    def _identity(job: NormalizedJob) -> str:
+        canon = job.canonical_url or canonicalize_url(job.apply_url or job.url or "")
+        if canon:
+            return canon
+        return f"{job.source_platform}:{job.external_job_id}"
+
+    seen: set[str] = set()
+    india_total = 0
+    india_target_total = 0
+    incremental_india = 0
+    incremental_india_target = 0
+    target_roles = role_coverage(new_jobs)
+
+    for job in new_jobs:
+        key = _identity(job)
+        if key in seen:
+            continue
+        seen.add(key)
+        is_india = False
+        try:
+            is_india = is_india_job(job.location, getattr(job, "remote", None))
+        except Exception:
+            is_india = False
+        if is_india:
+            india_total += 1
+        bucket = next(
+            (d for d, kws in TARGET_ROLE_KEYWORDS.items() if any(k in (job.title or "").lower() for k in kws)),
+            None,
+        )
+        is_target = bucket is not None
+        if is_india and is_target:
+            india_target_total += 1
+        if is_india and key not in existing:
+            incremental_india += 1
+            if is_target:
+                incremental_india_target += 1
+
+    raw = len(new_jobs)
+    return {
+        "incremental_unique_india_jobs": incremental_india,
+        "incremental_unique_india_target_role_jobs": incremental_india_target,
+        "india_jobs_per_provider_call": round(incremental_india / calls, 2),
+        "india_jobs_per_crawl": india_total,
+        "india_job_percentage": round(100.0 * india_total / raw, 1) if raw else 0.0,
+        "india_target_role_percentage": round(100.0 * india_target_total / raw, 1) if raw else 0.0,
+        "target_roles": target_roles,
+    }
+
+
+def score_queries_by_yield(
+    per_query_stats: dict[str, dict[str, Any]],
+) -> list[tuple[str, float]]:
+    """Rank Adzuna queries by incremental India yield per API call (§5).
+
+    Optimization metric: > incremental India jobs / call. The score blends
+    incremental unique India jobs (0.6) with India target-role jobs (0.4),
+    penalized when a query spends calls for no new coverage (call count from
+    the stats dict defaulting to 1).
+
+    ``per_query_stats`` entries mirror the live-probe shape:
+        {"raw": int, "india": int, "target_role": int,
+         "incremental_unique_india": int (optional), "calls": int (optional)}
+    Ranking is deterministic (descending score, then query name).
+    """
+    ranked: list[tuple[str, float]] = []
+    for query, stats in (per_query_stats or {}).items():
+        calls = max(1, int(stats.get("calls", 1) or 1))
+        incremental = max(0, int(stats.get("incremental_unique_india", stats.get("india", 0) or 0)))
+        india_target = max(0, int(stats.get("india_target_role", stats.get("target_role", 0) or 0)))
+        if incremental == 0 and india_target == 0:
+            score = 0.0
+        else:
+            score = round((0.6 * incremental + 0.4 * india_target) / calls, 3)
+        ranked.append((query, score))
+    ranked.sort(key=lambda kv: (-kv[1], kv[0]))
+    return ranked
+
+
 # Firecrawl remains official-page-only and bounded (task §10). This guard is
 # the single checklist a candidate URL must pass before scheduling.
 FIRECRAWL_MAX_PAGES = 15

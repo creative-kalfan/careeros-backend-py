@@ -219,9 +219,19 @@ class JobRepository:
                     self._client.table("jobs").update(row).eq("id", winner["id"]).execute()
                     updated += 1
             elif self._is_same_job(existing, row):
-                # Nothing changed: refresh last_seen only.
+                # Nothing changed: refresh last_seen, and re-activate a
+                # previously-deactivated row when the re-observed posting is
+                # still fresh. Re-observation is positive evidence the job is
+                # currently listed (e.g. after not-seen churn or a lapsed
+                # crawl); the age staleness check in to_db_row still governs
+                # whether it MAY be active, so old postings stay inactive.
+                update: dict[str, Any] = {}
                 if has_last_seen:
-                    self._client.table("jobs").update({"last_seen_at": now_iso}).eq(
+                    update["last_seen_at"] = now_iso
+                if existing.get("is_active") is False and row.get("is_active") is True:
+                    update["is_active"] = True
+                if update:
+                    self._client.table("jobs").update(update).eq(
                         "id", existing["id"]
                     ).execute()
                 unchanged += 1

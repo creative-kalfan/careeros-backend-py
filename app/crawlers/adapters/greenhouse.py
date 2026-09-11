@@ -1,4 +1,14 @@
-"""Greenhouse ATS adapter (port of GreenhouseAdapter.ts)."""
+"""Greenhouse ATS adapter (port of GreenhouseAdapter.ts).
+
+The board's ``location`` field is structured text (city / "N/A" / "US-Remote"
+/ "IN-Bengaluru" ...), so India-relevance is deterministically identifiable
+BEFORE persistence via :func:`app.services.jobs.india_geography.is_india_job`.
+
+``india_only`` is an OPT-IN geographic filter: when True, only India-classified
+postings are returned. The default (False) preserves the full board inventory
+so foreign canonical jobs are never destroyed — the India-first boundary lives
+at retrieval/ranking, not by deleting foreign rows.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +20,7 @@ import httpx
 
 from app.crawlers.base import BaseCrawler
 from app.crawlers.models import CrawledJob
+from app.services.jobs.india_geography import is_india_job
 
 GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
 
@@ -66,10 +77,12 @@ class GreenhouseAdapter(BaseCrawler):
         slug: str,
         api_base: str = GREENHOUSE_API,
         client: Optional[httpx.AsyncClient] = None,
+        india_only: bool = False,
     ) -> None:
         self.slug = slug
         self.api_base = api_base
         self._client = client
+        self.india_only = india_only
 
     async def __aenter__(self) -> "GreenhouseAdapter":
         if self._client is None:
@@ -120,6 +133,11 @@ class GreenhouseAdapter(BaseCrawler):
             jobs = await asyncio.gather(
                 *(_fetch_one(raw) for raw in jobs_raw if isinstance(raw, dict))
             )
+            if self.india_only:
+                # Deterministic pre-ingestion geographic filter: keep only
+                # postings whose location explicitly includes India. Never
+                # rewrites or fabricates location data.
+                jobs = [j for j in jobs if is_india_job(j.location, j.remote)]
             return list(jobs)
         finally:
             if owned and client is not None:

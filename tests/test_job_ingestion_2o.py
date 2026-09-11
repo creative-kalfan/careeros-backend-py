@@ -69,12 +69,17 @@ async def test_adzuna_what_and_category_passthrough():
 
 def test_adzuna_rotation_covers_required_domains_and_rotates():
     text = " ".join(ADZUNA_BROAD_QUERIES).lower()
-    for needle in ("data analyst", "data engineer", "machine learning",
-                   "backend", "sap abap", "etl", "ai engineer", "data scientist"):
-        assert needle in text
+    for needle in ("data analyst", "data analytics", "business intelligence",
+                   "data engineer", "machine learning", "artificial intelligence",
+                   "backend", "software engineer", "sap abap", "risk analyst",
+                   "financial analyst"):
+        assert needle in text, needle
+    # City-scoped queries are part of the rotation (measured incremental India).
+    assert "data analyst hyderabad" in text
+    assert "software engineer bengaluru" in text
     b1 = JobIngestionService.adzuna_rotation_batch(1)
     b2 = JobIngestionService.adzuna_rotation_batch(2)
-    assert len(b1) == 2 and b1 != b2  # rotation bug fixed: batches differ by day
+    assert len(b1) == 3 and b1 != b2  # rotation bug fixed: batches differ by day
     assert JobIngestionService.adzuna_rotation_batch(1) == b1  # deterministic
 
 
@@ -96,7 +101,7 @@ async def test_adzuna_ingest_bounded_budget():
         await service.ingest_adzuna_jobs("software engineer")
     finally:
         mod.AdzunaAdapter = orig
-    assert mock_adapter.search_by_query.await_count == 5  # 3 primary + 2 rotated
+    assert mock_adapter.search_by_query.await_count == 6  # 3 primary + 3 rotated
 
 
 # --- JobSpy ---
