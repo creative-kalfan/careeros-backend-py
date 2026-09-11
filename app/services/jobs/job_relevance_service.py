@@ -57,6 +57,14 @@ def _india_first_score(job: NormalizedJob) -> int:
     return 0
 
 
+def _recency_key(job: NormalizedJob) -> str:
+    """Newest evidence wins: re-observation refreshes rank, posted_at untouched."""
+    return max(
+        job.posted_date or "",
+        getattr(job, "last_seen_at", None) or "",
+    )
+
+
 class JobRelevanceService:
     """Combines repository and personalized service for job relevance."""
 
@@ -133,11 +141,11 @@ class JobRelevanceService:
     def _sort_jobs(jobs: list[NormalizedJob], sort: Optional[str]) -> list[NormalizedJob]:
         """Dynamic sorting: newest / oldest / salary (default: relevance)."""
         if sort == "newest":
-            jobs.sort(key=lambda j: j.posted_date or "", reverse=True)
+            jobs.sort(key=lambda j: (j.posted_date or "", j.external_job_id or "", j.title or ""), reverse=True)
         elif sort == "oldest":
-            jobs.sort(key=lambda j: j.posted_date or "", reverse=False)
+            jobs.sort(key=lambda j: (j.posted_date or "", j.external_job_id or "", j.title or ""), reverse=False)
         elif sort == "salary":
-            jobs.sort(key=lambda j: j.salary_max or 0, reverse=True)
+            jobs.sort(key=lambda j: (j.salary_max or 0, j.external_job_id or ""), reverse=True)
         return jobs
 
     def get_relevant_jobs(
@@ -199,12 +207,13 @@ class JobRelevanceService:
                 self._sort_jobs(jobs, sort)
             else:
                 # India-first without match scores; recent first as a
-                # deterministic tiebreak.
+                # deterministic tiebreak (canonical id last so pages are stable).
                 jobs.sort(
                     key=lambda j: (
                         _india_first_score(j),
                         source_quality_bonus(j),
-                        j.posted_date or "",
+                        _recency_key(j),
+                        j.external_job_id or "",
                     ),
                     reverse=True,
                 )
@@ -235,7 +244,8 @@ class JobRelevanceService:
                 return (
                     score,
                     ind,
-                    j.posted_date or "",
+                    _recency_key(j),
+                    j.external_job_id or "",
                 )
 
             filtered_jobs.sort(key=_rank_key, reverse=True)

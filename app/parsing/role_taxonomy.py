@@ -167,6 +167,16 @@ _ROLE_TAXONOMY: dict[str, list[dict[str, Any]]] = {
             ],
             "related": ["Data Engineer", "Backend Developer", "Cloud Engineer"],
         },
+        {
+            "canonical": "SAP Consultant",
+            "aliases": [
+                "sap consultant", "sap abap", "abap developer",
+                "abap consultant", "sap hana", "sap hana consultant",
+                "sap fico", "sap mm", "sap sd", "sap bw", "sap basis",
+                "sap functional consultant", "sap technical consultant",
+            ],
+            "related": ["Backend Developer", "Software Engineer", "Financial Analyst"],
+        },
     ],
     "Data & Analytics": [
         {

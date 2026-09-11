@@ -345,10 +345,20 @@ class PersonalizedJobService:
         return 0.0
 
     def _score_freshness(self, job: NormalizedJob) -> float:
-        if not job.posted_date:
+        # Observation-aware: re-observed jobs regain freshness without
+        # rewriting posted_date. Score = max(posting age, observation age).
+        posted_score = self._freshness_from_iso(job.posted_date)
+        observed_iso = getattr(job, "last_seen_at", None)
+        if observed_iso:
+            return max(posted_score, self._freshness_from_iso(observed_iso))
+        return posted_score
+
+    @staticmethod
+    def _freshness_from_iso(value: object) -> float:
+        if not value:
             return 50.0
         try:
-            posted = job.posted_date
+            posted = value
             if isinstance(posted, str):
                 from datetime import datetime
                 posted_dt = datetime.fromisoformat(posted.replace("Z", "+00:00"))

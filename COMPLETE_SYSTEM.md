@@ -766,3 +766,83 @@ recovered; NO new regressions).
   buckets (by design); target-role KPI counts them as "other".
 - Measurement artifacts: `india_coverage_baseline.json` / 
   `india_coverage_after.json` (repo root, evidence for this section).
+
+## 16. India Target-Role + Freshness-Aware Feed (2026-09-11, this update)
+
+Baseline: commit `9192778` — 785 active, India 96 (12.2%), India target-role
+thin (Analytics 1, Backend 3, AI/ML 0, Data Eng 0, SAP ABAP 0). No second
+pipeline, no second ranking/freshness system, no new crawlers, no migrations,
+no frontend changes. 7 files (+1 test), all changes reuse existing primitives.
+
+### 16.1 Target-role taxonomy audit (measured, not assumed)
+
+`classify()` spot-check before the fix: Data Analyst / Data Engineer / ML
+Engineer / Backend / Risk / Financial Analyst / Analytics Engineer / BI
+Developer all classify correctly — the ONLY invisible target role was SAP:
+"SAP ABAP Developer" → Other, "SAP FICO Analyst" → Other, and worse,
+"SAP HANA Consultant" → Healthcare (generic "consultant" alias collision).
+Fix: one `SAP Consultant` family in `role_taxonomy.py` (Software
+Engineering bucket, 13 aliases: sap abap, abap developer/consultant, sap
+hana, fico/mm/sd/bw/basis, functional/technical consultant). Longest-match
+ordering makes the SAP aliases win over bare "consultant"; generic
+"Consultant" still maps to Healthcare (verified). BI/Risk/Financial need no
+change (already correct buckets); keyword-level target metrics
+(`ingestion_validation.TARGET_ROLE_KEYWORDS`) already had a sap bucket.
+
+### 16.2 Adzuna queries: no change needed (verified, not assumed)
+
+The 39-query matrix from §15.4 already contains SAP India / SAP ABAP India /
+ABAP developer India / SAP HANA India. Bounded live dry-run (1 query × 1
+page × 10 results = 1 API call, zero DB writes): "SAP ABAP India" → raw 10,
+India 10/10 (100%), sap bucket 9, other 1, 0 dupes. Conclusion: the
+inventory was reachable; the taxonomy hid it. No query added/removed.
+
+### 16.3 Freshness root fixes (observation vs posting age)
+
+- `NormalizedJob` gains optional `first_seen_at` / `last_seen_at` (ranking
+  inputs only; `to_db_row` untouched so `posted_at` is never fabricated).
+- `PersonalizedJobService._score_freshness` is now observation-aware:
+  score = max(posting-age score, observation-age score) via shared
+  `_freshness_from_iso`. Posted-20d + seen-today → 100 (was 50). Single
+  primitive reused by recommendations (`RecommendationEngine` consumes
+  `match["freshness"]`), no second freshness system.
+- `JobRepository.deactivate_stale_jobs` root fix: previously
+  `posted_at OR last_seen_at` (posted won, so re-observed old postings were
+  culled) compared as STRINGS. Now `last_seen_at` wins with real datetime
+  parsing; rows with no usable date are never culled (never delete-by-stale).
+- `upsert_jobs` re-observation verified unchanged and correct: identity
+  preserved, `last_seen_at` refreshed, `posted_at` untouched on the
+  unchanged path, no duplicates (in-batch set + identity lookup + 23505
+  race fallback). Query-rotation exemption intact: adzuna/jobspy stay out
+  of `_COMPLETE_INVENTORY_SOURCES` (verified in tests).
+
+### 16.4 Deterministic India+freshness ordering
+
+`_recency_key()` = max(posted_date, last_seen_at) used in both
+`JobRelevanceService` sort paths (anon India-first and personalized
+match+India-boost); canonical `external_job_id` appended as final tiebreak
+in relevance sorts, `_sort_jobs` newest/oldest/salary, and
+`RecommendationEngine` (score, india, freshness, job_id). India-first still
+outweighs freshness alone (stale India > fresh foreign at equal match, per
+existing architecture); freshness decides within equal India tiers.
+
+### 16.5 Synthetic tests (§§22-25) + live validation
+
+New `tests/test_india_target_freshness.py` (11 offline tests): SAP
+classification + bucket intactness; re-observed freshness restore;
+posted_at immutability; stale-deactivation observation-wins + rotation
+exemption; upsert re-observation contract; A-E India/target/freshness
+ranking; NEW>FRESH>AGING>STALE tier order; pagination determinism.
+Live: Adzuna keys present in `.env`; 1-call SAP dry-run above (9/10 sap,
+100% India). JobSpy live re-probe skipped (prior §13.2 stands; no dep
+change). Firecrawl untouched (official-only, max_pages 15).
+
+### 16.6 Regression comparison
+
+Targeted (ingestion/india/crawl/escalation/freshness): 42/42 pass. Full
+suite: 1070 collected, **1056 passed**, 14 failed — 6 copilot stub 404s +
+8 resume visual/golden pixel asserts, ALL pre-existing (the 2
+`style_extraction` degree-normalization asserts fail identically with this
+update stashed; resume code untouched by this diff). Baseline §9.1 was
+1033 passed / 12 failed; delta is +11 new passing tests and +2 flaky
+environment goldens, zero regressions from this change.

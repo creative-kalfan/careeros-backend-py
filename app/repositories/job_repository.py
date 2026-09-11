@@ -264,7 +264,7 @@ class JobRepository:
         if not self._probe_has_last_seen_at():
             return 0
 
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
         query = (
             self._client.table("jobs")
             .select("id, posted_at, last_seen_at")
@@ -279,11 +279,26 @@ class JobRepository:
             logger.warning("deactivate_stale_jobs: query failed", exc_info=True)
             return 0
 
+        def _parse_dt(value: Any) -> Optional[datetime]:
+            if not value:
+                return None
+            try:
+                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except Exception:
+                return None
+
         count = 0
         for row in result.data or []:
-            observed = row.get("posted_at") or row.get("last_seen_at")
-            if observed and str(observed) >= cutoff:
+            # Observation freshness wins: a re-observed old posting is still
+            # listed, so last_seen_at (not posted_at) decides staleness.
+            observed = _parse_dt(row.get("last_seen_at")) or _parse_dt(row.get("posted_at"))
+            if observed is not None and observed >= cutoff:
                 continue
+            if observed is None:
+                continue  # no usable date: never delete-by-staleness
             try:
                 self._client.table("jobs").update({"is_active": False}).eq(
                     "id", row["id"]

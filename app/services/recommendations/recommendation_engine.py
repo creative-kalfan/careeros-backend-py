@@ -136,12 +136,14 @@ class RecommendationEngine:
             })
 
         # Sort: source-aware final rank (candidate match + bounded source
-        # quality bonus), then india_score DESC, freshness DESC.
+        # quality bonus), then india_score DESC, freshness DESC, job id for
+        # deterministic pages.
         results.sort(
             key=lambda r: (
                 combined_rank_score(r["recommendation_score"], r.get("job")),
                 r["india_score"],
                 r["freshness"],
+                str(r.get("job_id") or ""),
             ),
             reverse=True,
         )

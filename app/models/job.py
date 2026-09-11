@@ -45,6 +45,10 @@ class NormalizedJob(BaseModel):
     posted_at: Optional[str] = None
     expires_date: Optional[str] = None
     experience_level: Optional[str] = None
+    # Observation freshness (DB: migration 011 last_seen_at, 016 first_seen_at).
+    # Read-only ranking inputs: never overwrite posted_at/posted_date.
+    first_seen_at: Optional[str] = None
+    last_seen_at: Optional[str] = None
 
     # Classification / enrichment
     role_category: Optional[str] = None
