@@ -115,7 +115,7 @@ FIRECRAWL_TARGETS: list[CrawlTarget] = [
 # ---------------------------------------------------------------------------
 ATS_TARGETS: list[CrawlTarget] = [
     CrawlTarget("ashby", "notion", "ats", 3, source_type="ats", company="Notion", india_filter="India"),
-    CrawlTarget("greenhouse", "stripe", "ats", 3, source_type="ats", company="Stripe", india_filter="India"),
+    CrawlTarget("greenhouse", "stripe", "ats", 3, source_type="ats", company="Stripe", india_only=True, india_filter="India"),
     CrawlTarget("smartrecruiters", "servicenow", "ats", 3, source_type="ats", company="ServiceNow", india_filter="India"),
     CrawlTarget("lever", "coupa", "ats", 3, source_type="ats", company="Coupa", india_filter="India"),
     CrawlTarget("smartrecruiters", "visa", "ats", 3, source_type="ats", company="Visa", india_filter="India"),

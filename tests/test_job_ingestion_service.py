@@ -136,7 +136,7 @@ async def test_ingest_all(ingestion_service: JobIngestionService) -> None:
                         result = await ingestion_service.ingest_all()
 
     mock_ashby_cls.assert_called_once_with("notion")
-    mock_greenhouse_cls.assert_called_once_with("stripe", india_only=False)
+    mock_greenhouse_cls.assert_called_once_with("stripe", india_only=True)
     # SmartRecruiters is called for both servicenow and visa
     assert mock_smartrecruiters_cls.call_count == 2
     mock_smartrecruiters_cls.assert_any_call("servicenow")

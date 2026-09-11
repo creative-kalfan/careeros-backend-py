@@ -314,7 +314,7 @@ class JobIngestionService:
 
         # Greenhouse
         try:
-            results["greenhouse"] = await self.ingest_greenhouse_jobs("stripe")
+            results["greenhouse"] = await self.ingest_greenhouse_jobs("stripe", india_only=True)
         except Exception as e:
             results["greenhouse"] = {"error": str(e)}
 

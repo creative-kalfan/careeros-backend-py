@@ -138,6 +138,40 @@ class JobRelevanceService:
         return result
 
     @staticmethod
+    def _diversify_by_company(jobs: list[NormalizedJob]) -> list[NormalizedJob]:
+        """Round-robin interleave by company over rank order.
+
+        Companies take turns in order of first appearance (i.e. best rank
+        first); within a company, ranked order is preserved. Deterministic,
+        lossless (no job is hidden — extras surface on later pages), and
+        applied only to default relevance ranking, never to explicit
+        newest/oldest/salary sorts. Jobs without a company each get their
+        own slot so they are not throttled as one group.
+        """
+        groups: dict[str, list[NormalizedJob]] = {}
+        order: list[str] = []
+        for job in jobs:
+            key = (job.company or "").strip().lower() or (
+                f"\x00{job.external_job_id or job.id or job.title or ''}"
+            ).lower()
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(job)
+        out: list[NormalizedJob] = []
+        round_idx = 0
+        while len(out) < len(jobs):
+            progressed = False
+            for key in order:
+                if round_idx < len(groups[key]):
+                    out.append(groups[key][round_idx])
+                    progressed = True
+            round_idx += 1
+            if not progressed:
+                break
+        return out
+
+    @staticmethod
     def _sort_jobs(jobs: list[NormalizedJob], sort: Optional[str]) -> list[NormalizedJob]:
         """Dynamic sorting: newest / oldest / salary (default: relevance)."""
         if sort == "newest":
@@ -171,10 +205,12 @@ class JobRelevanceService:
         # Get the user's profile if available
         profile = self.profile_repository.get_profile(user_id) if user_id else None
 
-        # Stage 1: Candidate retrieval. Retrieve a bounded candidate pool
-        # (PostgREST single-query max 1000) so the multi-stage ranker
-        # (match score + source-quality + India-first boost) operates in a single
-        # database round-trip without multi-chunk statement timeouts.
+        # Stage 1: Candidate retrieval. Match scoring is Python-side so the
+        # full eligible set must be ranked — fetch past the PostgREST 1000-row
+        # single-query cap via the repository's existing chunked path.
+        # ponytail: O(eligible) Python rank; push-down impossible while the
+        # score needs the user profile. Revisit only if eligible sets grow
+        # past low-thousands and profiling blames this fetch.
         CANDIDATE_POOL_LIMIT = 1000
         db_rows, db_total = self.job_repository.list_jobs(
             page=1,
@@ -188,6 +224,19 @@ class JobRelevanceService:
             experience=experience,
             sort=sort,
         )
+        if db_total > len(db_rows):
+            db_rows, db_total = self.job_repository.list_jobs(
+                page=1,
+                page_size=db_total,
+                role=role,
+                location=location,
+                role_category=None,
+                company=company,
+                remote=remote,
+                employment_type=employment_type,
+                experience=experience,
+                sort=sort,
+            )
 
         # Convert to NormalizedJob objects
         jobs = [NormalizedJob.model_validate(row) for row in db_rows]
@@ -217,6 +266,7 @@ class JobRelevanceService:
                     ),
                     reverse=True,
                 )
+                jobs = self._diversify_by_company(jobs)
             start = (page - 1) * page_size
             return jobs[start : start + page_size], total
 
@@ -249,8 +299,9 @@ class JobRelevanceService:
                 )
 
             filtered_jobs.sort(key=_rank_key, reverse=True)
+            filtered_jobs = self._diversify_by_company(filtered_jobs)
 
-        # Paginate AFTER sorting.
+        # Paginate AFTER sorting/diversification.
         start = (page - 1) * page_size
         return filtered_jobs[start : start + page_size], total
 

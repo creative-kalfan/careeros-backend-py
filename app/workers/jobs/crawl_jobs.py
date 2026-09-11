@@ -50,6 +50,26 @@ def _uses_complete_inventory(source: str) -> bool:
     return source in _COMPLETE_INVENTORY_SOURCES
 
 
+def _india_only_for(source: str, slug: str) -> bool:
+    """Registry-driven geographic scope for a crawl target.
+
+    Stripe is the only greenhouse board and is registered with
+    ``india_only=True``; since not-seen deactivation is scoped to
+    ``source_platform="greenhouse"`` (Stripe rows only), foreign Stripe rows
+    drain naturally after the next successful crawl. Unknown slugs default
+    to False so ad-hoc crawls keep full-board behavior.
+    """
+    try:
+        from app.crawlers.crawl_registry import all_targets
+
+        return next(
+            (t.india_only for t in all_targets() if t.source == source and t.slug == slug),
+            False,
+        )
+    except Exception:
+        return False
+
+
 async def _record_crawl_status(
     source: str,
     slug: str,
@@ -113,7 +133,9 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         if source == "ashby":
             result = await ingestion.ingest_ashby_jobs(slug)
         elif source == "greenhouse":
-            result = await ingestion.ingest_greenhouse_jobs(slug)
+            result = await ingestion.ingest_greenhouse_jobs(
+                slug, india_only=_india_only_for(source, slug)
+            )
         elif source == "smartrecruiters":
             result = await ingestion.ingest_smartrecruiters_jobs(slug)
         elif source == "lever":
