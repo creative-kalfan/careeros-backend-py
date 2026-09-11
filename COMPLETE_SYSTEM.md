@@ -846,3 +846,124 @@ suite: 1070 collected, **1056 passed**, 14 failed — 6 copilot stub 404s +
 update stashed; resume code untouched by this diff). Baseline §9.1 was
 1033 passed / 12 failed; delta is +11 new passing tests and +2 flaky
 environment goldens, zero regressions from this change.
+
+## 17. Upstash Redis Request Audit & ARQ Efficiency (2026-09-11, this update)
+
+Incident: Upstash `Limit: 500000 / Usage: 500000` with
+`ResponseError max requests limit exceeded` on worker startup; after ARQ
+`conn_retries=5` the worker connected and served all 5 functions. No
+redesign, no second Redis, no architecture change — diagnosis first.
+
+### 17.1 Render topology (verified in code)
+
+* Web service: `uvicorn app.main:app` (`start.sh`, `SERVICE_TYPE != worker`).
+  Owns the ONLY APScheduler (`app/main.py` lifespan →
+  `ScheduledCrawlRunner.start()`; in-memory store, no Redis state).
+* Worker service: `python -m arq app.workers.settings.WorkerSettings`
+  (`start.sh`, `SERVICE_TYPE=worker`) + dummy `http.server` for Render port.
+  Runs zero schedulers (never imports `app.main`).
+* Scheduler ownership: exactly one authoritative scheduler per web process.
+  Multi-instance web scaling would duplicate passes, but the
+  `crawl_lock:{source}:{slug}` SET NX EX (300s TTL) dedups execution; the
+  duplicate cost is bounded to lock SETs, never duplicate crawls.
+
+### 17.2 Redis inventory (all `redis`/`arq` call sites in `app/`)
+
+| Component | Operation | Frequency | Redis cmds |
+|---|---|---|---|
+| ARQ worker idle poll (`worker.py:_poll_iteration`, `poll_delay`) | `ZRANGEBYSCORE arq:queue` | every `poll_delay` | 1/poll |
+| ARQ hourly health (`record_health`, interval 3600) | `ZCARD` + `PSETEX health-check` | 24/day | 2/run |
+| Worker startup (`create_pool` + `log_redis_info`) | `PING`, `INFO` x3, `DBSIZE` | once/process | 5 total |
+| Scheduler pass (`ScheduledCrawlRunner`, 14 targets) | `SET NX EX` lock + `enqueue_job` (WATCH+EXISTS+PSETEX+ZADD) | 14/day @24h | ~5/target |
+| Job execution (ARQ internals per job) | start/run/finish pipelines | per job | ~11 (12 for crawls incl. `SET EX crawl_status`) |
+| User-triggered enqueues (resume parse, interview prep, intelligence) | `enqueue_job` | on demand | 4 each |
+| Dev-only (`/dev/arq/*`, never called in prod) | `PING`, `GET crawl_status` x14, manual `enqueue_job` | manual | — |
+| `careeros_worker_health` | registered, never auto-enqueued | 0 | 0 |
+
+No other Redis usage exists: APScheduler is memory-backed, the EventBus is
+in-process, repositories hit Supabase/PostgREST, never Redis.
+
+### 17.3 Diagnosis (evidence, not guesses; ARQ 0.26.1 source-verified)
+
+* Primary consumer: **ARQ idle polling — ~99% of all requests.**
+  `poll_delay=0.5` → 172,800 `ZRANGEBYSCORE`/day → **~5.18M/month, 10.4x
+  the 500k budget with zero jobs running.** One idle worker alone
+  exhausts the budget in ~3 days.
+* Secondary: job execution + enqueues (~700 req/day at 56 crawls/day,
+  ~0.4% of idle). Scheduler, health checks (48 req/day), locks, crawl
+  status, user enqueues are each <0.2% — negligible next to polling.
+* No scheduler duplication found (worker runs none). No health-check loop
+  found (`careeros_worker_health` has no periodic enqueuer). No connection
+  leak found (request count, not connection count, is the billed metric).
+* Secondary bug (correctness + 4x waste): `ScheduledCrawlRunner.__init__`
+  defaulted `interval_hours=6`, and `_interval_for()` preferred it over
+  every per-provider setting — all 4 provider passes ran every 6h
+  (56 crawl enqueues/day) instead of the intended 24h (14/day).
+* Tertiary waste: `dispatcher` + `enqueue` created a fresh pool per call
+  (extra `PING` + TLS handshake each, churn under 14-target bursts).
+
+Upstash per-command metering is not observable from the app; the model
+counts ARQ-level commands 1:1 (pipelined commands counted individually,
+matching Upstash semantics). Stated as a limitation, not fabricated.
+
+### 17.4 Minimum safe optimizations (this update, 6 files)
+
+1. `app/workers/settings.py`: `poll_delay = 0.5` →
+   `_settings.arq_poll_delay_seconds` (default **10s**); explicit
+   `health_check_interval = 3600` (unchanged default, now auditable).
+   Pickup-latency tradeoff documented in code (p99 ≈ poll_delay; 10s is
+   acceptable for 24h-cadence crawls and interactive resume parse).
+2. `app/config.py` + `.env.example`: new `ARQ_POLL_DELAY_SECONDS`
+   (default 10.0) — local dev may lower it; production must not restore
+   0.5s.
+3. `app/services/jobs/scheduled_crawl_runner.py`: `interval_hours` default
+   `6` → `None`, restoring per-provider 24h cadence (14 crawl
+   enqueues/day); legacy `CRAWL_INTERVAL_HOURS` override still wins when set.
+4. `app/workers/dispatcher.py` + `app/workers/enqueue.py`: reuse the
+   process-long-lived `get_redis_pool()` instead of `create_pool()` per
+   call; callers no longer `aclose()` the shared pool (saves 1 PING +
+   handshake per enqueue, ~70/day, plus connection churn).
+5. `app/workers/redis_budget.py` (new, pure/no-I/O): deterministic
+   estimator (`estimate_idle_requests_per_day/month`,
+   `estimate_enqueue_requests`, `estimate_job_execution_requests`).
+6. `keep_result=3600`, `max_jobs=10`, `job_timeout=300`, retries
+   (`max_tries=2`), locks, deactivation, EventBus: evaluated, intentionally
+   UNCHANGED (no request saving; preserves failure debugging and all
+   lifecycle guarantees).
+
+### 17.5 Before → after (one worker, 30-day month)
+
+* Before: idle 172,848/day → **~5,185,000/month (1037% of budget)**;
+  with jobs ≈ 5.21M. Budget exhausted in ~3 days.
+* After: idle 8,688/day → **~260,600/month (~52% of budget)**; scheduler
+  14 targets × 5 cmds + 14 executions × ~12 cmds ≈ 240/day (~7.2k/month);
+  user jobs/retries/health ≈ low thousands. **Expected total ≈ 275k/month
+  (~55% of budget)** — fits comfortably with ~45% headroom for traffic
+  growth, retries, and a second web instance's lock SETs.
+* Per-change effect: polling fix ≈ −4.92M/month (99.7% of the saving);
+  scheduler-cadence fix ≈ −500 req/day + 4x less Adzuna/DB load;
+  pool reuse ≈ −70 PINGs/day + less handshake churn.
+
+### 17.6 Correctness preserved & verification
+
+No silent job loss, no duplicate execution, no scheduler duplication:
+retries, timeouts, locks (300s TTL), source-scoped stale deactivation,
+`JobIngested` events, version-safe resume paths all untouched.
+New `tests/test_redis_efficiency.py` (9 tests: idle math, budget fit,
+env override, hourly health, per-provider cadence, legacy override,
+14-target bound, pool-reuse-no-close, 5-function registry).
+Targeted: 37/37 pass
+(`redis_efficiency` + `redis_config` + `dispatcher` + `scheduled_crawl_runner`);
+adjacent worker suites 59/59 pass
+(`crawl_refresh_system`, `ingestion_reliability`, `interview_prep`).
+
+### 17.7 Remaining limitations
+
+* 10s poll adds ≤10s job-pickup latency (documented tradeoff).
+* Multi-instance web still multiplies scheduler passes (bounded by locks;
+  keep web at 1 instance or set `JOB_CRAWL_ENABLED=false` on extras).
+* No Upstash per-command dashboard export — model is ARQ-source-verified
+  arithmetic, not metered billing data.
+* `app/workers/jobs/resume_jobs.py:parse_resume_job` is dead code
+  (unregistered duplicate of `functions.py`; worker serves the registered
+  one) — left untouched, removal is a separate cleanup.

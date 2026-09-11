@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from arq.connections import ArqRedis, RedisSettings, create_pool
+from arq.connections import ArqRedis
 
 from app.config import get_settings
-from app.workers.settings import redis_settings
+from app.workers.settings import get_redis_pool
 
 settings = get_settings()
 
@@ -20,23 +20,22 @@ logger = logging.getLogger(__name__)
 
 
 async def get_arq_redis() -> ArqRedis:
-    return await create_pool(redis_settings)
+    # Shared process pool (see dispatcher._get_redis). Must NOT be aclosed
+    # by callers.
+    return await get_redis_pool()
 
 
 async def enqueue_resume_parse(resume_id: str, user_id: str, storage_path: str) -> str:
     redis = await get_arq_redis()
-    try:
-        job = await redis.enqueue_job(
-            "parse_resume_job",
-            resume_id,
-            user_id,
-            storage_path,
-        )
-        if job is None:
-            raise RuntimeError("Failed to enqueue parse_resume_job")
-        return job.job_id
-    finally:
-        await redis.aclose()
+    job = await redis.enqueue_job(
+        "parse_resume_job",
+        resume_id,
+        user_id,
+        storage_path,
+    )
+    if job is None:
+        raise RuntimeError("Failed to enqueue parse_resume_job")
+    return job.job_id
 
 
 async def enqueue_crawl_company(source: str, slug: str) -> Optional[str]:
@@ -46,24 +45,21 @@ async def enqueue_crawl_company(source: str, slug: str) -> Optional[str]:
     company is already in progress.
     """
     redis = await get_arq_redis()
-    try:
-        lock_key = f"crawl_lock:{source}:{slug}"
-        # SET NX EX: only set if not exists, with TTL
-        acquired = await redis.set(lock_key, "1", ex=CRAWL_LOCK_TTL_SECONDS, nx=True)
-        if not acquired:
-            logger.info(
-                "Crawl skipped: already in progress source=%s slug=%s lock=%s",
-                source, slug, lock_key,
-            )
-            return None
-
-        job = await redis.enqueue_job(
-            "crawl_company_job",
-            source,
-            slug,
+    lock_key = f"crawl_lock:{source}:{slug}"
+    # SET NX EX: only set if not exists, with TTL
+    acquired = await redis.set(lock_key, "1", ex=CRAWL_LOCK_TTL_SECONDS, nx=True)
+    if not acquired:
+        logger.info(
+            "Crawl skipped: already in progress source=%s slug=%s lock=%s",
+            source, slug, lock_key,
         )
-        if job is None:
-            raise RuntimeError("Failed to enqueue crawl_company_job")
-        return job.job_id
-    finally:
-        await redis.aclose()
+        return None
+
+    job = await redis.enqueue_job(
+        "crawl_company_job",
+        source,
+        slug,
+    )
+    if job is None:
+        raise RuntimeError("Failed to enqueue crawl_company_job")
+    return job.job_id

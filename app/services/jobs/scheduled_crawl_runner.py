@@ -47,9 +47,14 @@ class ScheduledCrawlRunner:
     def __init__(
         self,
         ingestion_service: Optional[JobIngestionService] = None,
-        interval_hours: int = DEFAULT_INTERVAL_HOURS,
+        interval_hours: Optional[float] = None,
         enqueue_fn: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> None:
+        # interval_hours=None (default) means "use the per-provider settings
+        # cadence" (24h each; CRAWL_INTERVAL_HOURS legacy override wins when
+        # set). A previous default of 6 silently shadowed every per-provider
+        # interval via _interval_for(), running all 4 provider passes every
+        # 6h (56 crawl enqueues/day instead of the intended 14/day).
         self.ingestion_service = ingestion_service or JobIngestionService()
         self.interval_hours = interval_hours
         self._enqueue_fn = enqueue_fn

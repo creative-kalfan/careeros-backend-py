@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     # Redis / ARQ background worker configuration.
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
 
+    # ARQ worker queue-poll interval (seconds). Each poll issues one
+    # ZRANGEBYSCORE against Upstash, so this single value dominates the
+    # monthly request budget: 86400/poll_delay requests/day when idle.
+    # Default 10s keeps one idle worker at ~8.6k req/day (~259k/month,
+    # ~52% of the 500k Upstash budget), leaving headroom for real jobs.
+    # The 0.5s ARQ upstream default costs ~173k req/day (~5.2M/month,
+    # >10x the budget) and must not be restored in production.
+    arq_poll_delay_seconds: float = Field(default=10.0, alias="ARQ_POLL_DELAY_SECONDS")
+
     # Crawl concurrency-lock TTL (seconds). Must exceed the maximum expected
     # crawl duration so a stale lock never permanently blocks a company.
     crawl_lock_ttl_seconds: int = Field(default=300, alias="CRAWL_LOCK_TTL_SECONDS")

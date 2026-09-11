@@ -47,5 +47,14 @@ class WorkerSettings:
     job_timeout = 300
     keep_result = 3600
     max_jobs = 10
-    poll_delay = 0.5
+    # Queue-poll interval: env-driven (ARQ_POLL_DELAY_SECONDS, default 10s).
+    # Idle cost is ~86400/poll_delay ZRANGEBYSCORE/day: 0.5s = ~172.8k/day
+    # (~5.2M/month, >10x the 500k Upstash budget); 10s = ~8.6k/day
+    # (~259k/month, ~52% of budget). Job pickup latency grows with the
+    # interval (p99 ~= poll_delay); 10s is the cheapest value that keeps
+    # interactive resume-parse pickup acceptable while fitting the budget.
+    # Health checks stay at the ARQ default (hourly: ZCARD + PSETEX, ~48
+    # req/day, negligible) — do not shorten health_check_interval.
+    poll_delay = _settings.arq_poll_delay_seconds
+    health_check_interval = 3600
     retry_jobs = True
