@@ -9,7 +9,7 @@ The CareerOS schema originated across two phases:
    - Application domain: `applications` (with `application_status` enum)
    - Intelligence & Communications: `ats_reports`, `notifications`, `recommendations`, `notification_preferences`, `company_ats_mapping`
    - Platform: Base RLS policies and Storage bucket registrations (`resumes`, `avatars`)
-2. **Feature Delta Migrations (`001` through `017`)**: Represent incremental feature evolution in the canonical Python backend:
+2. **Feature Delta Migrations (`001` through `020`)**: Represent incremental feature evolution in the canonical Python backend:
    - `001_resume_module.sql`: Resume import & versions
    - `002_resume_templates.sql`: Resume template registry
    - `006_resume_versions_extended.sql`: Job-specific resume versions & master constraints
@@ -22,8 +22,11 @@ The CareerOS schema originated across two phases:
    - `013_job_ingestion_reliability.sql`: Partial unique index & crawl deactivation reliability
    - `014_proposal_decisions.sql`: Granular improvement proposal decisions
    - `015_candidate_evidence.sql`: Candidate evidence repository backing
-   - `016_job_source_provenance.sql`: Source provenance & multi-tier tracking
-   - `017_resume_version_sources.sql`: Version provenance metadata
+    - `016_job_source_provenance.sql`: Source provenance & multi-tier tracking
+    - `017_resume_version_sources.sql`: Version provenance metadata
+    - `018_applications.sql`: Applications extension
+    - `019_interview_prep.sql`: Interview preparation
+    - `020_job_feature_columns.sql`: Job feature persistence (`remote`, `workplace_type`, `employment_type`, `salary_min/max`, `experience_level`, `skills`)
 
 ---
 
@@ -49,6 +52,9 @@ Execute all files in `sql/migrations/` in alphanumeric order:
 015_candidate_evidence.sql
 016_job_source_provenance.sql
 017_resume_version_sources.sql
+018_applications.sql
+019_interview_prep.sql
+020_job_feature_columns.sql
 ```
 
 The resulting database contains all 21 canonical tables, all foreign-key relationships, triggers, and RLS policies.
@@ -67,6 +73,6 @@ All migrations are designed to be **strictly idempotent**:
 
 ## 4. Invariant Rules for Future Development
 
-1. **Never renumber existing migrations**: Numbers `000` through `017` are fixed and immutable. New migrations must continue sequentially (e.g. `018_...`).
+1. **Never renumber existing migrations**: Numbers `000` through `020` are fixed and immutable. New migrations must continue sequentially (e.g. `021_...`).
 2. **Never rewrite already-applied migrations**: Delta migrations that have been applied to production must remain immutable.
 3. **Always preserve idempotency**: Every future migration must guard against duplicate application using standard PostgreSQL idempotency patterns.

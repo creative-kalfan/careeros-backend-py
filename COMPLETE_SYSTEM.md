@@ -967,3 +967,101 @@ adjacent worker suites 59/59 pass
 * `app/workers/jobs/resume_jobs.py:parse_resume_job` is dead code
   (unregistered duplicate of `functions.py`; worker serves the registered
   one) — left untouched, removal is a separate cleanup.
+
+---
+
+## 18. Job Intelligence Feed Fix (India supply + diversification + persistence + >1000 pool)
+
+**Date:** 2026-09-11. Audit baseline: 785 active jobs (615 Stripe ~78%, 96
+India ~12%), first non-Stripe result at rank 50, Stripe covering the first
+3+ pages; `remote/skills/salary_*/experience_level/workplace_type` dropped
+between normalization and the DB; personalized path ranked at most 1000
+candidates while reporting the full total.
+
+### 18.1 Phase 1A — Stripe India-only (existing mechanism, no new pipeline)
+
+* `app/crawlers/crawl_registry.py`: Stripe target now `india_only=True`
+  (same flag Razorpay/PhonePe/CRED/Zerodha already use).
+* `app/workers/jobs/crawl_jobs.py`: new `_india_only_for(source, slug)`
+  threads the registry flag into `ingest_greenhouse_jobs`; unknown slugs
+  default to `False` (ad-hoc crawls keep full-board behavior).
+* `app/services/jobs/job_ingestion_service.py`: `ingest_all()` passes
+  `india_only=True` for Stripe.
+* Deactivation safety (verified before changing): Greenhouse
+  `source_platform` is used by the Stripe board only, so the post-crawl
+  `deactivate_not_seen_since(source_platform="greenhouse")` touches Stripe
+  rows exclusively — foreign Stripe inventory drains naturally via not-seen
+  reconciliation, other sources untouched, nothing manually deleted.
+  Normalization, `(source_platform, external_job_id)` dedup, provenance,
+  and freshness semantics unchanged.
+
+### 18.2 Phase 1B — Company diversification (same ranker, interleave after)
+
+* `app/services/jobs/job_relevance_service.py`: new
+  `_diversify_by_company()` round-robins the already-ranked list by company
+  (first-appearance order; ranked order preserved within a company;
+  company-less jobs get individual slots). Applied after default relevance
+  ranking in both profile and no-profile branches, before pagination;
+  explicit `newest/oldest/salary` sorts keep their contract. No second
+  engine, match scores / India-first / freshness / deterministic tiebreaks
+  untouched, nothing hidden (extras surface on later pages).
+
+### 18.3 Phase 2 — Feature persistence (migration 020)
+
+* Root cause: `NormalizedJob.to_db_row()` emitted the fields but
+  `_DB_COLUMNS` dropped them. `app/models/job.py`: whitelist now includes
+  `remote, workplace_type, employment_type, salary_min, salary_max,
+  experience_level, skills`; `skills` passes through as-is so unknown stays
+  NULL instead of `[]` (no fabrication).
+* `sql/migrations/020_job_feature_columns.sql`: idempotent nullable
+  `ADD COLUMN IF NOT EXISTS` for the same 7 columns (no backfill — NULL
+  means "source did not provide"); also satisfies the pre-existing
+  repository filters on `employment_type/experience_level/salary_max`.
+* **Not yet applied to live Supabase** — apply 020 to production before
+  relying on the new columns there.
+
+### 18.4 Phase 3 — Candidate ceiling (reuse chunked fetch, no magic bump)
+
+* `get_relevant_jobs()`: when the first 1000-row page reports
+  `db_total > len(rows)`, it refetches with `page_size=db_total`, which the
+  repository already serves via its chunked path. Match score,
+  India-first, target-role, freshness, source bonus, deterministic order,
+  and paginate-after-ranking all preserved.
+
+### 18.5 Validation (real service path, 785-job audit-like feed)
+
+Profile: India Data Analyst, no location preference (reproduces the audit
+symptom — pre-fix reconstruction puts ≥15 Stripe jobs in the top 20).
+Post-fix measured feed (`JobRelevanceService` + real
+`PersonalizedJobService` scoring + fake repo pages):
+
+| window | India | foreign | Stripe | companies | target | 1st non-Stripe |
+|---|---|---|---|---|---|---|
+| top 20 | 6 | 14 | 2 | 14 | 19 | 1 |
+| top 40 | 11 | 29 | 4 | 14 | 37 | 1 |
+| top 60 | 15 | 45 | 5 | 14 | 55 | 1 |
+| top 100 | 21 | 79 | 9 | 14 | 92 | 1 |
+
+India + foreign both discoverable; strong India target-role jobs (e.g.
+Razorpay Bengaluru) surface in the top 20; freshness within a company
+preserved; explicit sorts un-diversified; repeated requests byte-identical.
+Phase 3: 1500-job synthetic set → total 1500, 75 full pages, zero dupes,
+deterministic, India-first intact; pools ≤1000 still single-fetch.
+Phase 4 end-to-end: service→repo→score→diversify→paginate exercised;
+frontend (`_app.jobs.tsx:224`) renders `data?.jobs` in backend order with
+no client re-sort (verified by inspection); route envelope unchanged
+(`test_job_api.py` green).
+
+### 18.6 Tests & tradeoffs
+
+* New `tests/test_job_feed_fix.py` (12 tests: registry/worker wiring,
+  diversification + feed table, round-trip + NULL + scoring-on-persisted,
+  migration-column guard, >1000 pages + single-fetch guard).
+* Suites: new file 12/12; adjacent job suites 70/70; recommend/notify/ATS
+  137/137; full backend 1078 passed + 13 failed — 12 pre-existing on the
+  clean baseline (6 copilot-route, 6 studio golden screenshots) + 1
+  event-loop artifact in the new file, fixed (proper `async def` test).
+* Tradeoffs: diversification is company-round-robin, not relevance-capped
+  (a run of same-company jobs can still cluster if few companies match);
+  >1000 ranks the full eligible set in Python — O(n) cost, fine at board
+  scale, revisit only on profiling evidence.
