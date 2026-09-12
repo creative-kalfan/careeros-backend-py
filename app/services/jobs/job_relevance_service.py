@@ -57,6 +57,18 @@ def _india_first_score(job: NormalizedJob) -> int:
     return 0
 
 
+def _is_remote_job(job: NormalizedJob) -> bool:
+    """One remote definition for every filter layer (flag OR location text).
+
+    Crawlers derive the boolean flag from location text, but either signal
+    can be missing (flag None with a "Remote" location, or flag True with a
+    plain city location), so both count.
+    """
+    if job.remote is True:
+        return True
+    return "remote" in (job.location or "").lower()
+
+
 def _recency_key(job: NormalizedJob) -> str:
     """Newest evidence wins: re-observation refreshes rank, posted_at untouched."""
     return max(
@@ -95,7 +107,7 @@ class JobRelevanceService:
             result = [j for j in result if j.company and needle in j.company.lower()]
 
         if remote is not None:
-            result = [j for j in result if bool(j.remote) == bool(remote)]
+            result = [j for j in result if _is_remote_job(j) == bool(remote)]
 
         if skills:
             if isinstance(skills, str):
@@ -119,21 +131,66 @@ class JobRelevanceService:
             ]
 
         if experience:
-            needle = experience.lower()
+            # Frontend sends Entry/Mid/Senior/Staff+; normalize Staff+ -> staff.
+            needle = experience.lower().strip().rstrip("+").strip()
             # Grouped levels: junior includes internships, staff includes
             # principal so level buckets behave like recruiters expect.
+            # "fresher" (common India UI term) behaves as Entry.
             groups = {
                 "intern": {"intern"},
+                "entry": {"junior", "intern", "entry", "fresher"},
+                "fresher": {"junior", "intern", "entry", "fresher"},
                 "junior": {"junior", "intern", "entry"},
                 "mid": {"mid", "middle"},
                 "senior": {"senior"},
                 "staff": {"staff", "principal", "lead"},
+                "principal": {"staff", "principal", "lead"},
+                "lead": {"staff", "principal", "lead"},
             }
             levels = groups.get(needle, {needle})
-            result = [
-                j for j in result
-                if j.experience_level and j.experience_level.lower() in levels
-            ]
+
+            def _level_of(job: NormalizedJob) -> str:
+                lvl = (job.experience_level or "").lower().strip()
+                if lvl:
+                    if lvl in levels:
+                        return lvl
+                    # Stored values are free-form ("Entry Level"); match the
+                    # bucket keyword inside instead of requiring exact equality.
+                    for key in groups:
+                        if key in lvl:
+                            return key
+                    return lvl
+                # No crawler populates experience_level (always NULL in prod),
+                # so infer from title+description via the existing classifier,
+                # falling back to years-of-experience buckets when no keyword
+                # matches ("1-2 years" with no seniority word).
+                try:
+                    from app.services.jobs.extraction_utils import (
+                        classify_seniority,
+                        extract_years_of_experience,
+                    )
+
+                    inferred, _ = classify_seniority(
+                        job.description or "", job.title or ""
+                    )
+                    if inferred:
+                        return inferred.lower()
+                    years_min, _ = extract_years_of_experience(
+                        f"{job.title or ''} {job.description or ''}"
+                    )
+                    if years_min is not None:
+                        if years_min < 2:
+                            return "entry"
+                        if years_min < 5:
+                            return "mid"
+                        if years_min < 8:
+                            return "senior"
+                        return "staff"
+                except Exception:
+                    pass
+                return ""
+
+            result = [j for j in result if _level_of(j) in levels]
 
         return result
 
@@ -212,6 +269,13 @@ class JobRelevanceService:
         # score needs the user profile. Revisit only if eligible sets grow
         # past low-thousands and profiling blames this fetch.
         CANDIDATE_POOL_LIMIT = 1000
+        # Experience is filtered Python-side only: the jobs.experience_level
+        # column is never populated by crawlers (always NULL), so a DB eq
+        # filter zeroes every result. _python_filter infers level instead.
+        # Remote is likewise Python-side only: the DB matches location text
+        # while _python_filter matches the flag-or-location single definition,
+        # so a DB pre-filter silently drops flag-remote rows with plain city
+        # locations (and vice versa).
         db_rows, db_total = self.job_repository.list_jobs(
             page=1,
             page_size=CANDIDATE_POOL_LIMIT,
@@ -219,9 +283,9 @@ class JobRelevanceService:
             location=location,
             role_category=None,
             company=company,
-            remote=remote,
+            remote=None,
             employment_type=employment_type,
-            experience=experience,
+            experience=None,
             sort=sort,
         )
         if db_total > len(db_rows):
@@ -232,9 +296,9 @@ class JobRelevanceService:
                 location=location,
                 role_category=None,
                 company=company,
-                remote=remote,
+                remote=None,
                 employment_type=employment_type,
-                experience=experience,
+                experience=None,
                 sort=sort,
             )
 
@@ -311,3 +375,115 @@ class JobRelevanceService:
         if not db_row:
             return None
         return NormalizedJob.model_validate(db_row)
+
+    @staticmethod
+    def normalize_match_payload(job_data: dict) -> dict:
+        """Normalize a frontend match payload accepting camelCase + snake_case.
+
+        The Jobs page historically sends ``{title, companyName}`` while the
+        canonical model uses ``company``. Map known aliases so company and
+        other fields are not silently dropped by validation.
+        """
+        data = dict(job_data or {})
+        if data.get("company") is None:
+            alias = data.get("companyName") or data.get("company_name")
+            if alias:
+                data["company"] = alias
+        if data.get("title") is None and data.get("role"):
+            data["title"] = data.get("role")
+        if data.get("description") is None and data.get("overview"):
+            data["description"] = data.get("overview")
+        if data.get("skills") is None and isinstance(data.get("techStack"), list):
+            data["skills"] = data.get("techStack")
+        apply_url = data.get("applyUrl") or data.get("url")
+        if data.get("apply_url") is None and apply_url:
+            data["apply_url"] = apply_url
+        posted = data.get("postedDate") or data.get("posted_date") or data.get("postedAt")
+        if data.get("posted_date") is None and posted:
+            data["posted_date"] = posted
+        return data
+
+    @staticmethod
+    def missing_skills_for(job: NormalizedJob, profile: Optional[UserProfile]) -> list[str]:
+        """Skills present on the job but absent from the user profile."""
+        job_skills = [s for s in (job.skills or []) if s]
+        if not job_skills:
+            return []
+        user_skills = {s.lower() for s in ((profile.skills if profile else []) or []) if s}
+        if not user_skills:
+            return list(job_skills)
+        return [s for s in job_skills if s.lower() not in user_skills]
+
+    def match_job_for_user(
+        self,
+        user_id: Optional[str],
+        job_id: Optional[str] = None,
+        job_data: Optional[dict] = None,
+        resume_text: Optional[str] = None,
+    ) -> tuple[NormalizedJob, dict]:
+        """Resolve the job + profile and score with the canonical 8-factor engine.
+
+        - Job resolution prefers the DB row by ``job_id`` (full
+          description/skills) so re-analyze scores the real posting, falling
+          back to the normalized client payload when the id is unknown.
+        - Profile resolution uses the stored user profile. ``resume_text`` is
+          accepted for contract compatibility but is not required: the
+          authenticated user's profile is the source of truth for scoring.
+        """
+        job: Optional[NormalizedJob] = None
+        if job_id:
+            try:
+                job = self.get_job(job_id)
+            except Exception:
+                job = None
+        if job is None and job_data:
+            normalized = self.normalize_match_payload(job_data)
+            # ``id`` inside the nested job object is also a lookup key.
+            nested_id = normalized.get("id") or normalized.get("jobId")
+            if nested_id:
+                try:
+                    job = self.get_job(str(nested_id))
+                except Exception:
+                    job = None
+            if job is None:
+                job = NormalizedJob.model_validate(normalized)
+        if job is None:
+            raise ValueError("job_not_found")
+
+        profile: Optional[UserProfile] = None
+        if user_id:
+            try:
+                profile = self.profile_repository.get_profile(user_id)
+            except Exception:
+                profile = None
+        if profile is None:
+            # No stored profile: fall back to an empty profile so the
+            # deterministic engine still returns varied, job-dependent
+            # fallback scores instead of all zeros. resume_text is not
+            # parsed into a new algorithm — scoring stays canonical.
+            profile = UserProfile()
+
+        match = self.personalized_service.calculate_match_score(job, profile)
+        missing = self.missing_skills_for(job, profile)
+        if missing:
+            match["missing_skills"] = missing
+            match["missingSkills"] = missing
+        else:
+            match.setdefault("missing_skills", [])
+            match.setdefault("missingSkills", [])
+        # camelCase aliases so the existing frontend JobMatchResponse readers
+        # (matchScore/skillMatchScore/...) display the fresh result instead of
+        # silently falling back to the stale list score.
+        match.setdefault("matchScore", match.get("overall", 0))
+        match.setdefault("overall", match.get("matchScore", 0))
+        match.setdefault("skillMatchScore", match.get("skill_match", 0))
+        match.setdefault("skill_match", match.get("skillMatchScore", 0))
+        match.setdefault("keywordMatchScore", match.get("resume_match", 0))
+        match.setdefault("semanticSimilarityScore", match.get("resume_match", 0))
+        match.setdefault("missingKeywords", [])
+        match.setdefault("recommendations", [])
+        match.setdefault("experienceMatch", match.get("experience_match", 0))
+        match.setdefault("locationMatch", match.get("location_match", 0))
+        match.setdefault("salaryMatch", match.get("salary_match", 0))
+        match.setdefault("companyPreference", match.get("company_preference", 0))
+        return job, match

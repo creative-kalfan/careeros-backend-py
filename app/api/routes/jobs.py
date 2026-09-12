@@ -9,8 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.auth.service import AuthContext
 from app.dependencies import get_current_user, get_job_relevance_service
-from app.models.job import NormalizedJob
-from app.models.profile import UserProfile
 from app.repositories.job_intelligence_repository import JobIntelligenceRepository
 from app.repositories.job_repository import JobRepository
 from app.schemas.common import ErrorResponse, SuccessResponse, build_meta
@@ -34,6 +32,7 @@ logger = logging.getLogger(__name__)
 async def list_jobs(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    pageSize: Annotated[Optional[int], Query(ge=1, le=100)] = None,
     role: Optional[str] = None,
     location: Optional[str] = None,
     company: Optional[str] = None,
@@ -45,6 +44,8 @@ async def list_jobs(
     service: JobRelevanceService = Depends(get_job_relevance_service),
 ) -> SuccessResponse[list[JobOut]]:
     """List all active jobs (unauthenticated)."""
+    # Frontend sends camelCase pageSize; accept snake_case too.
+    page_size = pageSize or page_size
     jobs, total = service.get_relevant_jobs(
         user_id=None,
         page=page,
@@ -72,6 +73,7 @@ async def list_jobs(
 async def list_personalized_jobs(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    pageSize: Annotated[Optional[int], Query(ge=1, le=100)] = None,
     role: Optional[str] = None,
     location: Optional[str] = None,
     company: Optional[str] = None,
@@ -81,15 +83,18 @@ async def list_personalized_jobs(
     experience: Optional[str] = None,
     sort: Optional[str] = None,
     include_ats: Optional[bool] = Query(None),
+    includeAts: Optional[bool] = Query(None),
     auth: AuthContext = Depends(get_current_user),
     service: JobRelevanceService = Depends(get_job_relevance_service),
 ) -> SuccessResponse[list[JobOut]]:
     """List jobs personalized for the authenticated user.
 
-    Note: ``include_ats`` is accepted for API contract compatibility but ATS
-    scoring is not yet implemented in the Python backend; ``ats_score`` will
-    remain null until that feature is completed.
+    Note: ``include_ats``/``includeAts`` are accepted for API contract
+    compatibility but ATS scoring is not yet implemented in the Python
+    backend; ``ats_score`` will remain null until that feature is completed.
     """
+    # Frontend sends camelCase pageSize; accept snake_case too.
+    page_size = pageSize or page_size
     jobs, total = service.get_relevant_jobs(
         user_id=auth.user.id,
         page=page,
@@ -164,14 +169,15 @@ async def search_jobs(
 ) -> SuccessResponse[list[JobOut]]:
     """Search jobs with advanced filters."""
     page = int(body.get("page", 1))
-    page_size = int(body.get("pageSize", 20))
+    # Accept both camelCase (frontend) and snake_case (API convention).
+    page_size = int(body.get("pageSize", body.get("page_size", 20)))
     role = body.get("role")
     location = body.get("location")
     company = body.get("company")
     skills = body.get("skills")
     experience = body.get("experience")
     remote = body.get("remote")
-    employment_type = body.get("employmentType")
+    employment_type = body.get("employmentType") or body.get("employment_type")
     sort = body.get("sort")
 
     jobs, total = service.get_relevant_jobs(
@@ -202,46 +208,49 @@ async def search_jobs(
 async def match_job(
     body: dict,
     auth: AuthContext = Depends(get_current_user),
+    service: JobRelevanceService = Depends(get_job_relevance_service),
 ) -> SuccessResponse[dict]:
-    """Match a resume against a job description."""
+    """Score a job against the authenticated user's stored profile.
+
+    ``resumeText`` is optional legacy input: scoring uses the stored user
+    profile as the source of truth so the Jobs page re-analyze action works
+    without the client fabricating resume text. When provided it must still
+    be a string; short/empty values simply fall back to the stored profile.
+    """
     try:
         resume_text = body.get("resumeText", "")
-        job_data = body.get("job", {})
+        if resume_text is not None and not isinstance(resume_text, str):
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "INVALID_RESUME_TEXT", "message": "resumeText must be a string"},
+            )
+        job_data = body.get("job") or {}
+        if not isinstance(job_data, dict):
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "INVALID_JOB", "message": "job must be an object"},
+            )
+        job_id = body.get("jobId") or job_data.get("id") or job_data.get("jobId")
+        if not job_id and not job_data:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "JOB_REQUIRED", "message": "jobId or job is required"},
+            )
 
-        if not resume_text or not isinstance(resume_text, str) or len(resume_text) < 20:
-            raise HTTPException(status_code=400, detail="resumeText must be a non-empty string")
-
-        from app.services.jobs.job_relevance_service import JobRelevanceService
-
-        service = JobRelevanceService()
-        job = None
         try:
-            job = service.get_job(job_data.get("id", ""))
-        except Exception:
-            job = None
-        if not job:
-            job = NormalizedJob.model_validate(job_data)
-
-        match = service.personalized_service.calculate_match_score(
-            job,
-            UserProfile(
-                id=None,
-                current_role=None,
-                desired_role=None,
-                skills=[],
-                location=None,
-                preferred_locations=[],
-                remote_preference="any",
-                preferred_companies=[],
-                salary_expectation_min=None,
-                salary_expectation_max=None,
-                salary_currency=None,
-                experience=None,
-                education=[],
-                onboarding_completed=False,
-                onboarding_step=0,
-            ),
-        )
+            job, match = service.match_job_for_user(
+                user_id=auth.user.id,
+                job_id=str(job_id) if job_id else None,
+                job_data=job_data or None,
+                resume_text=resume_text or None,
+            )
+        except ValueError as exc:
+            if str(exc) == "job_not_found":
+                raise HTTPException(
+                    status_code=404,
+                    detail={"code": "JOB_NOT_FOUND", "message": "Job not found"},
+                ) from exc
+            raise
         return SuccessResponse(data={"job": job.model_dump(), "match": match})
     except HTTPException:
         raise
@@ -249,7 +258,7 @@ async def match_job(
         logger.exception("get_job_match failed: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Match failed. Please try again.",
+            detail={"code": "MATCH_FAILED", "message": "Match failed. Please try again."},
         ) from exc
 
 

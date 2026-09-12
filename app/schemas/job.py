@@ -33,6 +33,9 @@ class JobOut(BaseModel):
     workplace_type: Optional[str] = None
     employment_type: Optional[str] = None
     salary: Optional[str] = None
+    salary_min: Optional[float] = None
+    salary_max: Optional[float] = None
+    salary_currency: Optional[str] = None
     skills: Optional[list[str]] = None
     requirements: Optional[list[str]] = None
     responsibilities: Optional[list[str]] = None
@@ -73,6 +76,9 @@ class JobOut(BaseModel):
             workplace_type=row.get("workplace_type"),
             employment_type=row.get("employment_type"),
             salary=row.get("salary"),
+            salary_min=row.get("salary_min"),
+            salary_max=row.get("salary_max"),
+            salary_currency=row.get("salary_currency"),
             skills=row.get("skills") or [],
             requirements=row.get("requirements") or [],
             responsibilities=row.get("responsibilities") or [],

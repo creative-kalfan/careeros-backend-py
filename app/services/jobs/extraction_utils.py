@@ -270,6 +270,7 @@ _SENIORITY_INDICATORS: dict[str, tuple[str, float]] = {
     "vice president": ("executive", 0.9),
     "c-level": ("executive", 0.9),
     "graduate": ("entry", 0.8),
+    "fresher": ("entry", 0.9),
     "intern": ("intern", 0.9),
 }
 
