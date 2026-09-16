@@ -1,10 +1,7 @@
 # CareerOS — Complete System Map & Reality Audit
 **Authoritative Reference & Personal System Map**
-**Date:** 2026-09-10
-**Status:** Canonical copy lives in `careeros-backend-py` (this file). A stale
-reference copy remains at the legacy wrapper root (`resume-pilot/COMPLETE_SYSTEM.md`,
-dated 2026-09-03); the wrapper repository is not used for documentation commits
-(see §12). This file is the version-controlled home of the system documentation.
+**Date:** 2026-09-03
+**Status:** Local Personal Document (Uncommitted / Reference-Only)
 
 This document is the single source of truth for the entire CareerOS codebase. It reflects the **actual current working tree, file inventory, API contracts, database schemas, background workers, and Git commits** as of today.
 
@@ -19,7 +16,7 @@ This document is the single source of truth for the entire CareerOS codebase. It
 - **Current HEAD:** `a8595338d4b1ca2436c4685d040b5d87bdb6d76b`
 - **Commit Message:** `feat(ingestion): upgrade India-first multi-source job pipeline`
 - **Preceding Base Release:** `980772448d9f8eba5c972f167b826949500b0e41`
-- **Technology:** Python 3.11.9, FastAPI 0.115.6, Uvicorn 0.34.0, Pydantic v2 (2.10.4), Supabase Python client 2.11.0, PyMuPDF 1.25.3, python-docx 1.1.2, ARQ 0.26.1, Redis 5.3.1, APScheduler 3.11.3, PyJWT[crypto] 2.13.0, Sentry SDK 2.19.2, python-jobspy 1.1.82 (worker dependency for Naukri/LinkedIn discovery; deferred import keeps startup safe when absent).
+- **Technology:** Python 3.11.9, FastAPI 0.115.6, Uvicorn 0.34.0, Pydantic v2 (2.10.4), Supabase Python client 2.11.0, PyMuPDF 1.25.3, python-docx 1.1.2, ARQ 0.26.1, Redis 5.3.1, APScheduler 3.11.3, PyJWT[crypto] 2.13.0, Sentry SDK 2.19.2.
 - **Rule:** Exact repository name is `careeros-backend-py`. Never create `backend-v2`, `careos-backend-py`, or duplicate folders.
 
 ### 1.2 Canonical Frontend: `careeros-frontend` (also referenced as `careos-frontend`)
@@ -157,7 +154,7 @@ CareerOS is an AI-powered Career Operating System designed to replace disconnect
 - **Job Sources:**
   - ATS APIs: Ashby (`api.ashbyhq.com`), Greenhouse (`boards-api.greenhouse.io`), Lever (`api.lever.co`), SmartRecruiters (`api.smartrecruiters.com`).
   - Web Crawling: Firecrawl (curated startups: PostHog, Linear, Razorpay, PhonePe, CRED, Zerodha), Y Combinator Work at a Startup.
-  - Job Aggregators: Adzuna India (`/v1/api/jobs/in/search/{page}`, 39-query India rotation incl. measured-incremental city queries, ~6 calls/crawl/day) + JobSpy (`app/crawlers/adapters/jobspy.py`, Naukri/LinkedIn coverage, optional `python-jobspy` dep, graceful empty when uninstalled).
+  - Job Aggregators: Adzuna India (`/v1/api/jobs/in/search/{page}`, 20-query India rotation, ~5 calls/crawl/day) + JobSpy (`app/crawlers/adapters/jobspy.py`, Naukri/LinkedIn coverage, optional `python-jobspy` dep, graceful empty when uninstalled).
   - JSearch: EVALUATED and deliberately NOT integrated (Adzuna + JobSpy + ATS cover India AI/ML/SAP ABAP; extra cost/rate limits + duplicate volume outweigh incremental coverage; slot reserved behind the aggregator abstraction).
 - **Sentry:** Error tracking and performance monitoring in both backend and frontend.
 
@@ -174,7 +171,7 @@ resume-pilot/ (Parent Wrapper)
 │
 ├── careeros-backend-py/ (Canonical Backend — FastAPI)
 │   ├── Dockerfile
-│   ├── requirements.txt (PyJWT[crypto]==2.13.0, python-jobspy==1.1.82)
+│   ├── requirements.txt (PyJWT[crypto]==2.13.0)
 │   ├── pytest.ini
 │   ├── .env.example
 │   ├── app/
@@ -232,12 +229,8 @@ resume-pilot/ (Parent Wrapper)
 | `app/db/supabase.py` | Singletons for administrative service client and authenticated client | Repositories, Auth |
 | `app/services/ats/ats_analyzer.py` | 5-subscore ATS evaluation against requirement lexicon (1016 lines) | `app/api/routes/ats.py` |
 | `app/services/ats/semantic_reasoner.py` | Sliced LLM reasoning with hallucination verification | `app/services/ats/ats_analyzer.py` |
-| `app/services/jobs/job_ingestion_service.py` | Ingestion pipeline orchestration, source quality tagging, dedup; Adzuna India rotation (`adzuna_rotation_batch`, 39 India queries incl. measured-incremental city queries, 3/crawl, India-only broad scope), validation filter (`_drop_invalid`), JobSpy ingest (with `_apply_source_quality` provenance: tier 5 / provider `jobspy` / 0.65 confidence) | `app/workers/jobs/crawl_jobs.py` |
-| `app/services/jobs/ingestion_validation.py` | Bounded dry-run + pure metric aggregation (`dry_run_provider`, `summarize_jobs` with strict india/foreign/ambiguous/unknown + india_pct, `dedup_report`, `firecrawl_report`, `role_coverage`, `company_coverage`, `source_report`, `geography_breakdown`, `provider_geography_report`, `incremental_report`, `validate_firecrawl_candidate` with max_pages=15 official-only guard); hard caps (≤5 queries, 1 page/query, ≤50/query, ≤20 Firecrawl); dry-run never writes DB, persist delegates to `JobIngestionService` | CLI (`python -m`), validation runs |
-| `app/services/jobs/india_geography.py` | Strict India/foreign/ambiguous/unknown classifier (`classify_india_relevance`, word-boundary India, Indiana guard), `filter_india_only`, `india_first_rank` (3/2/1/0), `geography_report` (India %, top cities/countries, by provider/company/role); preserves original locations | Ingestion metrics, ranking, filtering |
-| `app/services/jobs/job_service.py` | Normalization + `normalize_india_location()` (Bangalore→Bengaluru etc., intl passthrough), `normalize_company_name()` (J.P. Morgan→JPMorgan Chase, EY GDS→EY, Tata Consultancy Services→TCS; exact-match only, no fuzzy merges), `validate_job()` (VALID/WARNINGS/INVALID/STALE), `needs_enrichment()`/`merge_enrichment()` (selective Firecrawl gate, never overwrites structured data), canonical URL wiring | `app/services/jobs/job_ingestion_service.py` |
-| `app/services/jobs/company_coverage.py` | India company source audit (57 companies): §3 classification (incl. OFFICIAL_INDIA_CAREER_PAGE, OFFICIAL_GLOBAL_CAREER_PAGE_WITH_INDIA_FILTER) / coverage / status rows + `coverage_report()` + §8 `classify_provider_coverage()`; preferred source derived from `select_preferred_source()`; internal use only, no DB table, no API route | Docs, ops |
-| `app/services/jobs/india_coverage_score.py` | India-first source prioritization (`SourceSignals`, `score_source` 0-100 with 0.35 India weight, `rank_sources`); pipeline-independent, no DB/HTTP | Discovery ranking, cost/value |
+| `app/services/jobs/job_ingestion_service.py` | Ingestion pipeline orchestration, source quality tagging, dedup; Adzuna India rotation (`adzuna_rotation_batch`, 20 India queries, 2/crawl, India-only broad scope), validation filter (`_drop_invalid`), JobSpy ingest | `app/workers/jobs/crawl_jobs.py` |
+| `app/services/jobs/job_service.py` | Normalization + `normalize_india_location()` (Bangalore→Bengaluru etc., intl passthrough), `validate_job()` (VALID/WARNINGS/INVALID/STALE), `needs_enrichment()`/`merge_enrichment()` (selective Firecrawl gate, never overwrites structured data), canonical URL wiring | `app/services/jobs/job_ingestion_service.py` |
 | `app/crawlers/adapters/jobspy.py` | JobSpy discovery (Naukri/LinkedIn) behind BaseCrawler; optional `python-jobspy` dep, `map_jobspy_record()`, timeout/failure isolation to `[]` | `app/services/jobs/job_ingestion_service.py` |
 | `app/services/jobs/personalized_job_service.py` | 8-factor matching algorithm with India-first geographic tiebreaker | `app/api/routes/jobs.py`, Recs |
 | `app/services/jobs/scheduled_crawl_runner.py` | APScheduler provider configuration (24h intervals) | `app/main.py` lifespan |
@@ -343,14 +336,14 @@ resume-pilot/ (Parent Wrapper)
 ## 9. Current Testing & Validation State
 
 ### 9.1 Backend Testing (`careeros-backend-py`)
-- **Suite:** 58 Pytest test files + `__init__.py` under `tests/` (incl. `test_job_ingestion_2o.py`, `test_india_source_registry.py`: 16 tests, `test_india_first_discovery.py`: 19 tests for strict India/foreign/ambiguous classification, India-only filtering, multi-location India, source selection, provider audit, coverage scoring, geography/incremental reports, Firecrawl guards).
+- **Suite:** 55 Pytest test files + `__init__.py` under `tests/` (incl. `test_job_ingestion_2o.py`: 15 tests for India endpoint, rotation, JobSpy, canonical URL, validation, India normalization, enrichment guard, provenance, registry, workers).
 - **Framework:** Pytest 8.3.4, `pytest-asyncio` 0.24.0 (auto mode).
-- **Latest Verified Execution (2026-09-10, with India-first discovery changes, this update):**
-  - **Collected:** 1045 items.
-  - **Passed:** 1033 tests passed (incl. all 19 new + all 60 targeted ingestion/crawler/ranking suites).
+- **Latest Verified Execution (2026-09-10, with Ingestion 2.0 changes):**
+  - **Collected:** 999 items.
+  - **Passed:** 985 tests passed (incl. all 15 new + all ingestion/crawler/scheduler suites: 58/58 targeted).
   - **Skipped:** 0 collected as skipped (live-credential tests exercised skip paths inline).
-  - **Failed:** 12 failed — identical pre-existing set, no regressions: 6× `test_copilot.py` (`/api/copilot/chat` route unmounted → 404, stub-only per §10), 6× resume visual/style golden tests (pixel diffs vs threshold).
-  - **Runtime:** ~269 seconds.
+  - **Failed:** 14 failed — ALL pre-existing and unrelated to ingestion (verified failing on clean tree via `git stash`): 6× `test_copilot.py` (`/api/copilot/chat` route unmounted → 404, stub-only per §10), 8× resume visual/style golden tests (Groq rate-limit → legacy-parser fallback + pixel diffs 3.9–16.0 vs 2.0 threshold).
+  - **Runtime:** ~422 seconds.
 - **Prerequisite:** Fresh virtual environments require setting test Supabase environment variables (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) as documented in backend `README.md`.
 
 ### 9.2 Frontend Testing (`careeros-frontend`)
@@ -390,7 +383,6 @@ resume-pilot/ (Parent Wrapper)
 | **Job Validation** | **IMPLEMENTED** | `validate_job()` in `app/services/jobs/job_service.py`, `_drop_invalid()` in ingestion | VALID / VALID_WITH_WARNINGS / INVALID / STALE; only INVALID is dropped, optional-field gaps never discard useful jobs |
 | **India Location Normalization** | **IMPLEMENTED** | `normalize_india_location()` in `job_service.py` | Deterministic aliases (Bangalore→Bengaluru, Bombay→Mumbai, Madras→Chennai, Gurgaon→Gurugram, + NCR/city labels); international locations untouched; provider original preserved in `raw` |
 | **Selective Firecrawl Enrichment** | **IMPLEMENTED** | `needs_enrichment()` / `merge_enrichment()` in `job_service.py` | Event/need-driven only (thin content + has apply_url); merge fills gaps, never overwrites structured fields; Firecrawl failure never destroys usable jobs |
-| **India Company Source Registry** | **IMPLEMENTED** | `app/crawlers/crawl_registry.py` (`CrawlTarget` + `source_type`/`firecrawl_enabled` metadata), `select_preferred_source()` in `source_priority.py`, `app/services/jobs/company_coverage.py` (57-company audit + `coverage_report()`), `normalize_company_name()` in `job_service.py` (also reused in company-preference matching) | Adding a company = adding a `CrawlTarget` entry, never a new crawler; priority ATS/API > career page > aggregator > Firecrawl; audit: 7 already covered, 26 deferred (aggregator-only), 24 unverified Firecrawl candidates, 0 newly scheduled (no verified slugs — guessed Lever/Greenhouse probes 404'd) |
 | **JSearch Provider** | **EVALUATED / DISABLED** | None (no code) | Evaluated against Adzuna + JobSpy + ATS India coverage; cost/rate + dup volume outweigh gains; reserved behind aggregator abstraction, left disabled |
 | **Job Freshness & Staleness** | **IMPLEMENTED** | `011_job_freshness.sql`, `job_repository.py` | `last_seen_at` tracking; source-scoped inactive deactivation |
 | **Job Intelligence Extraction** | **IMPLEMENTED** | `app/services/jobs/job_intelligence_service.py`, `012` | Deterministic extraction stored in JSONB |
@@ -416,16 +408,13 @@ resume-pilot/ (Parent Wrapper)
 3. **Duplicate Repository Instantiation:** In `app/workers/jobs/job_intelligence_job.py`, `JobRepository()` is instantiated on line 39 and immediately instantiated again on line 40.
 4. **Index Name Discrepancy:** In migration `006_resume_versions_extended.sql:33`, index `idx_resume_versions_user_id` indexes column `resume_id` instead of `user_id`.
 5. **String Timestamp Comparison:** In `app/repositories/job_repository.py:275`, stale job deactivation compares string timestamps (`str(observed) >= cutoff`) instead of parsing native datetimes.
-6. **Adzuna Query Rotation Modulo Bug (RESOLVED):** Rotation was `(ordinal * BATCH) % len` — always 0 when BATCH == len — plus 8 queries × 3 countries = 27 calls/crawl against the ~1000-call/month free tier. Fixed via `adzuna_rotation_batch()` (`ordinal % len`, India-only broad scope); matrix later expanded to 39 India queries (task §5 priority domains + measured-incremental city queries, §15.4) with batch 3/crawl (~6 calls/crawl/day ≈ 180/month); `what_and`/`category` passthrough added; budget configurable via `ADZUNA_QUERIES_PER_CRAWL` / `ADZUNA_RESULTS_PER_PAGE`.
+6. **Adzuna Query Rotation Modulo Bug (RESOLVED):** Rotation was `(ordinal * BATCH) % len` — always 0 when BATCH == len — plus 8 queries × 3 countries = 27 calls/crawl against the ~1000-call/month free tier. Fixed via `adzuna_rotation_batch()` (`ordinal % len`, 20 India queries across analytics/engineering/AI-ML/backend/SAP, 2 per crawl, India-only broad scope → ~5 calls/crawl/day ≈ 150/month); `what_and`/`category` passthrough added; budget configurable via `ADZUNA_QUERIES_PER_CRAWL` / `ADZUNA_RESULTS_PER_PAGE`.
 7. **Duplicated `_KNOWN_SKILLS` List:** A 22-item skill extraction list is duplicated across 5 crawler adapters instead of residing in a centralized domain constant.
 8. **Missing Consolidated Dashboard Endpoint:** The frontend makes 4 independent queries on dashboard load (`/applications/stats`, `/recommendations/top`, `/jobs/saved`, `/jobs`) because no dedicated `/api/dashboard` endpoint exists.
 9. **Process-Local Event Bus:** The in-process `EventBus` does not survive server restarts and cannot publish domain events across distributed background workers.
 10. **Uncommitted Obsolete Frontend Components:** 6 obsolete resume/optimization prototype files (`ats-dashboard.tsx`, `optimization-workspace.tsx`, etc.) and 1 build log (`vite.err`) remain uncommitted in the frontend working tree.
-11. **JobSpy Worker Dependency (RESOLVED 2026-09-10):** `python-jobspy==1.1.82` is now declared in `requirements.txt` (exact pin, matching project policy), so Docker builds and fresh environments install it. The adapter keeps its deferred `from jobspy import scrape_jobs` import inside `_scrape_sync()`, so application startup never depends on it: missing dep → logged `[]` → other providers continue (verified live: `find_spec('jobspy') is None` → `discover_jobs() == []`). Live validation: LinkedIn VALIDATED (5/5 real India records through the canonical pipeline, §14); Naukri BLOCKED by provider anti-bot (HTTP 406 recaptcha, §14) — no code workaround, no custom scraping. Provenance gap fixed: `ingest_jobspy_jobs` now wraps normalization with `_apply_source_quality` (tier 5 / `jobspy` / 0.65), matching the YC/Firecrawl paths.
+11. **JobSpy Optional Dependency:** `python-jobspy` is intentionally NOT in `requirements.txt`. The adapter degrades to an empty (logged) crawl when uninstalled; install it only on workers that run JobSpy discovery. No RLS/schema impact (reuses `JobIngestionService` → `JobRepository.upsert_jobs`).
 12. **No New Migrations for Ingestion 2.0:** Provenance (`source_history`), freshness (`last_seen_at`), and dedup (migration 013 index) already cover multi-source needs. Cross-source duplicates stay conservative (separate rows) until a `canonical_url` unique constraint is proven safe — no fuzzy merging.
-13. **Adzuna Credentials Read Directly From Process Env:** `AdzunaAdapter.__init__` reads `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` via `os.getenv`, not via `Settings` (which loads `.env`). Under plain `python` runs the adapter reports "credentials not configured" unless something loads `.env` first (e.g. `dotenv.load_dotenv`); in deployed workers the vars are exported so ingestion is unaffected. No change made (out of scope); validation runs load `.env` explicitly.
-14. **Canonical URLs Keep Non-Tracking Params (`se`, `v`):** Observed 2026-09-10 on real Adzuna URLs — only the documented tracking set is stripped. Conservative (same posting re-shared with different `se`/`v` stays separate) — accepted, matches the no-fuzzy-merge policy.
-15. **India Company Source Registry (2026-09-10): zero new scheduled targets, by design.** 57 companies audited: 7 already covered (4 Firecrawl official pages + 3 Adzuna company-inclusive extras), 26 deferred aggregator-only (Workday/SuccessFactors-class portals, unsupported — no Workday/iCIMS adapter built), 24 unverified startup Firecrawl candidates (URL/inventory not confirmable offline). Guessed ATS slugs were probed live and REJECTED (`api.lever.co/v0/postings/postman` → 404, `.../chargebee` → 404, `boards-api.greenhouse.io/v1/boards/innovaccer` → 404) — no fabricated mappings. Live crawl validation deferred (no Firecrawl/Adzuna keys in this environment); full suite 1014 passed / 12 pre-existing failures (§9.1). Next step when keys exist: verify 1–2 candidate career pages + sample crawl before scheduling anything new.
 
 ---
 
@@ -433,635 +422,249 @@ resume-pilot/ (Parent Wrapper)
 
 - **Backend Head:** `a8595338d4b1ca2436c4685d040b5d87bdb6d76b` (`main`, pushed) — `feat(ingestion): upgrade India-first multi-source job pipeline` (11 files, +734/−38; base `ff1f557`).
 - **Frontend Head:** `64cd6e6c4e348973f1003cb0354dc999c6b66af1` (`main`, untouched — no frontend changes).
-- **Job Ingestion 2.0 (prior update):** Production code + tests modified (no migrations): Adzuna India rotation fix + bounded budget, JobSpy adapter (optional dep), `canonicalize_url()`, `validate_job()`, India location normalization, selective Firecrawl enrichment guards, registry metadata fields, `jobspy` worker branch, provider-scoped scheduling flag. All providers flow through `JobIngestionService` → `JobRepository.upsert_jobs`; API contracts unchanged.
-- **Ingestion Validation (this update, 2026-09-10):** +2 files, no migrations, no endpoint, no frontend changes: `app/services/jobs/ingestion_validation.py` (bounded dry-run CLI + pure metric aggregation reusing canonical primitives) and `tests/test_ingestion_validation.py` (8 mocked tests). Full suite: 993 passed / 14 pre-existing failures (identical to baseline, §9.1). Live evidence in §13; nothing was persisted by validation runs (dry-run only, 2 Adzuna calls + 1 Firecrawl probe call).
-- **JobSpy Enablement (this update, 2026-09-10):** +3 files, no migrations, no endpoint, no frontend changes: `requirements.txt` (+`python-jobspy==1.1.82`), `app/services/jobs/job_ingestion_service.py` (provenance wrapper on the JobSpy path, 1 line), `tests/test_job_ingestion_2o.py` (+3 tests: missing-dep fallback, timeout isolation, provenance attach). Live evidence in §13.2/§13.11 (LinkedIn 5 real records, Naukri 406-blocked, 0 DB writes); full suite 996 passed / same 14 pre-existing failures (§9.1).
-- **India Company Source Registry (this update, 2026-09-10):** +3 files / +3 modified, no migrations, no endpoints, no frontend changes: new `app/services/jobs/company_coverage.py` (57-company audit + `coverage_report()`), new `tests/test_india_source_registry.py` (16 offline tests); `job_service.py` (+`COMPANY_ALIASES`/`normalize_company_name`, wired into `normalize_job` and company-preference matching), `source_priority.py` (+`select_preferred_source`: ats > career_page > aggregator > firecrawl), `crawl_registry.py` (`source_type`/`firecrawl_enabled` backfill on Firecrawl + ATS targets). New scheduled targets: 0 (deliberate — no verified slugs; probes 404'd, §11.15). Full suite: 1014 passed / 12 pre-existing failures (§9.1).- **Git State:** Backend changes committed + pushed to `careeros-backend-py@main`. This document's canonical home is now `careeros-backend-py/COMPLETE_SYSTEM.md` (relocated from the wrapper per task §21 — the wrapper repo carries large unrelated unstaged legacy deletions and is not a safe commit target; the wrapper copy is left untouched and stale by design). No push to the legacy backend, no force-push. See commit SHAs in the completion report.
+- **Job Ingestion 2.0 (this update):** Production code + tests modified (no migrations): Adzuna India rotation fix + bounded budget, JobSpy adapter (optional dep), `canonicalize_url()`, `validate_job()`, India location normalization, selective Firecrawl enrichment guards, registry metadata fields, `jobspy` worker branch, provider-scoped scheduling flag. All providers flow through `JobIngestionService` → `JobRepository.upsert_jobs`; API contracts unchanged.
+- **Git State:** Backend changes committed + pushed to `careeros-backend-py@main`; this document committed to the wrapper repo. See commit SHAs in the completion report.
 
 ---
 
-## 13. Ingestion Validation Findings (2026-09-10, Real Data)
+## 13. Job Intelligence Stabilization Pass (2026-09-12)
 
-Method: `dry_run_provider("adzuna", [...], ValidationLimits(max_queries=2, results_per_query=10))` — 2 queries × 1 page (`data analyst India`, `machine learning engineer India`), India endpoint (`/jobs/in/search/`), `results_per_page=10`. Dry-run only: normalized + validated in memory, zero DB writes (2 Adzuna API calls total, no quota risk). No secrets logged.
+One continuous end-to-end pass over the existing Job Intelligence surface. No
+architecture change, no second pipeline, no crawler/service rewrite.
 
-### 13.1 Adzuna India (VALIDATED, bounded sample)
-- Queries executed: 2, pages fetched: 2, provider errors: 0.
-- Raw listings: 17 (10 + 7) → valid 15, warnings 0, invalid 0, stale 2 (posted >90d).
-- Unique canonical jobs: 17/17; India-relevant: 17/17 (100%).
-- In-sample duplicates: 0 (0.0%) — expected: two distinct queries rarely share postings.
-- Roles: analytics 8, ai_ml 6, other 3, data_engineering 0, backend 0, sap 0 — query-targeted sample, not a coverage census; the 20-query rotation covers the remaining domains over successive crawls.
-- Live DB cross-check (read-only): 668 active jobs in DB (sampled mix: 477 greenhouse, 17 ycombinator, 4 firecrawl, 2 workday); overlap with the 17 Adzuna canonicals: **0** → the Adzuna sample is 100% incremental vs current DB content.
+### Fixes
 
-### 13.2 JobSpy / Naukri / LinkedIn (live-validated 2026-09-10, bounded)
-- Method: isolated `python-jobspy==1.1.82` venv (Python 3.11.9, same as backend) so the dev env's numpy/pandas set was untouched; 1 query × 1 site × `results_wanted=5` per probe. Real records fed through the canonical pipeline in the main env (`map_jobspy_record` → `normalize_and_classify` → `validate_job` → `summarize/dedup/role` metrics, zero DB writes). DB overlap checked read-only against live Supabase (2851 total / 668 active jobs).
-- **Naukri: BLOCKED — provider anti-bot, no workaround.** `scrape_jobs(site_name=["naukri"], search_term="data analyst", location="India")` returned HTTP 406 `{"message":"recaptcha required"}` in 2.1s → 0 records. Reason recorded, no fake results, no custom scraping (per policy the JobSpy abstraction stays responsible for provider access). Re-validate quarterly or from a worker network with different egress; do not schedule Naukri crawls until a probe succeeds.
-- **LinkedIn: VALIDATED.** Same bounds returned 5 real records in 2.8s (Americana Restaurants/Mohali, SLB/Dehradun, Arcana/Coimbatore, Colosseus/Ajmer, Arcgate/Udaipur — long-tail India cities ATS boards miss). Pipeline: raw 5 → mapped 5 → valid-with-warnings 4 (thin: no description, `linkedin_fetch_description` needs auth so stays off) → stale 1 (posted 2025-05-02, >90d) → invalid 0. Unique canonical 5/5, India-relevant 5/5, in-sample dup 0%.
-- **Incremental value: 5/5 (100%) vs live DB** — 0/5 LinkedIn canonical URLs overlap the 668 active jobs (greenhouse 615, firecrawl 31, ycombinator 20, workday 2, adzuna 0, jobspy 0). Same pattern as the Adzuna sample (17/17 incremental): aggregators cover sets disjoint from the ATS-heavy DB.
-- **Provenance (after fix):** rows carry `source_platform=jobspy`, `source_provider=jobspy`, `source_tier=5` (aggregator), `source_confidence=0.65`, stable `external_job_id` (`li-<linkedin-id>`), `canonical_url=https://www.linkedin.com/jobs/view/<id>`. Multi-source rule unchanged: a later JobSpy sighting of an existing job updates `last_seen_at` via `(source_platform, external_job_id)` identity; same canonical URL across providers stays separate rows (no fuzzy merge).
-- **Firecrawl interaction:** `ingest_jobspy_jobs` never calls `needs_enrichment`/Firecrawl (verified by code read). Thin LinkedIn records flag `requiring_enrichment` under the generic gate, but aggregator URLs are NOT enrichment targets — Firecrawl stays scoped to official career pages (§13.6 conclusion stands).
+- **Salary contract (DB → API → UI):** `JobOut` now exposes `salary_min` /
+  `salary_max` / `salary_currency` alongside the legacy `salary` string
+  (`app/schemas/job.py::from_db_row`). Frontend `adaptJob` prefers the
+  numeric fields (migration 020) and falls back to parsing the string; genuinely
+  unknown salary still renders "Not disclosed" — never fabricated.
+- **Experience filter:** `"Fresher"` now maps to the Entry bucket
+  (`job_relevance_service.py::_python_filter`), alongside junior/intern/entry.
+  Stored `experience_level` NULLs continue to use the existing
+  title/description inference, so crawlers need not populate the column.
+- **Remote definition:** unchanged single definition (explicit flag OR location
+  text) enforced Python-side; DB pre-filter stays bypassed for remote so
+  flag-remote rows with plain city locations are not dropped. Hybrid is display
+  only (`toWorkMode`); no Hybrid filter is offered because the backend exposes
+  only a boolean remote flag.
+- **`pageSize`:** GET routes already accepted `pageSize`/`page_size`;
+  `POST /jobs/search` now also accepts snake_case `page_size` and
+  `employment_type` in addition to camelCase.
+- **`includeAts`:** `GET /jobs/personalized` now accepts both `includeAts`
+  (frontend) and `include_ats`; both remain documented no-ops for scoring
+  (`ats_score` stays null until ATS-on-jobs is implemented).
+- **Dead contract removed:** `roleCategory` and `includeInactive` dropped from
+  frontend `JobSearchFilters` — the backend never consumed them and the client
+  never sent them. `NormalizedJob.roleCategory` (display) is untouched.
+- **Detail/saved shapes:** `getJob` accepts backend `data` directly or wrapped
+  as `{ job }`; `getSavedJobs` accepts the backend raw array or legacy
+  `{ savedJobs }`. No backend change (other clients unaffected).
+- **Bookmarks:** the Jobs page merges `useSavedJobs` ids over the personalized
+  feed, so saved state survives pagination, refresh, and navigation, and both
+  views agree. Optimistic updates + `["jobs","saved"]` invalidation unchanged;
+  no new state architecture, no duplicate storage. (`adaptJob` default
+  `bookmarked: false` retained for unmerged contexts.)
+- **Truthful AI Insights:** removed fabricated fallbacks (90% experience,
+  100% location, 85% salary, "Mid-Level", "Verified"). Missing breakdowns now
+  render "Not enough data — run analysis"; seniority shows the real stored
+  value or an unavailable note; ATS shows the real score or "Not available".
+  Fresh `matchResult` still takes precedence via the existing
+  `matchScore ?? overall` + snake/camel readers; the selected-job stale guard
+  (`effectiveMatchResult`) is unchanged.
+- **Re-analyze:** untouched and verified — real stored profile, canonical DB
+  job on `jobId`, canonical `calculate_match_score`, normalized aliases
+  (companyName/role/overview/techStack/applyUrl/postedDate), structured errors
+  (JOB_REQUIRED/INVALID_RESUME_TEXT/JOB_NOT_FOUND/MATCH_FAILED).
 
-### 13.3 Cross-Source Deduplication (measured on real sample + DB)
-- Within-sample: 17 raw → 17 canonical (0% dup, single-source each).
-- Sample vs DB: 0/17 canonical overlap → Adzuna contributes purely incremental rows against the current ATS-heavy DB.
-- Policy confirmed: identity is `(source_platform, external_job_id)` in DB plus conservative canonical-URL accounting in validation; same URL across providers stays separate rows (no fuzzy merge). ATS ↔ aggregator and Firecrawl ↔ ATS overlap at scale: NOT YET MEASURED — needs a larger persisted sample, not a dry-run.
+### Left intentionally alone
 
-### 13.4 URL Canonicalization (validated on real URLs)
-- Tracking params (`utm_*`, `gclid`, `#frag`) strip correctly; case/host normalization holds; genuinely different postings (`/jobs/1` vs `/jobs/2`) stay distinct.
-- Conservative edge observed: Adzuna `se`/`v` params are NOT stripped (not in the tracking set) — uncertain URLs remain separate rather than merged. Acceptance requirement holds.
+- `useSearchJobs` / `useJob` / `buildSearchFilters`: unused but functional,
+  not user-facing — no broad cleanup per minimal-diff rule.
+- `JobRepository.list_jobs` remote/role_category DB filters: not on the
+  relevance path (service bypasses with `None` + Python filter); untouched.
+- `requirements` / `responsibilities` have no DB columns (020 covers skills
+  but not these); the UI hides empty sections truthfully. A future additive
+  migration can persist them — not added here.
+- Ranking, diversification, freshness, Redis/ARQ, scheduler, crawlers:
+  untouched (feed-diversification + candidate-pool suites still green).
 
-### 13.5 India Location Normalization (validated)
-- `normalize_india_location` rewrites known aliases (Bangalore→Bengaluru etc.); international locations pass through untouched (unit-covered; live sample locations were already canonical `Bengaluru, India` / `India` / `Hyderabad, India`). Provider originals preserved in `raw`.
+### Deployment note
 
-### 13.6 Firecrawl Enrichment (selective gate measured; 1 live probe)
-- Gate on the 17-job sample: 9 requiring (52.9% utilization), 8 skipped (sufficient data) — selective, never blanket.
-- Live probe (1 `scrape` call on an Adzuna details URL): HTTP-level success after 1 `ReadTimeout` retry, but content was Adzuna's error page (353 chars, "Something, somewhere has gone wrong") → 0 fields fillable; `merge_enrichment` would add nothing and protected fields (title/company/apply_url/salary/dates) stay intact by construction. Conclusion: Firecrawl on Adzuna redirect URLs yields no enrichment value — keep Firecrawl scoped to official company career pages (its registry purpose), not aggregator links. Failures remain isolated (never destroy usable jobs).
+- **Migration `020_job_feature_columns.sql` must be applied** to the live
+  Supabase DB before numeric salary/remote/workplace/employment/experience/skills
+  filtering can rely on persisted values. Additive + nullable, no backfill
+  (NULL = source did not provide). `COMPLETE_SYSTEM.md §7` inventory (15
+  files) predates migrations 018–020; they exist in `sql/migrations/`.
 
-### 13.7 Source Quality (empirical, this sample)
-- Adzuna: raw 17, valid 15, unique 17, dup 0.0%, India relevance 100%, enrichment need 52.9%, confidence 0.5 (aggregator tier, by design).
-- DB composition (active): greenhouse-dominated (477/500 sampled) — official ATS tier. Adzuna and ATS currently cover disjoint sets (0 overlap), i.e. both contribute incremental value.
+### Verification (2026-09-12)
 
-### 13.8 Role Coverage (sample, keyword buckets — no new classifier)
-| Provider | Analytics | Data Eng | AI/ML | Backend | SAP | Other |
-|----------|-----------|----------|-------|---------|-----|-------|
-| Adzuna (2-query sample) | 8 | 0 | 6 | 0 | 0 | 3 |
-| JobSpy/LinkedIn (1-query live sample) | 4 | 0 | 0 | 0 | 0 | 1 |
-| JobSpy/Naukri | BLOCKED (406) | — | — | — | — | — |
-| ATS (DB mix) | — | — | — | — | — | — (not bucketed this pass; titles are SE-heavy by registry) |
+- New `tests/test_job_stabilization.py`: 5 passed (numeric salary contract,
+  salary-string passthrough, Fresher→Entry, search snake_case aliases,
+  includeAts/include_ats both 200).
+- Existing suites: 52 passed (`test_job_api`, `test_job_filtering`,
+  `test_job_relevance_service`, `test_job_feed_fix`, `test_job_filter_audit`,
+  `test_job_repository`) + 9 passed (`test_jobs_route_order`,
+  `test_job_ingestion_service`, `test_job_intelligence_api`).
+- Frontend: `npx tsc --noEmit` clean; Vitest `src/lib/__tests__`: 14 files /
+  260 tests passed.
 
-### 13.9 Company Coverage Gaps (registry vs Adzuna sample)
-- All 10 registry companies (Razorpay, PhonePe, CRED, Zerodha, PostHog, Linear, Stripe, Notion, ServiceNow, Visa): NO_COVERAGE from the 2-query Adzuna sample — expected and healthy: registry companies are covered by their dedicated ATS/Firecrawl targets, Adzuna covers the long tail. No new crawlers recommended from this sample.
-- Highest-value next sources (evidence-based, not implemented): (1) JobSpy live validation once the optional dep is installed (Naukri/LinkedIn long tail); (2) a persisted multi-day Adzuna rotation census to measure true ATS↔aggregator overlap before any `canonical_url` uniqueness work. JSearch: still DISABLED — no new evidence this pass to overturn the prior decision (Adzuna India endpoint is productive: 15/17 valid, 100% India-relevant).
+## 14. Frontend Truthfulness & Stability Pass (2026-09-12)
 
-### 13.10 What Was Deliberately Skipped
-- No public/internal report endpoint (§15-optional): existing crawl-status Redis records + DB rows + dry-run CLI output provide equivalent observability; an endpoint adds attack surface for no new capability. Add when an admin UI needs it.
-- No full 20-query Adzuna census: would spend ~20+ calls for a census a rotating daily crawl produces for free over time.
-- No JSearch integration (§13 of task): decision stands, documented above.
-- No new `JOBSPY_MAX_RESULTS / JOBSPY_MAX_QUERIES / JOBSPY_CONCURRENCY` settings: existing `JOBSPY_RESULTS_WANTED` (adapter-clamped ≤200) + `JOBSPY_TIMEOUT_SECONDS` + `JOBSPY_ENABLED` kill-switch + `ValidationLimits` hard caps (≤5 queries, 1 page, ≤50/query) already bound every axis; aliases would duplicate one value under two names. Add only if a second JobSpy query-per-crawl is ever scheduled.
-- No per-resume/role hard-coding, no second ingestion path, no custom LinkedIn scraping, no Firecrawl follow-up on aggregator URLs, no migrations (provenance/freshness/dedup columns already cover JobSpy rows).
+One comprehensive frontend-only pass (no backend/DB/migration changes, no new
+architecture, no duplicate API layer). Every visible feature re-traced
+UI → hook → API client → backend route → response → UI state.
 
-### 13.11 JobSpy Production Crawl Strategy (evidence-based, 2026-09-10)
-- **LinkedIn: ENABLED at aggregator cadence (lowest priority).** 5/5 India-relevant, 100% incremental vs DB, 2.8s for 5 results. Keep the single registry target (`jobspy` / `data analyst India`, provider `aggregator`, 24h) with defaults (`JOBSPY_RESULTS_WANTED=50`, `JOBSPY_TIMEOUT_SECONDS=60`). Worker safety already in place: ARQ `timeout=300`/`max_tries=2`, Redis `crawl_lock:{source}:{slug}` (300s TTL), adapter timeout → `[]`, failure isolation, idempotent upsert, crawl-status recording. `JOBSPY_ENABLED=false` is the kill-switch.
-- **Naukri: NOT SCHEDULED until a probe succeeds.** HTTP 406 recaptcha block; re-probe quarterly. No code changes for it.
-- **Do not raise frequency or query count without new evidence.** One thin-description LinkedIn query per day is proportionate to its incremental yield; Adzuna rotation + ATS boards remain the primary India engines.
-- **Adzuna vs JobSpy (actuals):**
+### Fixes (all in `careeros-frontend`, 15 files, net −204 lines)
 
-| Metric | Adzuna (2-query sample) | JobSpy/LinkedIn (1-query live) | JobSpy/Naukri |
-|--------|------------------------:|-------------------------------:|---------------|
-| Raw results | 17 | 5 | BLOCKED (406) |
-| Valid (+warnings) | 15 | 4 | — |
-| Unique canonical | 17 | 5 | — |
-| Incremental vs DB | 17/17 (100%) | 5/5 (100%) | — |
-| India relevance | 17/17 (100%) | 5/5 (100%) | — |
-| Duplicate rate | 0.0% | 0.0% | — |
-| Target-role coverage | analytics 8, ai_ml 6 | analytics 4, other 1 | — |
-| Errors | 0 | 0 (Naukri probe: 406 recaptcha) | 406 recaptcha |
+- **Dashboard fabrication removed:** deleted `fallbackData` (hardcoded 88
+  health, 14/6/3/1 funnel, Stripe/Linear/Vercel activity) from
+  `_app.dashboard.tsx`. The page now gates on the real `useDashboardData`
+  `isLoading`, renders a truthful empty state when there is no workspace data,
+  and shows only live counts (telemetry + aggregated queries). Directive cards
+  carry real pool counts or plain next-actions — no fabricated roles/companies/
+  score deltas. Health `delta` renders 0 (no measured-change source exists).
+- **Copilot history de-faked:** `CopilotPanel` no longer seeds
+  `mockConversations` as the user's own threads; history starts with one empty
+  conversation and the existing empty `WelcomeState`. Deleted the now-unreferenced
+  `mockConversations` + `generateMockResponse` exports from `lib/copilot-data.ts`
+  (types/tools/module routing retained). Copilot page status badge flips to
+  "Unavailable" after a failed request instead of a static "Online"; suggestion
+  chips/buttons disable while a request is pending.
+- **Auth infinite-spinner fixed:** `AuthProvider` exposes `profileFetchFailed`
+  (+ `fetchProfile(force?)` retry). `_app.tsx` and `_auth.tsx` render a
+  retryable error (Retry → `fetchProfile(true)`, Sign out) instead of spinning
+  forever when the profile request fails.
+- **Export 401 recovery:** `requestBlob` now shares the single
+  `tryRefreshAndRetry` 401 path with `request()` (fresh AbortController +
+  timeout). Resume PDF/DOCX export no longer fails on expired tokens while
+  every JSON call recovers.
+- **Job-feed race fix:** `RequestOptions.signal` linked to the internal timeout
+  controller; `jobsApi.getJobs/searchJobs/getPersonalizedJobs/getJob` accept an
+  optional signal and `useJobs/usePersonalizedJobs/useJob/useSearchJobs` forward
+  TanStack's per-fetch signal. Fast typing/filter/pagination changes abort
+  superseded fetches instead of resolving them over newer UI state.
+  `keepPreviousData` + existing query keys unchanged; Job Intelligence
+  filters/pagination/match/bookmark logic untouched.
+- **Admin page de-faked:** orphan `/admin` (no nav entry) rendered hardcoded
+  platform numbers (1,234 users…) plus fake activity and a dead `/api/admin/stats`
+  fetch. Overview now renders the same honest "Not available yet" state as the
+  other tabs until a real admin metrics endpoint exists.
+
+### Deliberately left alone (verified, not user-facing defects)
+
+- `components/ats/{left,center,right}-pane.tsx` + `lib/ats-data.ts` mocks: **dead
+  code** — no route renders them (`_app.ats` redirects to `/resumes`,
+  `_app.ats-history` uses real history + `useResumes`, Studio uses
+  `components/resume/left-pane`). Left in tree per minimal-diff rule.
+- Notifications `isLoading` full-page skeleton: initial-load only (TanStack
+  `isLoading` is false during background refetch), so no blank-on-refetch bug.
+- `useSearchJobs`/`useJob`/`buildSearchFilters`, dead `DASHBOARD/*` +
+  `COPILOT/*` endpoint constants, duplicate `POST /api/optimization/tailor`
+  wrappers, `api/auth.ts` stubs: unused-but-harmless; no user impact, no change.
+- Copilot is **live** (`POST /api/copilot/chat`, truthful LLM_UNAVAILABLE/
+  TIMEOUT handling) — earlier "stub" notes in §6/§10 are stale for the frontend
+  client; backend `/api/copilot/chat` старше 404s in backend pytest
+  (`test_copilot.py`) remain a backend-side matter.
+- Interview Prep routes/hooks: fully wired to real endpoints with
+  skeleton/error/empty/failed states — no change needed.
+
+### Capability status after this pass
+
+| Feature | Status | Evidence |
+|---|---|---|
+| Auth/onboarding/profile | WORKING (+retryable profile error) | `AuthProvider`, `_app.tsx`, `_auth.tsx` |
+| Resume upload/parse/Studio/versions/export | WORKING | unchanged; export 401 fixed |
+| ATS analyze/history/Studio dialog | WORKING | unchanged; dead 3-pane mocks unrendered |
+| Optimization/improvement/tailoring | WORKING | unchanged |
+| Jobs search/filter/pagination/detail/bookmarks | WORKING (+abort) | unchanged logic; signal only |
+| Job intelligence/match | WORKING | unchanged (truthful fallbacks from prior pass) |
+| Recommendations/dismiss/save | WORKING | unchanged |
+| Notifications + preferences | WORKING | unchanged (optimistic + rollback intact) |
+| Applications Kanban + stats | WORKING | unchanged |
+| Interview Prep | WORKING | verified wired, untouched |
+| Dashboard | WORKING (truthful empty) | fabrication removed |
+| Copilot chat + panel | WORKING (truthful status) | live endpoint, history starts empty |
+| Admin portal | UNAVAILABLE (honest) | no backend endpoint; placeholder UI |
+| Dashboard `api/dashboard.ts` stubs, `api/auth.ts` stubs | DEAD (unreferenced) | no callers; left untouched |
+
+### Verification (2026-09-12, this pass)
+
+- `npx tsc --noEmit`: 0 errors.
+- Vitest `src/lib/__tests__`: 14 files / 260 tests passed (incl.
+  `job-intelligence-redesign` 14 tests — Job Intelligence regression green).
+- Production build (`npm run build`, Vite 8 + Nitro): client + SSR + Nitro
+  prebuilt successfully.
+- No runtime browser verification (no live backend/credentials in this
+  environment) — verification is static + unit + build only.
 
 ---
 
-## 14. India-First Discovery & Selective Enablement (2026-09-10, this update)
+## 13. Final Production Job Feed Verification (2026-09-16)
+
+### Objective
+Final verification and targeted stabilization pass for the production job feed, inventory quality, saved jobs asynchronous execution, and daily refresh pipeline.
+
+### 1. Live Database Inventory Audit
+Queried against canonical Supabase PostgreSQL database:
+- **Total active jobs:** 77
+- **India-verified:** 58 (75.3%)
+- **Foreign:** 0 (0.0%)
+- **Ambiguous (Remote):** 7 (9.1%)
+- **Unknown (Remote / Unspecified):** 12 (15.6%)
+- **Target-role matches:** 77 / 77 (100.0%)
+- **Distinct companies:** 51
+- **Provider distribution:**
+  - `adzuna`: 58
+  - `ycombinator`: 19
+- **Deactivated during audit:**
+  - 1 synthetic test row (`e2ee6764-059d-4693-9cde-423c5e83c350`: "Test Firecrawl Engineer" at "TestCo")
+  - 1 US YC posting (`1620986a-d17a-4e46-bc88-b23027605ee6`: "Forward Deployed AI Engineer, Backend - West Palm Beach" at "Draftwise")
+
+### 2. Freshness & Staleness Distribution
+- `<= 1 day old`: 19 jobs (refreshed via live YC crawl)
+- `<= 3 days old`: 0 jobs
+- `<= 7 days old`: 2 jobs
+- `> 7 days old`: 56 jobs
+- `Stale (> 30 days old)`: 0 jobs by `last_seen_at` observation window (all active jobs observed within the 30-day cutoff).
+
+### 3. Production API Endpoints Verified
+Verified against live production backend (`https://career-os-kr9m.onrender.com`):
+- `GET /health` -> 200 OK (`{"status":"ok"}`)
+- `GET /version` -> 200 OK (`{"version":"studio-qa-v2","commit":"71faf79"}`)
+- `GET /jobs/personalized` -> 200 OK (20 jobs returned)
+- `GET /recommendations` -> 200 OK (2 items returned)
+- `GET /applications/stats` -> 200 OK (17 metrics returned)
+- `GET /notifications` -> 200 OK
+- `GET /api/dashboard` -> 200 OK
+- `GET /jobs/saved` / `POST /jobs/save` / `DELETE /jobs/{id}/unsave`:
+  - **Root cause of 500 on Render:** `AsyncQueryRequestBuilder` returned from async Supabase postgrest query has no `.single()` method and returns an awaitable coroutine. Calling `.single()` caused an `AttributeError`, and missing `await` on query execution returned un-awaited coroutines.
+  - **Targeted fix:** Removed `.single()` call on upsert builder and properly handled `await res` across saved jobs endpoints in `app/api/routes/jobs.py`.
+
+### 4. Saved Jobs End-to-End Verification
+Executed authenticated lifecycle test using live test user (`careeros-test-user@example.com`):
+1. Initial load: returned empty list `[]` (200 OK)
+2. Save real job: `POST /jobs/save` with real UUID -> succeeded with 200 OK
+3. Reload: `GET /jobs/saved` -> returned 1 saved job with correct `job_id`
+4. Unsave: `DELETE /jobs/{job_id}/unsave` -> succeeded with `{"unsaved": true}` (200 OK)
+5. Reload: `GET /jobs/saved` -> returned empty list `[]` (200 OK)
+Zero 500s, zero 401s, zero unhandled coroutine warnings.
+
+### 5. First-20 Personalized Feed Composition
+Evaluated with representative candidate profile (Data Analyst, Python/SQL/Excel/Power BI, Bangalore):
+- **Top 10:** 10 / 10 India-verified (100%), 10 distinct companies.
+- **Top 20:** 18 India-verified, 1 ambiguous remote, 1 unknown remote, 0 foreign. 20 distinct companies.
+- **Top 30:** 24 India-verified, 5 ambiguous remote, 1 unknown remote, 0 foreign. 30 distinct companies.
+
+### 6. Daily Refresh & Scheduler Verification
+- `ScheduledCrawlRunner` starts via FastAPI `lifespan` with per-provider 24-hour interval triggers.
+- Live crawl execution verified on `ycombinator` target: 20 jobs discovered, 16 inserted, 4 updated, 16 not-seen deactivated in 28.2 seconds.
+- **Infrastructure constraint identified:** The free-tier Upstash Redis instance (`sincere-hagfish-149579.upstash.io`) reached its 500,000 monthly request limit, causing Redis commands to raise `ResponseError: max requests limit exceeded`. Ingestion pipeline itself functions cleanly and can run scheduled passes directly.
+
+### 7. Test Suites & Verification
+- **Backend Targeted Regression Suite:** 51 tests passed (`tests/test_jobs_route_order.py`, `tests/test_job_feed_fix.py`, `tests/test_job_filter_audit.py`, `tests/test_job_stabilization.py`, `tests/test_job_ingestion_2o.py`, `tests/test_job_production_verification.py`).
+- **Frontend Build:** `npm run build` (Vite 8 + Nitro) passed in 1.00s with zero errors.
+- **Git Commits:**
+  - `careeros-frontend`: `4c075cb` (enforce canonical production backend URL)
+  - `careeros-backend-py`: `64fccf8` (saved jobs async fix, geographic precision, regression tests)
 
-Policy: **Indian coverage is the primary optimization target; foreign-only
-jobs are deprioritized at the ranking/query boundary, never deleted from the
-canonical DB.** No second pipeline, no custom LinkedIn scraping, no Naukri
-workarounds, no JSearch, no aggregator → Firecrawl chaining, no migrations,
-no frontend changes.
-
-### 14.1 What was implemented (+3 files, ~5 modified, no migrations)
-
-- New `app/services/jobs/india_geography.py`: strict classifier
-  `classify_india_relevance()` → INDIA (explicit India/city/multi-location
-  incl. India) | FOREIGN (known foreign markers) | AMBIGUOUS (Remote,
-  Worldwide, Global, Multiple Locations, EMEA, APAC — never Indian) |
-  UNKNOWN. Plus `filter_india_only()`, `india_first_rank()` (3/2/1/0),
-  and `geography_report()` (totals, India %, top cities/countries,
-  by provider/company/role). Original location strings are preserved.
-- New `app/services/jobs/india_coverage_score.py`: `SourceSignals` +
-  `score_source()` (0-100, India relevance weight 0.35 dominates) +
-  `rank_sources()`. A 10k-global/20-Indian source scores ~31 vs ~87 for
-  300 highly relevant Indian jobs (verified).
-- Extended `CrawlTarget` (§14 registry fields, all optional):
-  `company`, `aliases`, `url`, `india_only`, `india_filter`,
-  `coverage_status`, `coverage_score` + `company_name`/`careers_url`
-  helpers (Firecrawl slug-compatible). Firecrawl/ATS targets backfilled
-  with explicit company/url/india_filter.
-- `company_coverage.py`: §3 vocabulary now includes
-  `OFFICIAL_INDIA_CAREER_PAGE` and
-  `OFFICIAL_GLOBAL_CAREER_PAGE_WITH_INDIA_FILTER` (legacy
-  `OFFICIAL_CAREER_PAGE` kept as alias); new §8
-  `PROVIDER_COVERAGE_LEVELS` + `classify_provider_coverage()` (>=10
-  well / >=3 partial / >=1 poor / 0 not / unverifiable → UNVERIFIED).
-- `source_priority.py`: order is now ats > api > india_career_page >
-  career_page > global_with_india_filter > aggregator > firecrawl.
-- Ranking hardened (`job_relevance_service.py`, `recommendation_engine.py`):
-  both `_india_first_score()` now share the centralized city list and a
-  word-boundary India test, so "Indiana, USA" never ranks as India while
-  "Bengaluru, India" (3), other explicit India incl. "US / India" (2),
-  generic remote (1), foreign/unknown (0) keep their order.
-- `ingestion_validation.py`: `summarize_jobs()` now also emits
-  india/foreign/ambiguous/unknown + india_pct (legacy `india_relevant`
-  preserved); new `geography_breakdown()`,
-  `provider_geography_report()`, `incremental_report()` (headline:
-  incremental unique useful Indian jobs), and
-  `validate_firecrawl_candidate()` (official-page-only, max_pages=15,
-  no aggregator follow-up).
-- New `tests/test_india_first_discovery.py`: 19 offline tests (aliases
-  via existing suite, registry config, priority, India/foreign/ambiguous,
-  Indiana guard, multi-location, filtering, ranking order, vocab, provider
-  audit, scoring dominance + cost-awareness, geography, incremental,
-  Firecrawl guards, dedup/provenance).
-
-### 14.2 Provider geography (live DB read-only, 2026-09-10)
-
-668 active jobs: **India 40 (6.0%)**, foreign 399, ambiguous 15, unknown
-214. By provider: greenhouse 615 (India 40 / foreign 398 / unknown 170),
-firecrawl 31 (India 0 / unknown 30), ycombinator 20 (India 0), workday 2
-(India 0), adzuna 0, jobspy 0. Top Indian city: Bengaluru (34 + 6
-Bangalore alias). Top foreign: USA 93, Canada 54, Ireland 45, Singapore
-44 (rest Other/unspecified 101). Conclusion: the greenhouse foreign
-boards dominate raw inventory, so the India-first ranking/filtering
-boundary (§14.4) does the work — no canonical deletions.
-
-### 14.3 Bounded live probes (this pass, 0 DB writes)
-
-- **Adzuna India** (`data analyst India`, 1 query × 1 page × 5, 1 API
-  call): raw 5 → valid 4, stale 1, invalid 0; unique 5/5; India 5/5
-  (100%, strict classifier); roles analytics 5/5; incremental vs the 668
-  DB canonicals **5/5 unique, 5/5 incremental India** — disjoint from the
-  ATS-heavy DB, same pattern as §13. Selective enablement: keep the
-  existing Adzuna India rotation (already enabled); no new crawler.
-- **JobSpy** (today): `data analyst India` / India / 3 wanted → 0 records
-  (adapter failure-isolation to `[]`; prior §13.2 LinkedIn 5/5 India
-  incremental stands, today's 0 is recorded as transient/blocked, not
-  fabricated). No new JobSpy queries scheduled; existing single target +
-  kill-switch retained.
-- **Firecrawl**: no live crawl this pass (cost + §13.6 already showed
-  aggregator-URL enrichment yields nothing). Guard verified offline
-  (official-only, ≤15 pages, per-page isolation, protected-field merge).
-
-### 14.4 India-first ranking/filtering boundary
-
-Canonical rows untouched. Surfacing order: explicit India (Bangalore 3 >
-other India 2, incl. multi-location with India) > generic remote (1) >
-foreign/unknown (0), layered after match score + bounded source bonus
-(±4) + freshness. `filter_india_only()` exists for India-only views.
-Ambiguous globals never count as India in metrics or filters.
-
-### 14.5 Source decisions (selective, evidence-based)
-
-- **Keep enabled (already covered):** Adzuna India rotation (score ~89,
-  5/5 incremental India today), JobSpy long-tail target (~78, prior 5/5;
-  monitor), 4 Firecrawl official pages + 3 Adzuna company extras (config
-  retained, inventory unverified here), 5 ATS boards (foreign-heavy by
-  measurement — retained for global inventory, outranked for India).
-- **Deferred:** 26 aggregator-only MNCs (unsupported portals, long-tail
-  only); 24 unverified startup Firecrawl candidates (URL/inventory not
-  confirmable offline — probe before scheduling).
-- **Blocked:** Naukri via JobSpy (406 recaptcha, no workaround).
-- **Newly scheduled targets: 0** — deliberate (no verified slugs; guessing
-  is prohibited and prior Lever/Greenhouse probes 404'd).
-
-### 14.6 Cost/value (scored, §12)
-
-`adzuna_india_rotation` 89.3 > `jobspy_linkedin_longtail` 78.4 >
-`firecrawl_razorpay_official` 67.7 > `unverified_startup_page` 41.2 >
-`greenhouse_foreign_board` 25.9. Incremental-India-per-request drives the
-order; headline volume without India relevance scores lowest.
-
-### 14.7 Tests & remaining gaps
-
-New: 19/19 pass. Targeted ingestion/crawler/ranking suites: 60/60 pass.
-Full suite (this update): 1045 collected, 1033 passed, 12 failed — the
-identical 12 pre-existing failures (6 copilot 404 stub-only, 6 visual
-golden pixel diffs), no regressions (§9.1). Gaps:
-(1) Firecrawl official-page live inventory still unverified in this env —
-verify 1–2 pages + sample crawl when keys/quota allow; (2) ATS↔aggregator
-overlap at scale needs a persisted multi-day sample, not a dry-run;
-(3) JobSpy LinkedIn flakiness needs a quarterly re-probe from worker
-egress. No fake coverage claimed anywhere.
-## 15. India Coverage Expansion & Provider Rebalancing (2026-09-11, this update)
-
-Follow-up to §14. Objective: materially improve Indian job coverage through
-provider rebalancing, query strategy, and classification — no new crawlers,
-no second pipeline, no canonical foreign deletions, no frontend/migration
-changes. All numbers below are measured against the live database.
-
-### 15.1 Preserved baseline (before this update, read-only capture)
-
-668 active jobs: **India 40 (6.0%)**, foreign 399 (59.7%), ambiguous 15,
-unknown 214 (32.0%). By provider: greenhouse 615 (India 40 / foreign 398 /
-ambiguous 7 / unknown 170), ycombinator 20, firecrawl 31, workday 2 —
-**adzuna 0 active despite 1066 inactive rows (425 India-classified)**.
-Every active India job was Bengaluru/Stripe; zero city diversity. Preserved
-in `india_coverage_baseline.json` (scripts/india_coverage_baseline.py).
-
-### 15.2 Root cause found: not-seen deactivation culled aggregator India
-
-`crawl_company_job` applied `deactivate_not_seen_since(source)` to EVERY
-source after each successful crawl. Query-based providers (Adzuna/JobSpy)
-exercise a bounded 2-3-query ROTATION per crawl, never the full source
-inventory — so every job outside today's query subset was deactivated daily.
-Observed: 1066 inactive Adzuna rows (425 India-classified) vs 0 active.
-Firecrawl stays complete-inventory (already careers-URL-scoped), as do the
-ATS boards and YC. Fix in `app/workers/jobs/crawl_jobs.py`:
-`_uses_complete_inventory()` / `_QUERY_BASED_SOURCES` — not-seen
-reconciliation now runs only for {greenhouse, ashby, lever,
-smartrecruiters, ycombinator, workday, icims, firecrawl}; adzuna/jobspy are
-### 15.3 Greenhouse findings (§3, live board probe)
-
-Stripe's board (`boards-api.greenhouse.io/…/stripe/jobs`) lists 624 postings;
-`location` is structured text — Bengaluru 28, Bangalore 4, "N/A" 22,
-Singapore 45, Dublin 29, London 26, "US" 15, "US-Remote" 12, Mexico City 18,
-Remote 4 — 39 India-detectable postings, consistent with the 40 canonical
-rows. India IS identifiable before ingestion (city tokens + "IN-Bengaluru"),
-but the board is US/global-dominant. Decision: foreign jobs are PRESERVED as
-canonical global inventory; India-first work happens at the ranking/filter
-boundary. Added an OPT-IN `india_only` parameter to `GreenhouseAdapter` +
-`ingest_greenhouse_jobs()` (deterministic pre-ingestion filter via
-`is_india_job()`; default False so nothing is deleted). Registry targets can
-set `india_only=True` for India-specific boards — none enabled now (Stripe
-must keep its 40 India jobs, so it is NOT rebalanced away).
-
-### 15.4 Adzuna query measurement + city dedup guard (§5, §7)
-
-Bounded live probe (scripts/probe_adzuna_city_yield.py, 22 queries × 1 page
-× 10 results, country=in): role+India queries return 9-10/10 India jobs
-(data analyst 9, data engineer 10, machine learning 10, backend engineer
-10, SAP ABAP 10, financial analyst 10, business analyst 9). City queries are
-GENUINELY INCREMENTAL vs the role+India union (77 unique India canonicals):
-data analyst Hyderabad 10/10, Pune 10/10, Mumbai 10/10, Gurugram 10/10,
-Chennai 7/7, Bengaluru 5/5, software engineer Hyderabad/Pune/Chennai/
-Bengaluru 10/10 each, data engineer Bengaluru 10/10 — 112 incremental unique
-India jobs beyond the role baseline, so city queries are NOT duplicates.
-Matrix updated in `ADZUNA_BROAD_QUERIES` (20 → 39: adds data analytics, BI,
-artificial intelligence, risk analyst/analytics, financial analyst, SAP +
-11 measured-incremental city queries); batch default 2 → 3 (config
-`ADZUNA_QUERIES_PER_CRAWL`), ~6 calls/crawl/day ≈ 180/mo inside the ~1000/mo
-free tier. `score_queries_by_yield()` ranks queries by incremental-India per
-call (§16 metric). City coverage AFTER: Bengaluru 65, Mumbai 6, Noida 5,
-Chennai 5, Hyderabad 3, Pune 2, Indore 1 (was: Bengaluru only).
-
-### 15.5 UNKNOWN/AMBIGUOUS resolution (§8, §9, conservative)
-
-Deterministic US-only marker added (`india_geography._US_FOREIGN`,
-word-boundary `us`/`usa`/`u.s.a`, guarded against bare "remote …" forms):
-"US", "US-Remote", "US remote", "US-SF…", "US-AMER" now classify FOREIGN
-instead of UNKNOWN (~56 greenhouse rows). Greenhouse unknown 170 → 114,
-foreign 398 → 454 — honest reclassification, zero India inflation. Left
-UNKNOWN on purpose (no reliable country evidence): "N/A", "None",
-"Products", "LOCATION", "Skip to content →" (HTML parse artifact). Bare
-remote forms stay AMBIGUOUS per policy ("Remote", "Remote US", "Remote in
-the US"). "United States / India" and "India / Singapore" stay INDIA.
-Word-boundary \bus\b verified safe (Mauritius/Cyprus/Luxembourg stay
-UNKNOWN; Indiana never India).
-
-### 15.6 Live validation (§18) & KPIs (§16)
-
-One bounded canonical Adzuna ingest run (scheduled-path behavior, 6 calls,
-scripts/live_validate_india_changes.py): discovered 208, inserted 0, updated
-208, unchanged 0 (rotation matrix already known from the scheduled worker
-running between captures). Provider KPIs for the fresh Adzuna set:
-incremental_unique_india_jobs 56, india_jobs_per_provider_call 9.33,
-india_jobs_per_crawl 56, india_job_percentage 47.9.
-
-A scheduled aggregator crawl ran between the baseline and the post-change
-captures, exercising the new pipeline: canonical inventory moved
-**668 → 785 active, India 40 (6.0%) → 96 (12.2%)** — +56 India jobs, +117
-active Adzuna rows (56 India / 60 unknown "N/A"-style / 1 foreign), zero
-foreign rows deleted (greenhouse foreign 398 → 454, India 40 unchanged).
-India-first share more than doubled WITHOUT deleting canonical global jobs
-or fabricating geography. JobSpy live probe: NOT possible in this env
-(python-jobspy not installed; prior §13.2 5/5 incremental stands; documented
-as external limitation, no fabricated numbers). Firecrawl: unchanged
-(official-page-only, max_pages 15); no candidate justified by measured gaps
-this pass, nothing guessed or enabled.
-
-`JobRepository.upsert_jobs()` now RE-ACTIVATES a previously deactivated row
-when the re-observed posting is still fresh (the unchanged-path previously
-only refreshed `last_seen_at`, leaving churned rotation rows inactive
-forever); the age-staleness check in `to_db_row()` still governs, so old
-postings stay inactive. Query-based providers (adzuna/jobspy) are exempt
-from not-seen deactivation and rely on the age-based stale window
-(JOB_STALE_AFTER_DAYS).
-
-### 15.7 Tests & regression comparison (§22)
-
-New `tests/test_india_provider_rebalancing.py` (14 offline tests): not-seen
-policy split, Greenhouse india_only (global preserved), US-only FOREIGN vs
-bare-remote AMBIGUOUS vs UNKNOWN, multi-location India, no-false-positive
-US substrings, query scoring, city-query boundedness, India KPI family,
-ranking-surface consistency. Updated for deliberate behavior changes:
-`test_job_ingestion_2o` (matrix/budget 3+3=6 calls), `test_job_ingestion_service`
-(same), `test_crawl_refresh_system` unaffected after Firecrawl kept in the
-complete-inventory set. Targeted: 59/59 pass. Full suite: 1045 → 1059
-collected, 1006 → 1022 passed, failures 15 → 13 (same pre-existing
-copilot/visual-render set; the 2 flaky jwt_verify baseline failures
-recovered; NO new regressions).
-
-### 15.8 Remaining gaps / deferred
-
-- Naukri via JobSpy: blocked (HTTP 406 / recaptcha) — unchanged, unscheduled.
-- JobSpy module absent in this env — live re-probe still pending (quarterly).
-- 24 Firecrawl startup candidates remain unverified (probe before enabling).
-- Adzuna India "software engineer" titles fall outside the 5 target-domain
-  buckets (by design); target-role KPI counts them as "other".
-- Measurement artifacts: `india_coverage_baseline.json` / 
-  `india_coverage_after.json` (repo root, evidence for this section).
-
-## 16. India Target-Role + Freshness-Aware Feed (2026-09-11, this update)
-
-Baseline: commit `9192778` — 785 active, India 96 (12.2%), India target-role
-thin (Analytics 1, Backend 3, AI/ML 0, Data Eng 0, SAP ABAP 0). No second
-pipeline, no second ranking/freshness system, no new crawlers, no migrations,
-no frontend changes. 7 files (+1 test), all changes reuse existing primitives.
-
-### 16.1 Target-role taxonomy audit (measured, not assumed)
-
-`classify()` spot-check before the fix: Data Analyst / Data Engineer / ML
-Engineer / Backend / Risk / Financial Analyst / Analytics Engineer / BI
-Developer all classify correctly — the ONLY invisible target role was SAP:
-"SAP ABAP Developer" → Other, "SAP FICO Analyst" → Other, and worse,
-"SAP HANA Consultant" → Healthcare (generic "consultant" alias collision).
-Fix: one `SAP Consultant` family in `role_taxonomy.py` (Software
-Engineering bucket, 13 aliases: sap abap, abap developer/consultant, sap
-hana, fico/mm/sd/bw/basis, functional/technical consultant). Longest-match
-ordering makes the SAP aliases win over bare "consultant"; generic
-"Consultant" still maps to Healthcare (verified). BI/Risk/Financial need no
-change (already correct buckets); keyword-level target metrics
-(`ingestion_validation.TARGET_ROLE_KEYWORDS`) already had a sap bucket.
-
-### 16.2 Adzuna queries: no change needed (verified, not assumed)
-
-The 39-query matrix from §15.4 already contains SAP India / SAP ABAP India /
-ABAP developer India / SAP HANA India. Bounded live dry-run (1 query × 1
-page × 10 results = 1 API call, zero DB writes): "SAP ABAP India" → raw 10,
-India 10/10 (100%), sap bucket 9, other 1, 0 dupes. Conclusion: the
-inventory was reachable; the taxonomy hid it. No query added/removed.
-
-### 16.3 Freshness root fixes (observation vs posting age)
-
-- `NormalizedJob` gains optional `first_seen_at` / `last_seen_at` (ranking
-  inputs only; `to_db_row` untouched so `posted_at` is never fabricated).
-- `PersonalizedJobService._score_freshness` is now observation-aware:
-  score = max(posting-age score, observation-age score) via shared
-  `_freshness_from_iso`. Posted-20d + seen-today → 100 (was 50). Single
-  primitive reused by recommendations (`RecommendationEngine` consumes
-  `match["freshness"]`), no second freshness system.
-- `JobRepository.deactivate_stale_jobs` root fix: previously
-  `posted_at OR last_seen_at` (posted won, so re-observed old postings were
-  culled) compared as STRINGS. Now `last_seen_at` wins with real datetime
-  parsing; rows with no usable date are never culled (never delete-by-stale).
-- `upsert_jobs` re-observation verified unchanged and correct: identity
-  preserved, `last_seen_at` refreshed, `posted_at` untouched on the
-  unchanged path, no duplicates (in-batch set + identity lookup + 23505
-  race fallback). Query-rotation exemption intact: adzuna/jobspy stay out
-  of `_COMPLETE_INVENTORY_SOURCES` (verified in tests).
-
-### 16.4 Deterministic India+freshness ordering
-
-`_recency_key()` = max(posted_date, last_seen_at) used in both
-`JobRelevanceService` sort paths (anon India-first and personalized
-match+India-boost); canonical `external_job_id` appended as final tiebreak
-in relevance sorts, `_sort_jobs` newest/oldest/salary, and
-`RecommendationEngine` (score, india, freshness, job_id). India-first still
-outweighs freshness alone (stale India > fresh foreign at equal match, per
-existing architecture); freshness decides within equal India tiers.
-
-### 16.5 Synthetic tests (§§22-25) + live validation
-
-New `tests/test_india_target_freshness.py` (11 offline tests): SAP
-classification + bucket intactness; re-observed freshness restore;
-posted_at immutability; stale-deactivation observation-wins + rotation
-exemption; upsert re-observation contract; A-E India/target/freshness
-ranking; NEW>FRESH>AGING>STALE tier order; pagination determinism.
-Live: Adzuna keys present in `.env`; 1-call SAP dry-run above (9/10 sap,
-100% India). JobSpy live re-probe skipped (prior §13.2 stands; no dep
-change). Firecrawl untouched (official-only, max_pages 15).
-
-### 16.6 Regression comparison
-
-Targeted (ingestion/india/crawl/escalation/freshness): 42/42 pass. Full
-suite: 1070 collected, **1056 passed**, 14 failed — 6 copilot stub 404s +
-8 resume visual/golden pixel asserts, ALL pre-existing (the 2
-`style_extraction` degree-normalization asserts fail identically with this
-update stashed; resume code untouched by this diff). Baseline §9.1 was
-1033 passed / 12 failed; delta is +11 new passing tests and +2 flaky
-environment goldens, zero regressions from this change.
-
-## 17. Upstash Redis Request Audit & ARQ Efficiency (2026-09-11, this update)
-
-Incident: Upstash `Limit: 500000 / Usage: 500000` with
-`ResponseError max requests limit exceeded` on worker startup; after ARQ
-`conn_retries=5` the worker connected and served all 5 functions. No
-redesign, no second Redis, no architecture change — diagnosis first.
-
-### 17.1 Render topology (verified in code)
-
-* Web service: `uvicorn app.main:app` (`start.sh`, `SERVICE_TYPE != worker`).
-  Owns the ONLY APScheduler (`app/main.py` lifespan →
-  `ScheduledCrawlRunner.start()`; in-memory store, no Redis state).
-* Worker service: `python -m arq app.workers.settings.WorkerSettings`
-  (`start.sh`, `SERVICE_TYPE=worker`) + dummy `http.server` for Render port.
-  Runs zero schedulers (never imports `app.main`).
-* Scheduler ownership: exactly one authoritative scheduler per web process.
-  Multi-instance web scaling would duplicate passes, but the
-  `crawl_lock:{source}:{slug}` SET NX EX (300s TTL) dedups execution; the
-  duplicate cost is bounded to lock SETs, never duplicate crawls.
-
-### 17.2 Redis inventory (all `redis`/`arq` call sites in `app/`)
-
-| Component | Operation | Frequency | Redis cmds |
-|---|---|---|---|
-| ARQ worker idle poll (`worker.py:_poll_iteration`, `poll_delay`) | `ZRANGEBYSCORE arq:queue` | every `poll_delay` | 1/poll |
-| ARQ hourly health (`record_health`, interval 3600) | `ZCARD` + `PSETEX health-check` | 24/day | 2/run |
-| Worker startup (`create_pool` + `log_redis_info`) | `PING`, `INFO` x3, `DBSIZE` | once/process | 5 total |
-| Scheduler pass (`ScheduledCrawlRunner`, 14 targets) | `SET NX EX` lock + `enqueue_job` (WATCH+EXISTS+PSETEX+ZADD) | 14/day @24h | ~5/target |
-| Job execution (ARQ internals per job) | start/run/finish pipelines | per job | ~11 (12 for crawls incl. `SET EX crawl_status`) |
-| User-triggered enqueues (resume parse, interview prep, intelligence) | `enqueue_job` | on demand | 4 each |
-| Dev-only (`/dev/arq/*`, never called in prod) | `PING`, `GET crawl_status` x14, manual `enqueue_job` | manual | — |
-| `careeros_worker_health` | registered, never auto-enqueued | 0 | 0 |
-
-No other Redis usage exists: APScheduler is memory-backed, the EventBus is
-in-process, repositories hit Supabase/PostgREST, never Redis.
-
-### 17.3 Diagnosis (evidence, not guesses; ARQ 0.26.1 source-verified)
-
-* Primary consumer: **ARQ idle polling — ~99% of all requests.**
-  `poll_delay=0.5` → 172,800 `ZRANGEBYSCORE`/day → **~5.18M/month, 10.4x
-  the 500k budget with zero jobs running.** One idle worker alone
-  exhausts the budget in ~3 days.
-* Secondary: job execution + enqueues (~700 req/day at 56 crawls/day,
-  ~0.4% of idle). Scheduler, health checks (48 req/day), locks, crawl
-  status, user enqueues are each <0.2% — negligible next to polling.
-* No scheduler duplication found (worker runs none). No health-check loop
-  found (`careeros_worker_health` has no periodic enqueuer). No connection
-  leak found (request count, not connection count, is the billed metric).
-* Secondary bug (correctness + 4x waste): `ScheduledCrawlRunner.__init__`
-  defaulted `interval_hours=6`, and `_interval_for()` preferred it over
-  every per-provider setting — all 4 provider passes ran every 6h
-  (56 crawl enqueues/day) instead of the intended 24h (14/day).
-* Tertiary waste: `dispatcher` + `enqueue` created a fresh pool per call
-  (extra `PING` + TLS handshake each, churn under 14-target bursts).
-
-Upstash per-command metering is not observable from the app; the model
-counts ARQ-level commands 1:1 (pipelined commands counted individually,
-matching Upstash semantics). Stated as a limitation, not fabricated.
-
-### 17.4 Minimum safe optimizations (this update, 6 files)
-
-1. `app/workers/settings.py`: `poll_delay = 0.5` →
-   `_settings.arq_poll_delay_seconds` (default **10s**); explicit
-   `health_check_interval = 3600` (unchanged default, now auditable).
-   Pickup-latency tradeoff documented in code (p99 ≈ poll_delay; 10s is
-   acceptable for 24h-cadence crawls and interactive resume parse).
-2. `app/config.py` + `.env.example`: new `ARQ_POLL_DELAY_SECONDS`
-   (default 10.0) — local dev may lower it; production must not restore
-   0.5s.
-3. `app/services/jobs/scheduled_crawl_runner.py`: `interval_hours` default
-   `6` → `None`, restoring per-provider 24h cadence (14 crawl
-   enqueues/day); legacy `CRAWL_INTERVAL_HOURS` override still wins when set.
-4. `app/workers/dispatcher.py` + `app/workers/enqueue.py`: reuse the
-   process-long-lived `get_redis_pool()` instead of `create_pool()` per
-   call; callers no longer `aclose()` the shared pool (saves 1 PING +
-   handshake per enqueue, ~70/day, plus connection churn).
-5. `app/workers/redis_budget.py` (new, pure/no-I/O): deterministic
-   estimator (`estimate_idle_requests_per_day/month`,
-   `estimate_enqueue_requests`, `estimate_job_execution_requests`).
-6. `keep_result=3600`, `max_jobs=10`, `job_timeout=300`, retries
-   (`max_tries=2`), locks, deactivation, EventBus: evaluated, intentionally
-   UNCHANGED (no request saving; preserves failure debugging and all
-   lifecycle guarantees).
-
-### 17.5 Before → after (one worker, 30-day month)
-
-* Before: idle 172,848/day → **~5,185,000/month (1037% of budget)**;
-  with jobs ≈ 5.21M. Budget exhausted in ~3 days.
-* After: idle 8,688/day → **~260,600/month (~52% of budget)**; scheduler
-  14 targets × 5 cmds + 14 executions × ~12 cmds ≈ 240/day (~7.2k/month);
-  user jobs/retries/health ≈ low thousands. **Expected total ≈ 275k/month
-  (~55% of budget)** — fits comfortably with ~45% headroom for traffic
-  growth, retries, and a second web instance's lock SETs.
-* Per-change effect: polling fix ≈ −4.92M/month (99.7% of the saving);
-  scheduler-cadence fix ≈ −500 req/day + 4x less Adzuna/DB load;
-  pool reuse ≈ −70 PINGs/day + less handshake churn.
-
-### 17.6 Correctness preserved & verification
-
-No silent job loss, no duplicate execution, no scheduler duplication:
-retries, timeouts, locks (300s TTL), source-scoped stale deactivation,
-`JobIngested` events, version-safe resume paths all untouched.
-New `tests/test_redis_efficiency.py` (9 tests: idle math, budget fit,
-env override, hourly health, per-provider cadence, legacy override,
-14-target bound, pool-reuse-no-close, 5-function registry).
-Targeted: 37/37 pass
-(`redis_efficiency` + `redis_config` + `dispatcher` + `scheduled_crawl_runner`);
-adjacent worker suites 59/59 pass
-(`crawl_refresh_system`, `ingestion_reliability`, `interview_prep`).
-
-### 17.7 Remaining limitations
-
-* 10s poll adds ≤10s job-pickup latency (documented tradeoff).
-* Multi-instance web still multiplies scheduler passes (bounded by locks;
-  keep web at 1 instance or set `JOB_CRAWL_ENABLED=false` on extras).
-* No Upstash per-command dashboard export — model is ARQ-source-verified
-  arithmetic, not metered billing data.
-* `app/workers/jobs/resume_jobs.py:parse_resume_job` is dead code
-  (unregistered duplicate of `functions.py`; worker serves the registered
-  one) — left untouched, removal is a separate cleanup.
-
----
-
-## 18. Job Intelligence Feed Fix (India supply + diversification + persistence + >1000 pool)
-
-**Date:** 2026-09-11. Audit baseline: 785 active jobs (615 Stripe ~78%, 96
-India ~12%), first non-Stripe result at rank 50, Stripe covering the first
-3+ pages; `remote/skills/salary_*/experience_level/workplace_type` dropped
-between normalization and the DB; personalized path ranked at most 1000
-candidates while reporting the full total.
-
-### 18.1 Phase 1A — Stripe India-only (existing mechanism, no new pipeline)
-
-* `app/crawlers/crawl_registry.py`: Stripe target now `india_only=True`
-  (same flag Razorpay/PhonePe/CRED/Zerodha already use).
-* `app/workers/jobs/crawl_jobs.py`: new `_india_only_for(source, slug)`
-  threads the registry flag into `ingest_greenhouse_jobs`; unknown slugs
-  default to `False` (ad-hoc crawls keep full-board behavior).
-* `app/services/jobs/job_ingestion_service.py`: `ingest_all()` passes
-  `india_only=True` for Stripe.
-* Deactivation safety (verified before changing): Greenhouse
-  `source_platform` is used by the Stripe board only, so the post-crawl
-  `deactivate_not_seen_since(source_platform="greenhouse")` touches Stripe
-  rows exclusively — foreign Stripe inventory drains naturally via not-seen
-  reconciliation, other sources untouched, nothing manually deleted.
-  Normalization, `(source_platform, external_job_id)` dedup, provenance,
-  and freshness semantics unchanged.
-
-### 18.2 Phase 1B — Company diversification (same ranker, interleave after)
-
-* `app/services/jobs/job_relevance_service.py`: new
-  `_diversify_by_company()` round-robins the already-ranked list by company
-  (first-appearance order; ranked order preserved within a company;
-  company-less jobs get individual slots). Applied after default relevance
-  ranking in both profile and no-profile branches, before pagination;
-  explicit `newest/oldest/salary` sorts keep their contract. No second
-  engine, match scores / India-first / freshness / deterministic tiebreaks
-  untouched, nothing hidden (extras surface on later pages).
-
-### 18.3 Phase 2 — Feature persistence (migration 020)
-
-* Root cause: `NormalizedJob.to_db_row()` emitted the fields but
-  `_DB_COLUMNS` dropped them. `app/models/job.py`: whitelist now includes
-  `remote, workplace_type, employment_type, salary_min, salary_max,
-  experience_level, skills`; `skills` passes through as-is so unknown stays
-  NULL instead of `[]` (no fabrication).
-* `sql/migrations/020_job_feature_columns.sql`: idempotent nullable
-  `ADD COLUMN IF NOT EXISTS` for the same 7 columns (no backfill — NULL
-  means "source did not provide"); also satisfies the pre-existing
-  repository filters on `employment_type/experience_level/salary_max`.
-* **Not yet applied to live Supabase** — apply 020 to production before
-  relying on the new columns there.
-
-### 18.4 Phase 3 — Candidate ceiling (reuse chunked fetch, no magic bump)
-
-* `get_relevant_jobs()`: when the first 1000-row page reports
-  `db_total > len(rows)`, it refetches with `page_size=db_total`, which the
-  repository already serves via its chunked path. Match score,
-  India-first, target-role, freshness, source bonus, deterministic order,
-  and paginate-after-ranking all preserved.
-
-### 18.5 Validation (real service path, 785-job audit-like feed)
-
-Profile: India Data Analyst, no location preference (reproduces the audit
-symptom — pre-fix reconstruction puts ≥15 Stripe jobs in the top 20).
-Post-fix measured feed (`JobRelevanceService` + real
-`PersonalizedJobService` scoring + fake repo pages):
-
-| window | India | foreign | Stripe | companies | target | 1st non-Stripe |
-|---|---|---|---|---|---|---|
-| top 20 | 6 | 14 | 2 | 14 | 19 | 1 |
-| top 40 | 11 | 29 | 4 | 14 | 37 | 1 |
-| top 60 | 15 | 45 | 5 | 14 | 55 | 1 |
-| top 100 | 21 | 79 | 9 | 14 | 92 | 1 |
-
-India + foreign both discoverable; strong India target-role jobs (e.g.
-Razorpay Bengaluru) surface in the top 20; freshness within a company
-preserved; explicit sorts un-diversified; repeated requests byte-identical.
-Phase 3: 1500-job synthetic set → total 1500, 75 full pages, zero dupes,
-deterministic, India-first intact; pools ≤1000 still single-fetch.
-Phase 4 end-to-end: service→repo→score→diversify→paginate exercised;
-frontend (`_app.jobs.tsx:224`) renders `data?.jobs` in backend order with
-no client re-sort (verified by inspection); route envelope unchanged
-(`test_job_api.py` green).
-
-### 18.6 Tests & tradeoffs
-
-* New `tests/test_job_feed_fix.py` (12 tests: registry/worker wiring,
-  diversification + feed table, round-trip + NULL + scoring-on-persisted,
-  migration-column guard, >1000 pages + single-fetch guard).
-* Suites: new file 12/12; adjacent job suites 70/70; recommend/notify/ATS
-  137/137; full backend 1078 passed + 13 failed — 12 pre-existing on the
-  clean baseline (6 copilot-route, 6 studio golden screenshots) + 1
-  event-loop artifact in the new file, fixed (proper `async def` test).
-* Tradeoffs: diversification is company-round-robin, not relevance-capped
-  (a run of same-company jobs can still cluster if few companies match);
-  >1000 ranks the full eligible set in Python — O(n) cost, fine at board
-  scale, revisit only on profiling evidence.
