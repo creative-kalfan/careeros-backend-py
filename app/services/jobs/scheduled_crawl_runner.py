@@ -103,14 +103,38 @@ class ScheduledCrawlRunner:
             out.append((target.source, target.slug))
         return out
 
-    async def run_provider_pass(self, provider: str) -> dict[str, str]:
-        """Enqueue crawl jobs for one provider family (e.g. 'yc', 'firecrawl')."""
+    async def run_provider_pass(self, provider: str, max_targets_per_pass: Optional[int] = None) -> dict[str, str]:
+        """Enqueue crawl jobs for one provider family (e.g. 'yc', 'firecrawl').
+
+        Tiered budget safety:
+          - P0 targets: run on EVERY pass (high-impact India hiring).
+          - P1 / P2 targets: staggered by day-of-year rotation (batch of 15 per pass)
+            so 100+ targets never overwhelm Redis, ARQ, or upstream rate limits.
+        """
+        from datetime import datetime, timezone
+
         enabled = set(self._enabled_targets())
-        targets = [
-            (t.source, t.slug) for t in targets_for_provider(provider)
+        provider_targets = [
+            t for t in targets_for_provider(provider)
             if (t.source, t.slug) in enabled
         ]
-        logger.info("Scheduled crawl pass (%s): enqueueing %d targets", provider, len(targets))
+
+        # Partition by tier
+        p0 = [t for t in provider_targets if getattr(t, "tier", "P1") == "P0"]
+        others = [t for t in provider_targets if getattr(t, "tier", "P1") != "P0"]
+
+        selected = list(p0)
+        if others:
+            # Deterministic day-of-year slice
+            batch_limit = max_targets_per_pass or 15
+            yday = datetime.now(timezone.utc).timetuple().tm_yday
+            offset = (yday * batch_limit) % len(others)
+            for i in range(min(batch_limit, len(others))):
+                selected.append(others[(offset + i) % len(others)])
+
+        targets = [(t.source, t.slug) for t in selected]
+        logger.info("Scheduled crawl pass (%s): enqueueing %d targets (P0=%d, rotated=%d)",
+                    provider, len(targets), len(p0), len(targets) - len(p0))
         results: dict[str, str] = {}
         for source, slug in targets:
             key = f"{source}:{slug}"

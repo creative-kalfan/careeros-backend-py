@@ -306,3 +306,41 @@ class FirecrawlAdapter(BaseCrawler):
         )
         return jobs
 
+    async def enrich_job(self, apply_url: str) -> dict[str, Any]:
+        """Selectively enrich a thin job posting via single-page scrape.
+
+        Retrieves missing description, skills, workplace type, and posted date.
+        Returns extracted fields dict (or empty dict on failure/unconfigured).
+        One page scrape only — strict request-budget preservation.
+        """
+        settings = get_settings()
+        configured_key = getattr(self._client, "_api_key", "") if self._client else ""
+        if not settings.firecrawl_api_key and not configured_key:
+            return {}
+
+        fc = self._fc()
+        try:
+            page = await fc.scrape(apply_url, formats=["html", "markdown"])
+        except FirecrawlError as exc:
+            logger.warning("Firecrawl enrichment scrape failed for %s: %s", apply_url, exc)
+            return {}
+
+        data = page.get("data") or {}
+        html = data.get("html") or ""
+        markdown = data.get("markdown") or ""
+
+        parsed = self._parse_job_page(apply_url, html)
+        if not parsed:
+            # Fallback to markdown text if HTML selector didn't catch title
+            return {"description": markdown[:6000]} if markdown else {}
+
+        return {
+            "description": parsed.description or markdown[:6000],
+            "employment_type": parsed.employment_type,
+            "remote": parsed.remote,
+            "posted_date": parsed.posted_date,
+            "skills": parsed.skills,
+            "enriched_via": "firecrawl",
+            "enriched_at": datetime.now(timezone.utc).isoformat(),
+        }
+

@@ -100,7 +100,12 @@ class GreenhouseAdapter(BaseCrawler):
         owned = self._client is None
         try:
             try:
-                response = await client.get(url, headers={"Accept": "application/json"})
+                # Greenhouse supports ?content=true to return all jobs WITH full HTML description in one request
+                response = await client.get(
+                    url,
+                    params={"content": "true"},
+                    headers={"Accept": "application/json"},
+                )
             except httpx.HTTPError:
                 return []
             if response.status_code == 404 or response.status_code != 200:
@@ -115,24 +120,36 @@ class GreenhouseAdapter(BaseCrawler):
             if not isinstance(jobs_raw, list):
                 return []
 
-            # Bounded-concurrency detail fetch (limit 5, matching the TS
-            # AshbyAdapter pattern — polite API consumer, not max speed).
-            semaphore = asyncio.Semaphore(5)
+            # If jobs already have content (via content=true), parse directly!
+            # Otherwise fall back to bounded detail fetch
+            has_embedded_content = any(isinstance(j, dict) and j.get("content") for j in jobs_raw[:5])
 
-            async def _fetch_one(raw: dict[str, Any]) -> CrawledJob:
-                job_id = raw.get("id")
-                detail = raw
-                if job_id is not None:
-                    async with semaphore:
-                        detail = await self._fetch_detail(client, str(job_id))
-                if not isinstance(detail, dict):
-                    detail = {}
-                merged = {**raw, **detail}
-                return self._parse_job(merged)
+            if has_embedded_content:
+                jobs = [
+                    self._parse_job(raw)
+                    for raw in jobs_raw
+                    if isinstance(raw, dict)
+                ]
+            else:
+                semaphore = asyncio.Semaphore(5)
 
-            jobs = await asyncio.gather(
-                *(_fetch_one(raw) for raw in jobs_raw if isinstance(raw, dict))
-            )
+                async def _fetch_one(raw: dict[str, Any]) -> CrawledJob:
+                    job_id = raw.get("id")
+                    detail = raw
+                    if job_id is not None:
+                        async with semaphore:
+                            detail = await self._fetch_detail(client, str(job_id))
+                    if not isinstance(detail, dict):
+                        detail = {}
+                    merged = {**raw, **detail}
+                    return self._parse_job(merged)
+
+                jobs = list(
+                    await asyncio.gather(
+                        *(_fetch_one(raw) for raw in jobs_raw if isinstance(raw, dict))
+                    )
+                )
+
             if self.india_only:
                 # Deterministic pre-ingestion geographic filter: keep only
                 # postings whose location explicitly includes India. Never

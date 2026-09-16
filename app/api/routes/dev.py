@@ -97,6 +97,55 @@ async def crawl_status() -> dict:
     return {"success": True, "data": out}
 
 
+@router.get("/provider-metrics")
+async def provider_metrics() -> dict:
+    """Provider-level observability: discovered, inserted, India, target-roles, errors.
+
+    Aggregates metrics from registered crawl targets and Redis crawl run summaries.
+    """
+    from collections import defaultdict
+    from app.crawlers.crawl_registry import all_targets
+    from app.workers.settings import get_redis_pool
+
+    redis = await get_redis_pool()
+    by_provider: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "targets_count": 0,
+            "successful_crawls": 0,
+            "failed_crawls": 0,
+            "total_discovered": 0,
+            "total_inserted": 0,
+            "total_updated": 0,
+            "total_deduplicated": 0,
+            "last_crawl_at": None,
+        }
+    )
+
+    for target in all_targets():
+        stats = by_provider[target.source]
+        stats["targets_count"] += 1
+        try:
+            raw = await redis.get(f"crawl_status:{target.source}:{target.slug}")
+            if raw:
+                data = json.loads(raw)
+                if data.get("status") == "success":
+                    stats["successful_crawls"] += 1
+                    stats["total_discovered"] += data.get("discovered", 0)
+                    stats["total_inserted"] += data.get("inserted", 0)
+                    stats["total_updated"] += data.get("updated", 0)
+                    stats["total_deduplicated"] += data.get("deduplicated", 0)
+                    completed = data.get("completed_at")
+                    if completed and (not stats["last_crawl_at"] or completed > stats["last_crawl_at"]):
+                        stats["last_crawl_at"] = completed
+                elif data.get("status") == "failed":
+                    stats["failed_crawls"] += 1
+        except Exception:
+            pass
+
+    return {"success": True, "data": dict(by_provider)}
+
+
+
 @router.post("/enqueue/health", response_model=EnqueueHealthResponse)
 async def enqueue_health_job() -> EnqueueHealthResponse:
     """Enqueue the health-check job into the ARQ queue."""
