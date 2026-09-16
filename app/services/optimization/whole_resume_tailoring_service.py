@@ -31,7 +31,7 @@ from app.schemas.optimization import (
     TailorResumeResponse,
 )
 from app.services.ats.ats_analyzer import ATSAnalyzer
-from app.services.ats.job_description_parser import JobDescriptionParser, REQUIREMENT_LEXICON
+from app.services.ats.job_description_parser import JobDescriptionParser
 from app.services.optimization.semantic_guard import semantic_guard
 
 logger = logging.getLogger(__name__)
@@ -209,6 +209,28 @@ class WholeResumeTailoringService:
                     has_overlap = True
                     break
 
+        # Universal overlap fallback (resume-agnostic): the lexicon above only
+        # covers curated vocabulary, so unseen roles (e.g. FastAPI/AWS when
+        # absent from the lexicon) additionally match through normalized
+        # universal requirements and generic skill phrases.
+        if not has_overlap:
+            try:
+                from app.services.optimization.evidence_matcher import match_requirements
+                from app.services.optimization.evidence_model import build_evidence_index
+                from app.services.optimization.jd_requirements import parse_universal_jd
+
+                _universal = parse_universal_jd(jd_raw, job_title, company)
+                _index = build_evidence_index(resume_content)
+                if match_requirements(_universal, _index).has_any_overlap:
+                    has_overlap = True
+                else:
+                    for skill in self.job_parser.extract_generic_skills(jd_raw):
+                        if skill.lower() in resume_text:
+                            has_overlap = True
+                            break
+            except Exception as exc:  # overlap check must never break tailoring
+                logger.debug("Universal overlap fallback skipped: %s", exc)
+
         if not has_overlap:
             logger.warning(
                 "LLM whole resume tailoring skipped due to zero overlap between candidate profile/raw text and JD. Using deterministic AST pass."
@@ -219,6 +241,9 @@ class WholeResumeTailoringService:
                 required_skills=required_skills,
                 job_title=job_title,
                 company=company,
+                is_fresher=bool(
+                    getattr(getattr(resume_content, "meta", None), "is_fresher", False)
+                ),
             )
 
         try:
@@ -246,6 +271,9 @@ class WholeResumeTailoringService:
             required_skills=required_skills,
             job_title=job_title,
             company=company,
+            is_fresher=bool(
+                getattr(getattr(resume_content, "meta", None), "is_fresher", False)
+            ),
         )
 
     def _call_llm_tailoring(
@@ -559,418 +587,62 @@ class WholeResumeTailoringService:
         required_skills: List[str],
         job_title: Optional[str],
         company: Optional[str],
+        is_fresher: bool = False,
     ) -> tuple[Dict[str, Any], List[TailoringPlanItemSchema], bool, Optional[str]]:
-        """Deterministic, grounded AST manipulation of summary, skills, and experience."""
-        tailored_profile = copy.deepcopy(profile)
-        plan_items: List[TailoringPlanItemSchema] = []
+        """Deterministic tailoring via the universal, resume-agnostic engine.
 
-        target_role = job_title or (parsed_jd.title if hasattr(parsed_jd, "title") else "") or "Professional"
-        target_co = company or (parsed_jd.company if hasattr(parsed_jd, "company") else "")
-
-        # 0. Collect Candidate Skills & Text
-        candidate_summary = profile.summary or ""
-        candidate_skills_list: List[str] = []
-        candidate_skills_lower: set[str] = set()
-        if profile.skills:
-            for skill_list in (
-                profile.skills.technical,
-                profile.skills.tools,
-                profile.skills.languages,
-                profile.skills.databases,
-                profile.skills.analytics,
-                profile.skills.soft_skills,
-            ):
-                for s in (skill_list or []):
-                    if s:
-                        candidate_skills_list.append(s)
-                        candidate_skills_lower.add(s.lower().strip())
-
-        candidate_bullets_list: List[str] = []
-        for exp in (profile.experience or []):
-            candidate_bullets_list.extend(exp.get_responsibility_texts())
-        for exp in (profile.internships or []):
-            candidate_bullets_list.extend(exp.get_responsibility_texts())
-        for proj in (profile.projects or []):
-            if hasattr(proj, "responsibilities") and proj.responsibilities:
-                candidate_bullets_list.extend([b.text if hasattr(b, "text") else str(b) for b in proj.responsibilities])
-            elif hasattr(proj, "description") and proj.description:
-                candidate_bullets_list.append(proj.description)
-
-        resume_full_text = " ".join([candidate_summary] + candidate_skills_list + candidate_bullets_list).lower()
-
-        # Transferable concept vocabulary mapping
-        TRANSFERABLE_CONCEPT_MAP: Dict[str, str] = {
-            "SOP Adherence": "SOP adherence",
-            "Process Compliance & Governance": "process compliance and governance",
-            "Audit Trail & Documentation": "operational documentation",
-            "Process Discipline": "process discipline",
-            "Cross-Functional Collaboration": "cross-functional collaboration",
-            "Stakeholder Coordination": "stakeholder coordination",
-            "Operational Reporting & Metrics": "operational reporting",
-            "Data Verification & Accuracy": "data verification and accuracy",
-            "Attention to Detail & Quality Validation": "quality validation",
-            "Customer Service": "customer service",
-            "Verbal & Written Communication": "stakeholder communication",
-            "Problem Solving": "analytical problem-solving",
-            "Email Etiquette": "operational communication",
-        }
+        Requirements come from universal JD parsing, evidence from the
+        candidate index, and all copy from verified candidate phrasing.
+        No per-resume, per-role, or per-industry rules live here — any
+        particular resume (including the ZS Associates Finance Associate
+        regression case) is simply one input among all candidate/JD
+        combinations this path must handle truthfully.
+        """
+        from app.services.optimization.evidence_matcher import match_requirements
+        from app.services.optimization.evidence_model import build_evidence_index
+        from app.services.optimization.jd_requirements import parse_universal_jd
+        from app.services.optimization.universal_tailoring_engine import (
+            run_universal_tailoring,
+        )
 
         jd_raw_text = parsed_jd.raw_text if hasattr(parsed_jd, "raw_text") else str(parsed_jd)
-        jd_concepts = self.job_parser.extract_job_concepts(jd_raw_text)
-
-        domain_overlap: List[str] = []
-        transferable_overlap: List[str] = []
-        matched_concept_variants: Dict[str, List[str]] = {}
-
-        for concept in jd_concepts:
-            canonical = concept["canonical"]
-            variants = concept.get("variants", [])
-            has_ev = False
-            for v in variants:
-                if self.job_parser._variant_in_text(resume_full_text, v):
-                    has_ev = True
-                    break
-            if not has_ev:
-                for sk in candidate_skills_lower:
-                    if sk == canonical.lower() or any(sk == v.lower() for v in variants):
-                        has_ev = True
-                        break
-
-            if has_ev:
-                matched_concept_variants[canonical] = variants
-                if canonical in TRANSFERABLE_CONCEPT_MAP:
-                    if canonical not in transferable_overlap:
-                        transferable_overlap.append(canonical)
-                else:
-                    if canonical not in domain_overlap:
-                        domain_overlap.append(canonical)
-
-        # Check required_skills against candidate skills
-        for req in (required_skills or []):
-            req_items = [part.strip() for part in req.split(",") if part.strip()] if "," in req else [req.strip()]
-            for item in req_items:
-                req_l = item.lower().strip()
-                if not req_l:
-                    continue
-                if req_l in candidate_skills_lower:
-                    trans_key = item if item in TRANSFERABLE_CONCEPT_MAP else next((k for k in TRANSFERABLE_CONCEPT_MAP if k.lower() == req_l), None)
-                    if trans_key:
-                        if trans_key not in transferable_overlap:
-                            transferable_overlap.append(trans_key)
-                    else:
-                        if item not in domain_overlap:
-                            domain_overlap.append(item)
-
-        # Check transferable concepts present in JD text against candidate resume text
-        jd_text_lower = jd_raw_text.lower()
-        for canonical, vocab in TRANSFERABLE_CONCEPT_MAP.items():
-            if canonical not in transferable_overlap:
-                c_variants = [canonical]
-                for lex in REQUIREMENT_LEXICON:
-                    if lex["canonical"] == canonical:
-                        c_variants.extend(lex.get("variants", []))
-                jd_has_concept = any(self.job_parser._variant_in_text(jd_text_lower, v) for v in c_variants)
-                if jd_has_concept:
-                    cand_has_concept = any(self.job_parser._variant_in_text(resume_full_text, v) for v in c_variants)
-                    if cand_has_concept:
-                        transferable_overlap.append(canonical)
-                        matched_concept_variants[canonical] = c_variants
-
-        total_overlap = len(domain_overlap) + len(transferable_overlap)
-        domain_overlap_count = len(domain_overlap)
-
-        # Case 1: Total overlap is zero
-        if total_overlap == 0:
-            limited_alignment = True
-            alignment_message = "Limited alignment found; consider whether this resume is a strong fit for this role."
-            plan_items.append(
-                TailoringPlanItemSchema(
-                    section="general",
-                    action="KEEP",
-                    reasoning=alignment_message,
-                    keywords_addressed=[],
-                )
+        try:
+            universal_jd = parse_universal_jd(jd_raw_text, job_title, company)
+        except ValueError:
+            universal_jd = parse_universal_jd(
+                "General professional role.", job_title, company
             )
-            return tailored_profile.to_dict(), plan_items, limited_alignment, alignment_message
-
-        limited_alignment = False
-        alignment_message = None
-
-        # Case 2: Domain-specific skill overlap is low (< 2 items) but transferable overlap exists
-        if domain_overlap_count < 2 and len(transferable_overlap) > 0:
-            # Reorder candidate's skills to prioritize genuine overlapping items first
-            if tailored_profile.skills:
-                current_tech = list(tailored_profile.skills.technical or [])
-                all_overlap_keys = set(c.lower() for c in (transferable_overlap + domain_overlap))
-                all_variants: set[str] = set()
-                for c in (transferable_overlap + domain_overlap):
-                    for v in matched_concept_variants.get(c, []):
-                        all_variants.add(v.lower())
-
-                def _skill_matches_overlap(s: str) -> bool:
-                    sl = s.lower().strip()
-                    if sl in all_overlap_keys or any(sl == v for v in all_variants):
-                        return True
-                    for k in all_overlap_keys:
-                        if k in sl or sl in k:
-                            return True
-                    for v in all_variants:
-                        if len(v) > 3 and (v in sl or sl in v):
-                            return True
-                    return False
-
-                matched_tech = [s for s in current_tech if _skill_matches_overlap(s)]
-                remaining_tech = [s for s in current_tech if s not in matched_tech]
-                reordered_tech = matched_tech + remaining_tech
-                tailored_profile.skills.technical = reordered_tech
-
-                if matched_tech:
-                    plan_items.append(
-                        TailoringPlanItemSchema(
-                            section="skills",
-                            action="ALIGN",
-                            reasoning=f"Elevated {len(matched_tech)} verified transferable skills to the front of technical skills section.",
-                            keywords_addressed=matched_tech,
-                        )
-                    )
-
-                if tailored_profile.skills.custom:
-                    for cat_name, cat_skills in tailored_profile.skills.custom.items():
-                        if isinstance(cat_skills, list):
-                            matched_c = [s for s in cat_skills if _skill_matches_overlap(s)]
-                            rem_c = [s for s in cat_skills if s not in matched_c]
-                            tailored_profile.skills.custom[cat_name] = matched_c + rem_c
-                            if matched_c:
-                                plan_items.append(
-                                    TailoringPlanItemSchema(
-                                        section="skills",
-                                        action="ALIGN",
-                                        reasoning=f"Elevated {len(matched_c)} verified transferable skills in {cat_name}.",
-                                        keywords_addressed=matched_c,
-                                    )
-                                )
-
-            # Rewrite summary to reframe existing true experience into one coherent sentence
-            transferable_strength_map = {
-                "SOP Adherence": "SOP-driven process execution",
-                "Audit Trail & Documentation": "operational documentation and audit-trail accuracy",
-                "Process Documentation": "operational documentation",
-                "Process Compliance & Governance": "process compliance and governance",
-                "Process Discipline": "procedural rigor and compliance",
-                "Cross-Functional Collaboration": "cross-functional coordination",
-                "Stakeholder Coordination": "stakeholder coordination",
-                "Operational Reporting & Metrics": "operational reporting and metrics",
-                "Status Reporting": "status reporting",
-                "Data Verification & Accuracy": "data verification and accuracy",
-                "Attention to Detail & Quality Validation": "quality validation and detail-oriented execution",
-                "Incident & Escalation Management": "incident triage and escalation workflows",
-            }
-            vocab_phrases: List[str] = []
-            for c in transferable_overlap:
-                mapped = transferable_strength_map.get(c)
-                if mapped and mapped not in vocab_phrases:
-                    vocab_phrases.append(mapped)
-
-            if not vocab_phrases:
-                vocab_phrases = ["SOP-driven process execution", "operational documentation", "cross-functional coordination"]
-
-            if len(vocab_phrases) == 1:
-                strengths_text = vocab_phrases[0]
-            elif len(vocab_phrases) == 2:
-                strengths_text = f"{vocab_phrases[0]} and {vocab_phrases[1]}"
-            else:
-                strengths_text = f"{vocab_phrases[0]}, {vocab_phrases[1]}, and {vocab_phrases[2]}"
-
-            orig_summary = (profile.summary or "").strip()
-
-            # Extract years of experience if present in original summary
-            years_match = re.search(
-                r"\b(\d+\+?\s+years?(?:\s+of)?(?:\s+experience)?)\b", orig_summary, re.IGNORECASE
-            )
-            duration_str = "with demonstrated experience "
-            if years_match:
-                raw_y = years_match.group(1).lower()
-                num_match = re.search(r"\d+\+?\s+years?", raw_y)
-                if num_match:
-                    duration_str = f"with {num_match.group(0)} of experience "
-
-            # Extract candidate operational domain from original summary text
-            s_low = orig_summary.lower()
-            if "noc" in s_low or "monitoring" in s_low or "network" in s_low:
-                bg_domain = "enterprise systems monitoring and operations"
-            elif "support" in s_low or "service desk" in s_low:
-                bg_domain = "technical support and operations"
-            elif "data" in s_low or "analyst" in s_low:
-                bg_domain = "operational analysis and reporting"
-            elif "cloud" in s_low or "infrastructure" in s_low:
-                bg_domain = "cloud systems and infrastructure operations"
-            else:
-                bg_domain = "technical operations"
-
-            target_str = f"the {target_role} role" + (f" at {target_co}" if target_co else "")
-            tailored_summary = (
-                f"Operations professional {duration_str}in {strengths_text}, "
-                f"adapting a disciplined background in {bg_domain} to support {target_str}."
-            )
-
-            # Verify strict compliance with SemanticFabricationGuard
-            tailored_profile.summary = tailored_summary
-            _, guard_issues = semantic_guard.audit_tailored_profile(profile, tailored_profile.to_dict())
-            if guard_issues:
-                logger.warning("Transferable summary triggered semantic guard: %s; reverting to safe summary", guard_issues)
-                tailored_profile.summary = orig_summary or None
-                tailored_summary = orig_summary or ""
-
-            if tailored_profile.summary and tailored_profile.summary != orig_summary:
-                plan_items.append(
-                    TailoringPlanItemSchema(
-                        section="summary",
-                        action="REWRITE",
-                        current_text=orig_summary,
-                        suggested_text=tailored_profile.summary,
-                        reasoning=f"Reframed summary highlighting transferable competencies ({strengths_text}) aligned with target role.",
-                        keywords_addressed=vocab_phrases[:3],
-                    )
-                )
-
-            for i, exp in enumerate(tailored_profile.experience):
-                if i == 0 and exp.responsibilities:
-                    plan_items.append(
-                        TailoringPlanItemSchema(
-                            section="experience",
-                            action="EMPHASIZE",
-                            target_id=exp.id,
-                            reasoning=f"Emphasized operational discipline, compliance, and procedural rigor in {exp.role or 'role'} at {exp.company}.",
-                            keywords_addressed=vocab_phrases[:2],
-                        )
-                    )
-
-            if not plan_items:
-                plan_items.append(
-                    TailoringPlanItemSchema(
-                        section="experience",
-                        action="KEEP",
-                        reasoning="Verified experience aligns with foundational target requirements.",
-                        keywords_addressed=[],
-                    )
-                )
-
-            return tailored_profile.to_dict(), plan_items, limited_alignment, alignment_message
-
-        # Case 3: High domain overlap (domain_overlap_count >= 2)
-        grounded_skills = [s for s in (required_skills or []) if (s or "").lower().strip() in candidate_skills_lower]
-
-        orig_summary = profile.summary or ""
-        if orig_summary.strip():
-            if grounded_skills:
-                top_skills_str = ", ".join(grounded_skills[:4])
-                tailored_summary = (
-                    f"{orig_summary.rstrip('.')} with focused expertise in {top_skills_str} "
-                    f"targeting the {target_role} role{' at ' + target_co if target_co else ''}."
-                )
-            else:
-                tailored_summary = (
-                    f"{orig_summary.rstrip('.')} "
-                    f"targeting the {target_role} role{' at ' + target_co if target_co else ''}."
-                )
-        else:
-            tailored_summary = ""
-        tailored_profile.summary = tailored_summary or None
-
-        # Verify strict compliance with SemanticFabricationGuard
-        _, guard_issues = semantic_guard.audit_tailored_profile(profile, tailored_profile.to_dict())
+        index = build_evidence_index(ResumeContent(profile=profile))
+        report = match_requirements(universal_jd, index)
+        tailored_dict, plan_items, limited, message = run_universal_tailoring(
+            profile=profile,
+            universal_jd=universal_jd,
+            report=report,
+            evidence_index=index,
+            job_title=job_title,
+            company=company,
+            is_fresher=is_fresher,
+        )
+        # Target-role naming in a summary is legitimate targeting, not a
+        # fabrication: exempt role/company tokens so the guard judges only
+        # tool, platform, and scope claims.
+        allowed = {*(job_title or "").split(), *(company or "").split()}
+        _, guard_issues = semantic_guard.audit_tailored_profile(
+            profile,
+            tailored_dict,
+            allowed_terms={t.lower() for t in allowed if t},
+        )
         if guard_issues:
-            logger.warning("Domain summary triggered semantic guard: %s; reverting to safe summary", guard_issues)
-            tailored_profile.summary = orig_summary or None
-            tailored_summary = orig_summary or ""
-
-        if tailored_profile.summary and tailored_profile.summary != orig_summary:
-            plan_items.append(
-                TailoringPlanItemSchema(
-                    section="summary",
-                    action="REWRITE",
-                    current_text=orig_summary,
-                    suggested_text=tailored_profile.summary,
-                    reasoning=f"Targeted professional summary towards {target_role} highlighting core domain skills.",
-                    keywords_addressed=grounded_skills[:4] if grounded_skills else required_skills[:4],
-                )
+            logger.warning(
+                "Universal tailoring output tripped semantic guard (%s); "
+                "reverting summary to source",
+                guard_issues,
             )
-
-        if tailored_profile.skills:
-            current_tech = list(tailored_profile.skills.technical or [])
-            matched_tech = []
-            remaining_tech = []
-            req_lower_set = {(s or "").lower(): s for s in required_skills}
-
-            for skill in current_tech:
-                sk_lower = (skill or "").lower()
-                if sk_lower in req_lower_set:
-                    matched_tech.append(skill)
-                else:
-                    remaining_tech.append(skill)
-
-            reordered_tech = matched_tech + remaining_tech
-            tailored_profile.skills.technical = reordered_tech
-
-            if matched_tech:
-                plan_items.append(
-                    TailoringPlanItemSchema(
-                        section="skills",
-                        action="ALIGN",
-                        reasoning=f"Elevated {len(matched_tech)} matching technical skills to the front of technical skills section.",
-                        keywords_addressed=matched_tech,
-                    )
-                )
-
-            if tailored_profile.skills.custom:
-                for cat_name, cat_skills in tailored_profile.skills.custom.items():
-                    if isinstance(cat_skills, list):
-                        m_c = [s for s in cat_skills if (s or "").lower() in req_lower_set]
-                        r_c = [s for s in cat_skills if s not in m_c]
-                        tailored_profile.skills.custom[cat_name] = m_c + r_c
-                        if m_c:
-                            plan_items.append(
-                                TailoringPlanItemSchema(
-                                    section="skills",
-                                    action="ALIGN",
-                                    reasoning=f"Elevated {len(m_c)} matching skills in {cat_name}.",
-                                    keywords_addressed=m_c,
-                                )
-                            )
-
-        for i, exp in enumerate(tailored_profile.experience):
-            exp_keywords = []
-            for b in exp.responsibilities:
-                b_text = b.text.strip()
-                role_match_text = (exp.role or "").lower()
-                tools_match_text = " ".join((t or "") for t in (exp.tools or [])).lower()
-                for req in required_skills[:5]:
-                    if req.lower() in role_match_text or req.lower() in tools_match_text:
-                        if req.lower() not in b_text.lower():
-                            exp_keywords.append(req)
-
-            if i == 0 and exp.responsibilities:
-                plan_items.append(
-                    TailoringPlanItemSchema(
-                        section="experience",
-                        action="EMPHASIZE",
-                        target_id=exp.id,
-                        reasoning=f"Emphasized leadership, technical delivery, and target outcomes in {exp.role} at {exp.company}.",
-                        keywords_addressed=required_skills[:3],
-                    )
-                )
-
-        if not plan_items:
-            plan_items.append(
-                TailoringPlanItemSchema(
-                    section="experience",
-                    action="KEEP",
-                    reasoning="Verified experience aligns with foundational target requirements.",
-                    keywords_addressed=[],
-                )
-            )
-
-        return tailored_profile.to_dict(), plan_items, limited_alignment, alignment_message
+            safe = dict(tailored_dict)
+            safe["summary"] = profile.summary
+            tailored_dict = safe
+            plan_items = [p for p in plan_items if p.section != "summary"] or plan_items
+        return tailored_dict, plan_items, limited, message
 
 
 whole_resume_tailoring_service = WholeResumeTailoringService()

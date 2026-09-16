@@ -81,8 +81,18 @@ class ResumeCompilerService:
         prefer_direct_mutation: bool = False,
         mutation_source_path: Optional[str] = None,
         mutation_params: Optional[dict[str, Any]] = None,
+        max_pages: int = 1,
+        value_scores: Optional[dict[str, float]] = None,
     ) -> dict[str, Any]:
-        """Compile and persist real versioned DOCX and PDF artifacts to storage."""
+        """Compile and persist real versioned DOCX and PDF artifacts to storage.
+
+        `max_pages` is the selected page constraint (default 1). `value_scores`
+        optionally maps bullet/element IDs to universal content-value scores so
+        page-constrained trimming removes the lowest-value content first;
+        without scores the fitter falls back to intrinsic specificity ranking.
+        Content decisions (scores) and presentation decisions (layout
+        optimization) stay in separate stages inside the fit loop.
+        """
         # 1. Direct PDF Mutation Strategy (Pipeline A) for small inline edits
         if prefer_direct_mutation and mutation_source_path and mutation_params:
             try:
@@ -132,6 +142,8 @@ class ResumeCompilerService:
         fit_result = fit_verifier.fit(
             doc_model,
             lambda model: pdf_compiler.compile(model)[0],
+            max_pages=max_pages,
+            value_scores=value_scores,
         )
         doc_model = fit_result.document
         docx_bytes = docx_compiler.compile(doc_model)

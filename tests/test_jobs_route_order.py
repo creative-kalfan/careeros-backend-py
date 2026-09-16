@@ -9,10 +9,20 @@ from app.auth.service import AuthContext, AuthUser
 from app.dependencies import get_current_user
 
 
+def _get_all_routes(application):
+    routes = []
+    for route in application.routes:
+        if hasattr(route, "path") and route.path is not None:
+            routes.append(route)
+        elif hasattr(route, "original_router"):
+            routes.extend(route.original_router.routes)
+    return routes
+
+
 def test_jobs_route_ordering_saved_before_id():
     """Verify GET /jobs/saved route is declared before GET /jobs/{job_id}."""
-    routes = [route for route in app.routes if hasattr(route, "path")]
-    jobs_routes = [r for r in routes if r.path.startswith("/jobs")]
+    routes = _get_all_routes(app)
+    jobs_routes = [r for r in routes if hasattr(r, "path") and r.path.startswith("/jobs")]
 
     saved_index = next((i for i, r in enumerate(jobs_routes) if r.path == "/jobs/saved"), -1)
     job_id_index = next((i for i, r in enumerate(jobs_routes) if r.path == "/jobs/{job_id}"), -1)
@@ -27,8 +37,8 @@ def test_jobs_route_ordering_saved_before_id():
 
 def test_jobs_route_ordering_personalized_before_id():
     """Verify GET /jobs/personalized is declared before GET /jobs/{job_id}."""
-    routes = [route for route in app.routes if hasattr(route, "path")]
-    jobs_routes = [r for r in routes if r.path.startswith("/jobs")]
+    routes = _get_all_routes(app)
+    jobs_routes = [r for r in routes if hasattr(r, "path") and r.path.startswith("/jobs")]
 
     pers_index = next((i for i, r in enumerate(jobs_routes) if r.path == "/jobs/personalized"), -1)
     job_id_index = next((i for i, r in enumerate(jobs_routes) if r.path == "/jobs/{job_id}"), -1)
@@ -53,7 +63,7 @@ def test_get_saved_jobs_endpoint():
 
     app.dependency_overrides[get_current_user] = lambda: mock_auth
     try:
-        response = client.get("/jobs/saved")
+        response = client.get("/jobs/saved?includeAts=true")
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
@@ -62,3 +72,35 @@ def test_get_saved_jobs_endpoint():
         assert data["data"][0]["job_id"] == "job-123"
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_save_and_unsave_job_endpoint():
+    """Verify /jobs/save and /jobs/{id}/unsave work without errors."""
+    client = TestClient(app)
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.upsert.return_value.select.return_value.execute.return_value.data = [
+        {
+            "user_id": "u-1",
+            "job_id": "job-123",
+        }
+    ]
+    mock_supabase.table.return_value.delete.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+
+    mock_auth = AuthContext(
+        user=AuthUser(id="u-1", email="test@example.com"),
+        supabase=mock_supabase,
+        jwt="dummy-jwt",
+    )
+
+    app.dependency_overrides[get_current_user] = lambda: mock_auth
+    try:
+        save_resp = client.post("/jobs/save", json={"jobId": "job-123"})
+        assert save_resp.status_code == 200
+        assert save_resp.json()["data"]["job_id"] == "job-123"
+
+        unsave_resp = client.delete("/jobs/job-123/unsave")
+        assert unsave_resp.status_code == 200
+        assert unsave_resp.json()["data"]["unsaved"] is True
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+

@@ -54,6 +54,45 @@ INDIAN_CITY_TOKENS = (
     "ajmer",
     "udaipur",
     "indore",
+    "nagpur",
+    "bhopal",
+    "visakhapatnam",
+    "vizag",
+    "thiruvananthapuram",
+    "trivandrum",
+    "mysore",
+    "mysuru",
+    "surat",
+    "vadodara",
+    "baroda",
+    "patna",
+    "bhubaneswar",
+    "lucknow",
+    "kanpur",
+    "mangalore",
+    "mangaluru",
+    "nashik",
+    "aurangabad",
+    "raipur",
+    "ranchi",
+    "guwahati",
+    "goa",
+    "kolhapur",
+    "karnataka",
+    "telangana",
+    "maharashtra",
+    "tamil nadu",
+    "uttar pradesh",
+    "haryana",
+    "kerala",
+    "gujarat",
+    "west bengal",
+    "rajasthan",
+    "andhra pradesh",
+    "punjab",
+    "odisha",
+    "bihar",
+    "madhya pradesh",
 )
 
 # Exact strings (after strip/lower) that are ambiguous, never Indian.
@@ -102,11 +141,16 @@ FOREIGN_MARKERS = (
     "los angeles",
     "austin",
     "toronto",
+    "vancouver",
+    "montreal",
     "canada",
     "singapore",
     "berlin",
+    "munich",
+    "frankfurt",
     "germany",
     "sydney",
+    "melbourne",
     "australia",
     "paris",
     "france",
@@ -122,6 +166,68 @@ FOREIGN_MARKERS = (
     "united arab emirates",
     "uae",
     "dubai",
+    "abu dhabi",
+    "zurich",
+    "geneva",
+    "switzerland",
+    "warsaw",
+    "krakow",
+    "poland",
+    "stockholm",
+    "sweden",
+    "tel aviv",
+    "israel",
+    "sao paulo",
+    "brazil",
+    "madrid",
+    "barcelona",
+    "spain",
+    "milan",
+    "rome",
+    "italy",
+    "vienna",
+    "austria",
+    "seoul",
+    "south korea",
+    "taipei",
+    "taiwan",
+    "hong kong",
+    "north america",
+    "europe",
+    "buckinghamshire",
+    "dorset",
+    "wiltshire",
+    "hampshire",
+    "leicester",
+    "sussex",
+    "somerset",
+    "middlesex",
+    "essex",
+    "suffolk",
+    "norfolk",
+    "yorkshire",
+    "surrey",
+    "kent",
+    "berkshire",
+    "oxfordshire",
+    "california",
+    "texas",
+    "washington",
+    "massachusetts",
+    "virginia",
+    "maryland",
+    "illinois",
+    "colorado",
+    "florida",
+    "ohio",
+    "north carolina",
+    "georgia",
+    "pennsylvania",
+    "new jersey",
+    "utah",
+    "oregon",
+    "michigan",
+    "arizona",
 )
 
 # Deterministic US-only marker (word-boundary "us"/"usa"/"u.s.a"). Checked
@@ -131,6 +237,12 @@ FOREIGN_MARKERS = (
 # US-only location strings ("US", "US-Remote", "US-SF...") from UNKNOWN to
 # FOREIGN with high confidence.
 _US_FOREIGN = re.compile(r"\bus\b|\busa\b|\bu\.?s\.?a\b", re.IGNORECASE)
+
+# Deterministic US county or state code (e.g. "Meade County", ", CA", ", NY", ", TX")
+_US_STATE_OR_COUNTY = re.compile(
+    r"\bcounty\b|,\s*(?:al|ak|az|ar|ca|co|ct|de|fl|ga|hi|id|il|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)\b",
+    re.IGNORECASE,
+)
 
 _INDIA_WORD = re.compile(r"\bindia\b", re.IGNORECASE)
 
@@ -196,9 +308,9 @@ def classify_india_relevance(
     # 3. Explicit foreign geography.
     if any(marker in lowered for marker in FOREIGN_MARKERS):
         return FOREIGN
-    # Deterministic US-only strings ("US", "US-Remote", "US-SF..."). The
-    # bare-remote guard keeps "Remote in the US" AMBIGUOUS per policy.
-    if not lowered.startswith("remote") and _US_FOREIGN.search(lowered):
+    # Deterministic US-only strings ("US", "US-Remote", "US-SF...") and county/state codes.
+    # The bare-remote guard keeps "Remote in the US" AMBIGUOUS per policy.
+    if not lowered.startswith("remote") and (_US_FOREIGN.search(lowered) or _US_STATE_OR_COUNTY.search(lowered)):
         return FOREIGN
     # Lone "remote ..." with a foreign qualifier handled above; a location
     # that names a foreign marker anywhere is foreign.

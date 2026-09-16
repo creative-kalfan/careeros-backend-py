@@ -120,17 +120,20 @@ async def list_personalized_jobs(
     responses={401: {"model": ErrorResponse}},
 )
 async def list_saved_jobs(
+    include_ats: Optional[bool] = Query(None),
+    includeAts: Optional[bool] = Query(None),
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[list[dict]]:
     """List saved jobs for the authenticated user."""
-    result = (
+    res = (
         auth.supabase.table("saved_jobs")
         .select("*, jobs(*)")
         .eq("user_id", auth.user.id)
         .order("created_at", desc=True)
         .execute()
     )
-    return SuccessResponse(data=result.data or [])
+    result = await res if hasattr(res, "__await__") else res
+    return SuccessResponse(data=getattr(result, "data", None) or [])
 
 
 @router.post(
@@ -143,18 +146,21 @@ async def save_job(
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[dict]:
     """Save a job for the authenticated user."""
-    job_id = body.get("jobId")
+    job_id = body.get("jobId") or body.get("job_id")
     if not job_id:
         raise HTTPException(status_code=400, detail="jobId is required")
 
-    result = (
+    res = (
         auth.supabase.table("saved_jobs")
-        .upsert({"user_id": auth.user.id, "job_id": job_id}, onConflict="user_id,job_id")
+        .upsert({"user_id": auth.user.id, "job_id": job_id}, on_conflict="user_id,job_id")
         .select()
-        .single()
         .execute()
     )
-    return SuccessResponse(data=result.data or {})
+    result = await res if hasattr(res, "__await__") else res
+    data = getattr(result, "data", None)
+    if isinstance(data, list) and data:
+        data = data[0]
+    return SuccessResponse(data=data or {"user_id": auth.user.id, "job_id": job_id})
 
 
 @router.post(
@@ -294,7 +300,9 @@ async def unsave_job(
     auth: AuthContext = Depends(get_current_user),
 ) -> SuccessResponse[dict]:
     """Remove a saved job for the authenticated user."""
-    auth.supabase.table("saved_jobs").delete().eq("user_id", auth.user.id).eq("job_id", job_id).execute()
+    res = auth.supabase.table("saved_jobs").delete().eq("user_id", auth.user.id).eq("job_id", job_id).execute()
+    if hasattr(res, "__await__"):
+        await res
     return SuccessResponse(data={"unsaved": True})
 
 

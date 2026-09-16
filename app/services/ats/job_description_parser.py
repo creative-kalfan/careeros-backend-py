@@ -1,4 +1,14 @@
-"""Job Description Parser for CareerOS ATS Intelligence (Step 4)."""
+"""Job Description Parser for CareerOS ATS Intelligence (Step 4).
+
+Two complementary extraction paths:
+1. Lexicon concepts (``REQUIREMENT_LEXICON`` / ``extract_job_concepts``) —
+   curated, high-precision requirement vocabulary. Preserved for ATS scoring
+   backward compatibility.
+2. Universal requirements (``extract_universal_requirements``) — fully
+   resume-agnostic structural parsing in
+   ``app.services.optimization.jd_requirements``. Works for ANY role or
+   industry with no fixed vocabulary; used by the tailoring pipeline.
+"""
 
 from __future__ import annotations
 
@@ -359,6 +369,38 @@ class JobDescriptionParser:
                     "job_evidence": job_evidence,
                 })
         return concepts
+
+    def extract_generic_skills(self, job_description: str) -> List[str]:
+        """Extract concrete skill/tool phrases from ANY JD (no fixed vocabulary).
+
+        Combines explicit list introductions ("proficiency in X, Y") with
+        capitalized product/technology phrases ("SAP ERP", "FastAPI"). Used
+        to supplement lexicon concepts so unseen roles still tailor.
+        """
+        from app.services.optimization.jd_requirements import _extract_skill_phrases
+
+        seen: List[str] = []
+        for line in (job_description or "").splitlines():
+            for phrase in _extract_skill_phrases(line):
+                if phrase not in seen:
+                    seen.append(phrase)
+        return seen[:30]
+
+    def extract_universal_requirements(
+        self,
+        job_description: str,
+        job_title: Optional[str] = None,
+        company: Optional[str] = None,
+    ) -> Any:
+        """Parse ANY JD into normalized universal requirements (no lexicon).
+
+        Delegates to ``app.services.optimization.jd_requirements`` so the
+        tailoring pipeline stays resume-agnostic while ATS scoring keeps its
+        curated lexicon behavior.
+        """
+        from app.services.optimization.jd_requirements import parse_universal_jd
+
+        return parse_universal_jd(job_description, job_title, company)
 
     def _extract_section_content(self, text: str, section_headers: List[str]) -> Dict[str, str]:
         """Extract content from different sections of a job description."""
