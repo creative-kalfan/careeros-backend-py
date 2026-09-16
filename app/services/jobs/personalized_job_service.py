@@ -14,6 +14,15 @@ from app.parsing.role_taxonomy import (
     normalize_role,
 )
 
+_GENERIC_ROLE_WORDS = {
+    "engineer", "engineering", "developer", "development", "dev",
+    "analyst", "analytics", "specialist", "consultant", "associate",
+    "lead", "senior", "junior", "staff", "principal", "intern", "internship",
+    "trainee", "entry", "level", "manager", "management", "director",
+    "officer", "executive", "team", "head", "vp", "ii", "iii", "iv", "v",
+    "sr", "jr", "expert",
+}
+
 
 class PersonalizedJobService:
     """Filters jobs based on user profile preferences."""
@@ -87,7 +96,7 @@ class PersonalizedJobService:
             }
 
         role_match = self._score_role_match(job, profile)
-        skill_match = self._score_skill_match(job, profile)
+        raw_skill_match = self._score_skill_match(job, profile)
         resume_match = self._score_resume_match(job, profile)
         experience_match = self._score_experience_match(job, profile)
         location_match = self._score_location_match(job, profile)
@@ -95,20 +104,27 @@ class PersonalizedJobService:
         company_preference = self._score_company_preference(job, profile)
         freshness = self._score_freshness(job)
 
+        # Gate skill match contribution when role compatibility is poor.
+        # If role_match < 40.0, skill match cannot compensate for role mismatch.
+        if role_match < 40.0:
+            effective_skill_match = raw_skill_match * max(0.05, (role_match / 40.0) * 0.3)
+        else:
+            effective_skill_match = raw_skill_match
+
         weights = {
-            "role_match": 0.20,
+            "role_match": 0.30,
             "skill_match": 0.20,
-            "resume_match": 0.15,
-            "experience_match": 0.10,
-            "location_match": 0.15,
-            "salary_match": 0.10,
+            "resume_match": 0.10,
+            "experience_match": 0.15,
+            "location_match": 0.10,
+            "salary_match": 0.05,
             "company_preference": 0.05,
             "freshness": 0.05,
         }
 
         overall = (
             role_match * weights["role_match"]
-            + skill_match * weights["skill_match"]
+            + effective_skill_match * weights["skill_match"]
             + resume_match * weights["resume_match"]
             + experience_match * weights["experience_match"]
             + location_match * weights["location_match"]
@@ -120,7 +136,7 @@ class PersonalizedJobService:
         return {
             "overall": round(overall),
             "role_match": round(role_match),
-            "skill_match": round(skill_match),
+            "skill_match": round(effective_skill_match),
             "resume_match": round(resume_match),
             "experience_match": round(experience_match),
             "location_match": round(location_match),
@@ -130,49 +146,81 @@ class PersonalizedJobService:
         }
 
     def _score_role_match(self, job: NormalizedJob, profile: UserProfile) -> float:
-        title = (job.title or "").lower()
-        desired = (profile.desired_role or "").lower()
+        title = (job.title or "").lower().strip()
+        desired = (profile.desired_role or "").lower().strip()
         if not desired:
             return 50.0
 
-        # Normalize desired role.
+        # Exact substring match (e.g., "data analyst" in "senior data analyst")
+        if desired in title:
+            return 100.0
+
         desired_canonical = normalize_role(desired)
         job_canonical = normalize_role(title)
 
         if desired_canonical and job_canonical:
             if desired_canonical == job_canonical:
-                return 100.0
+                if desired in title or title in desired:
+                    return 100.0
+                return 85.0
 
-            if job_canonical in get_related_roles(desired_canonical):
-                return 80.0
+            # Direct taxonomy relationship check
+            desired_related = get_related_roles(desired_canonical)
+            job_related = get_related_roles(job_canonical)
 
-            if desired_canonical in get_related_roles(job_canonical):
+            if job_canonical in desired_related or desired_canonical in job_related:
+                desired_canon_lower = desired_canonical.lower()
+                job_canon_lower = job_canonical.lower()
+
+                # Shared role noun / anchor? (e.g. both are analyst, or both are developer)
+                shared_nouns = {"analyst", "developer", "engineer", "designer", "manager"}
+                both_share_noun = any(
+                    noun in desired_canon_lower and noun in job_canon_lower
+                    for noun in shared_nouns
+                )
+                if both_share_noun:
+                    return 85.0
                 return 70.0
 
-            # Same category via classifier.
-            desired_category = classify(desired)
-            job_category = classify(title)
-            if desired_category == job_category and desired_category != "Other":
+            # Same broad category via classifier or taxonomy lookup
+            desired_category = get_category_for_role(desired_canonical) or classify(desired)
+            job_category = get_category_for_role(job_canonical) or classify(title)
+            if desired_category and job_category and desired_category == job_category and desired_category != "Other":
+                # Only award 65 if there is semantic token overlap between the roles
+                # (e.g. "data" in Data Analyst vs Data Engineer).
+                # Distant sub-disciplines with 0 overlap (e.g. Frontend vs DevOps)
+                # within giant umbrella categories (like "Software Engineering") are distinct.
+                desired_tokens_cat = {w for w in re.findall(r"\w+", desired) if w not in _GENERIC_ROLE_WORDS and len(w) > 2}
+                title_tokens_cat = {w for w in re.findall(r"\w+", title) if w not in _GENERIC_ROLE_WORDS and len(w) > 2}
+                if desired_tokens_cat & title_tokens_cat:
+                    return 65.0
+                return 15.0
+
+        # Non-canonical / fallback matching
+        # Filter out generic role stop words so "Software Engineering Senior Analyst"
+        # doesn't match "Data Analyst" just because both have "analyst"
+        desired_tokens = {w for w in re.findall(r"\w+", desired) if w not in _GENERIC_ROLE_WORDS and len(w) > 2}
+        title_tokens = {w for w in re.findall(r"\w+", title) if w not in _GENERIC_ROLE_WORDS and len(w) > 2}
+
+        if desired_tokens and title_tokens:
+            overlap = desired_tokens & title_tokens
+            if len(overlap) >= 2:
                 return 75.0
-
-        # Fallback: word overlap.
-        desired_words = set(desired.split())
-        title_words = set(re.findall(r"\w+", title))
-
-        if desired in title:
-            return 100.0
-
-        overlap = len(desired_words & title_words)
-        if overlap >= 2:
-            return 80.0
-        if overlap == 1:
-            return 60.0
+            if len(overlap) == 1:
+                desired_cat = classify(desired)
+                job_cat = classify(title)
+                if desired_cat == job_cat and desired_cat != "Other":
+                    return 65.0
+                return 40.0
 
         category = (job.role_category or "").lower()
-        if desired in category or category in desired:
-            return 70.0
+        if category:
+            desired_cat = (classify(desired) or "").lower()
+            if desired in category or (desired_cat and desired_cat in category):
+                return 50.0
 
-        return 30.0
+        # Truly unrelated role family (e.g. Data Analyst vs Software Engineer)
+        return 5.0
 
     def _score_skill_match(self, job: NormalizedJob, profile: UserProfile) -> float:
         user_skills = [s.lower() for s in (profile.skills or []) if s]
@@ -213,34 +261,49 @@ class PersonalizedJobService:
 
     def _score_experience_match(self, job: NormalizedJob, profile: UserProfile) -> float:
         user_exp = (profile.experience or "").lower()
+        user_role = (profile.current_role or "").lower()
         job_level = (job.experience_level or "").lower()
         title = (job.title or "").lower()
 
-        if not user_exp and not job_level:
-            # Fallback: infer seniority from job title keywords so the score
-            # varies by job instead of collapsing to a single hardcoded default.
-            senior_keywords = ["senior", "staff", "lead", "principal", "architect", "director"]
-            junior_keywords = ["junior", "entry", "intern", "trainee", "graduate"]
-            if any(k in title for k in senior_keywords):
-                return 70.0
-            if any(k in title for k in junior_keywords):
-                return 40.0
-            return 50.0
+        experience_rank = {
+            "intern": 0, "internship": 0, "trainee": 0, "fresher": 0, "graduate": 0,
+            "junior": 1, "entry": 1, "entry-level": 1, "associate": 1,
+            "mid": 2, "mid-level": 2, "intermediate": 2,
+            "senior": 3, "sr": 3, "sr.": 3,
+            "staff": 4, "lead": 4, "team lead": 4,
+            "principal": 5, "director": 6, "head": 6, "vp": 7,
+        }
 
-        experience_rank = {"intern": 0, "junior": 1, "entry": 1, "mid": 2, "senior": 3, "lead": 4, "principal": 5, "director": 6}
-        job_rank = None
-        for keyword, rank in experience_rank.items():
-            if keyword in title or keyword in job_level:
-                job_rank = rank
-                break
+        def _extract_rank(text: str) -> Optional[int]:
+            if not text:
+                return None
+            for kw, r in experience_rank.items():
+                if re.search(rf"\b{re.escape(kw)}\b", text):
+                    return r
+            m = re.search(r"(\d+)\s*(?:\+|-\d+)?\s*(?:year|yr)", text)
+            if m:
+                years = int(m.group(1))
+                if years <= 1:
+                    return 1
+                elif years <= 4:
+                    return 2
+                elif years <= 7:
+                    return 3
+                elif years <= 10:
+                    return 4
+                else:
+                    return 5
+            return None
+
+        job_rank = _extract_rank(job_level)
+        if job_rank is None:
+            job_rank = _extract_rank(title)
         if job_rank is None:
             job_rank = 2
 
-        user_rank = None
-        for keyword, rank in experience_rank.items():
-            if keyword in user_exp:
-                user_rank = rank
-                break
+        user_rank = _extract_rank(user_exp)
+        if user_rank is None:
+            user_rank = _extract_rank(user_role)
         if user_rank is None:
             user_rank = 2
 
@@ -248,10 +311,10 @@ class PersonalizedJobService:
         if diff == 0:
             return 100.0
         if diff == 1:
-            return 70.0
+            return 75.0
         if diff == 2:
             return 40.0
-        return 20.0
+        return 15.0
 
     def _score_location_match(self, job: NormalizedJob, profile: UserProfile) -> float:
         user_location = (profile.location or "").lower().strip()

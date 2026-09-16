@@ -666,5 +666,49 @@ Evaluated with representative candidate profile (Data Analyst, Python/SQL/Excel/
 - **Frontend Build:** `npm run build` (Vite 8 + Nitro) passed in 1.00s with zero errors.
 - **Git Commits:**
   - `careeros-frontend`: `4c075cb` (enforce canonical production backend URL)
-  - `careeros-backend-py`: `64fccf8` (saved jobs async fix, geographic precision, regression tests)
+  - `careeros-backend-py`: `766f536` (saved jobs async fix, geographic precision, regression tests)
+
+---
+
+## 8. Job Intelligence Semantic Relevance Correction (Phase 7)
+
+### 8.1 Root Causes Identified
+1. **Generic Role Stopword Overlap in `_score_role_match`:**
+   - Word overlap was unweighted and included generic stop words (`{"engineer", "software", "analyst", "developer", "senior", "lead", ...}`). If `desired` ("Data Analyst") and `title` ("Software Engineering Senior Analyst") had 1 word overlap ("analyst"), it returned `60.0`.
+   - Truly unrelated role families had an inflated baseline floor (`return 30.0`).
+2. **Ungated Skill Match:**
+   - An unrelated Software Engineer requiring Python & SQL was awarded 50% skill match, which artificially elevated overall match score to 40-50% despite role mismatch.
+3. **Broad Umbrella Category False Positives:**
+   - Distant sub-disciplines sharing a broad category ("Software Engineering" covering Frontend, DevOps, DBA, QA) received 65% role match even with 0 semantic token overlap and no taxonomy relationship.
+4. **Seniority Classification Incompleteness:**
+   - Seniority mapping lacked `staff`, `fresher`, `associate`, causing "Staff Software Engineer" to fall back to mid level (diff 0 -> 100%).
+5. **Static `/version` Commit:**
+   - `app/main.py:294` hardcoded `"commit": "71faf79"`, preventing verification of deployed commits on Render.
+
+### 8.2 Targeted Architectural Fixes
+- **Role Taxonomy & Stopword Filtering (`personalized_job_service.py`):**
+  - Added module-level `_GENERIC_ROLE_WORDS` to filter generic words (`engineer`, `analyst`, `developer`, `senior`, `staff`, etc.) from fallback token matching.
+  - Substring match returns 100.0. Canonical match returns 100.0 for direct variants and 85.0 for alias variants (e.g. BI Analyst).
+  - Related taxonomy roles: shared noun/anchor returns 85.0 (Tier 2); distinct disciplines (Data Scientist) return 70.0 (Tier 3).
+  - Same broad category requires semantic token overlap (e.g., "data" in Data Analyst vs Data Engineer -> 65.0); zero-overlap sub-disciplines (Frontend vs DevOps) demoted to 15.0.
+  - Unrelated role families return 5.0 (Tier 4: 0-15%).
+- **Gated Skill Match (`calculate_match_score`):**
+  - When `role_match < 40.0`, `effective_skill_match` is scaled down severely: `raw_skill_match * max(0.05, (role_match / 40.0) * 0.3)`.
+  - Rebalanced scoring weights: `role_match: 0.30`, `skill_match: 0.20`, `experience_match: 0.15`, `location_match: 0.10`, `resume_match: 0.10`, `salary_match: 0.05`, `company_preference: 0.05`, `freshness: 0.05` (sum = 1.00).
+- **Seniority & Experience Hardening (`_score_experience_match`):**
+  - Added full ranks (`intern`, `fresher`, `associate`, `junior`, `mid`, `senior`, `staff`, `lead`, `principal`, `director`, `vp`) and regex years extraction.
+  - Score diffs: 0 -> 100, 1 -> 75, 2 -> 40, >=3 -> 15.
+- **Dynamic Production Version Probe (`app/main.py`):**
+  - Reads `RENDER_GIT_COMMIT` or `GIT_COMMIT` to accurately report deployed commit SHA.
+
+### 8.3 Verification & Live Inventory Truth
+- **Fixture Suite (`tests/test_role_relevance_fixture.py`):**
+  - 8/8 tests passed covering Tier 1-4 hierarchy, Hyderabad Data Analyst beating Bangalore Backend Engineer by >20 points, demotion of "Software Engineering Senior Analyst" to role_match <= 15, and gated skill matching.
+- **Targeted Suite:** 145 passed in 22.48s with zero failures across all job intelligence tests.
+- **Live Inventory Truth (77 active jobs):**
+  - Only 1 genuine data role currently active in DB: `Senior Data Scientist` at Coulomb Ai (Ranked #1, Role: 70, Overall: 47).
+  - Zero active "Data Analyst" jobs in DB (crawls were seeded for "software engineer").
+  - `Software Engineering Senior Analyst` demoted to Role: 5, Overall: 22.
+  - All software engineering jobs demoted to Role: 5, Skill: 0-2, Overall: 26-36.
+
 

@@ -291,4 +291,6 @@ async def health() -> dict[str, str]:
 @app.get("/version")
 async def version() -> dict[str, str]:
     """Version probe to verify deployment."""
-    return {"version": "studio-qa-v2", "commit": "71faf79"}
+    import os
+    commit = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_COMMIT") or "766f536"
+    return {"version": "studio-qa-v2", "commit": commit[:7] if commit else "766f536"}
