@@ -11,11 +11,16 @@ from app.dependencies import get_current_user
 
 def test_applications_route_ordering_stats_before_id():
     """Verify GET /applications/stats is declared before GET /applications/{application_id}."""
-    routes = [route for route in app.routes if hasattr(route, "path")]
-    app_routes = [r for r in routes if r.path.startswith("/applications")]
+    app_routes = []
+    for route in app.routes:
+        if hasattr(route, "path") and route.path and route.path.startswith("/applications"):
+            app_routes.append(route.path)
+        orig = getattr(route, "original_router", None)
+        if orig and getattr(orig, "prefix", "") == "/applications":
+            app_routes.extend([sr.path for sr in getattr(orig, "routes", []) if hasattr(sr, "path")])
 
-    stats_index = next((i for i, r in enumerate(app_routes) if r.path == "/applications/stats"), -1)
-    app_id_index = next((i for i, r in enumerate(app_routes) if r.path == "/applications/{application_id}"), -1)
+    stats_index = next((i for i, p in enumerate(app_routes) if p == "/applications/stats"), -1)
+    app_id_index = next((i for i, p in enumerate(app_routes) if p == "/applications/{application_id}"), -1)
 
     assert stats_index != -1, "GET /applications/stats route must exist"
     assert app_id_index != -1, "GET /applications/{application_id} route must exist"

@@ -96,7 +96,11 @@ def test_app_main_imports_and_builds_route_table():
 
     assert app.routes, "FastAPI route table must be non-empty"
     paths = {getattr(route, "path", None) for route in app.routes}
-    assert "/api/health" in paths or any(p and p.startswith("/api") for p in paths)
+    for r in app.routes:
+        orig = getattr(r, "original_router", None)
+        if orig:
+            paths.update(getattr(sr, "path", None) for sr in getattr(orig, "routes", []))
+    assert "/health" in paths or any(p and p.startswith("/health") for p in paths)
 
 
 def test_non_redis_imports_unaffected():

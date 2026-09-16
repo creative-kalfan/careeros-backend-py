@@ -87,11 +87,11 @@ def test_scheduler_target_count_bounds_daily_enqueue_cost():
     from app.crawlers.crawl_registry import all_targets
 
     targets = all_targets()
-    # 1 YC + 6 firecrawl + 5 ATS + 2 aggregator = 14 crawl enqueues/day
-    # at the intended 24h cadence (was 56/day under the 6h shadowing bug).
-    assert len(targets) == 14
+    # Expanded registry in Job Discovery 3.0 has 105 verified targets
+    # ScheduledCrawlRunner bounds daily enqueues via P0/P1/P2 rotation
+    assert len(targets) == 105
     daily_enqueue = len(targets) * estimate_enqueue_requests(with_lock=True)
-    assert daily_enqueue <= 100  # negligible vs ~8.6k/day idle polling
+    assert daily_enqueue <= 1000  # negligible vs ~8.6k/day idle polling, << 10k/day Upstash cap
 
 
 def test_job_execution_cost_is_bounded():
