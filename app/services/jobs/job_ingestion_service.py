@@ -25,51 +25,58 @@ from app.services.jobs.job_service import JobService
 # see scripts/probe_adzuna_city_yield.py). Budget: batch is bounded and the
 # rotation cycles over this matrix within the staleness window.
 ADZUNA_BROAD_QUERIES = [
-    # Data analytics & BI (task priority)
+    # Batch 1 (Day % 13 == 0)
     "data analyst India",
-    "data analytics India",
-    "business intelligence India",
-    "BI analyst India",
-    "business analyst India",
-    "reporting analyst India",
-    "risk analyst India",
-    "risk analytics India",
-    "financial analyst India",
-    # Data engineering
     "data engineer India",
-    "data engineering India",
-    "analytics engineer India",
-    "ETL developer India",
-    "data warehouse India",
-    # AI / ML
-    "machine learning India",
-    "AI engineer India",
-    "artificial intelligence India",
-    "data scientist India",
-    "generative AI India",
-    # Backend / software engineering
-    "backend engineer India",
     "software engineer India",
-    "Python backend India",
-    "Java backend India",
-    "API developer India",
-    # SAP
+    # Batch 2 (Day % 13 == 1)
+    "business analyst India",
+    "machine learning India",
     "SAP India",
+    # Batch 3 (Day % 13 == 2)
+    "data analytics India",
+    "backend engineer India",
+    "AI engineer India",
+    # Batch 4 (Day % 13 == 3)
+    "BI analyst India",
+    "data engineering India",
     "SAP ABAP India",
+    # Batch 5 (Day % 13 == 4)
+    "reporting analyst India",
+    "analytics engineer India",
+    "artificial intelligence India",
+    # Batch 6 (Day % 13 == 5)
+    "business intelligence India",
+    "Python backend India",
     "ABAP developer India",
+    # Batch 7 (Day % 13 == 6)
+    "risk analyst India",
+    "ETL developer India",
+    "data scientist India",
+    # Batch 8 (Day % 13 == 7)
+    "financial analyst India",
+    "Java backend India",
     "SAP HANA India",
-    # City-scoped (measured incremental India coverage, task §7)
-    "data analyst Hyderabad",
-    "data analyst Pune",
-    "data analyst Mumbai",
-    "data analyst Chennai",
+    # Batch 9 (Day % 13 == 8)
+    "risk analytics India",
+    "data warehouse India",
+    "generative AI India",
+    # Batch 10 (Day % 13 == 9)
     "data analyst Bengaluru",
-    "data analyst Gurugram",
-    "data engineer Bengaluru",
     "software engineer Bengaluru",
+    "API developer India",
+    # Batch 11 (Day % 13 == 10)
+    "data analyst Hyderabad",
     "software engineer Hyderabad",
+    "data engineer Bengaluru",
+    # Batch 12 (Day % 13 == 11)
+    "data analyst Pune",
     "software engineer Pune",
+    "data analyst Mumbai",
+    # Batch 13 (Day % 13 == 12)
+    "data analyst Chennai",
     "software engineer Chennai",
+    "data analyst Gurugram",
 ]
 ADZUNA_BATCH_SIZE = 3
 # Broad rotation is India-scoped only; the primary query already covers

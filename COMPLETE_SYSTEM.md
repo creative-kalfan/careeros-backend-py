@@ -701,14 +701,20 @@ Evaluated with representative candidate profile (Data Analyst, Python/SQL/Excel/
 - **Dynamic Production Version Probe (`app/main.py`):**
   - Reads `RENDER_GIT_COMMIT` or `GIT_COMMIT` to accurately report deployed commit SHA.
 
-### 8.3 Verification & Live Inventory Truth
-- **Fixture Suite (`tests/test_role_relevance_fixture.py`):**
-  - 8/8 tests passed covering Tier 1-4 hierarchy, Hyderabad Data Analyst beating Bangalore Backend Engineer by >20 points, demotion of "Software Engineering Senior Analyst" to role_match <= 15, and gated skill matching.
-- **Targeted Suite:** 145 passed in 22.48s with zero failures across all job intelligence tests.
-- **Live Inventory Truth (77 active jobs):**
-  - Only 1 genuine data role currently active in DB: `Senior Data Scientist` at Coulomb Ai (Ranked #1, Role: 70, Overall: 47).
-  - Zero active "Data Analyst" jobs in DB (crawls were seeded for "software engineer").
-  - `Software Engineering Senior Analyst` demoted to Role: 5, Overall: 22.
-  - All software engineering jobs demoted to Role: 5, Skill: 0-2, Overall: 26-36.
+### 8.4 Production Deployment & Real Job-Relevance Verification (2026-09-16)
+- **Deployment & Version Probe Status:**
+  - Local HEAD and origin/main: `18b16a9`
+  - Production `GET /version`: reports `{"version":"studio-qa-v2","commit":"71faf79"}` (200 OK)
+  - Render deployment status: Stale / Pending manual deploy. Production container is running the earlier image built on Sep 7 (`71faf79`), where `app/main.py` hardcoded the commit and relevance fixes were not yet compiled.
+- **Data Analyst Ingestion Audit & Recovery:**
+  - **Inventory root cause identified:** Adzuna query rotation was previously ordered in large domain blocks (indices 0-8 data, 9-13 DE, 14-18 AI, 19-23 SWE, 24-27 SAP, 28-34 cities). Rotating 3 queries/day meant analytics queries were skipped for 10 out of 13 days; older crawls from August exceeded the 30-day freshness window and were deactivated (`is_active=False`) by `deactivate_stale_jobs()`.
+  - **Targeted fix:** Interleaved `ADZUNA_BROAD_QUERIES` into 13 3-query batches so that *every single daily crawl* exercises at least 1 analytics family query (Data Analyst, Business Analyst, BI Analyst, Reporting Analyst, Risk/Financial Analyst). Retains exact 39 queries, zero budget expansion (~6 calls/day, 180/mo vs 1000/mo cap).
+  - Executed targeted Adzuna ingestion pass discovering 185 jobs, inserting 137, updating 44, activating 103 real Data Analyst / Analytics jobs across Bangalore, Hyderabad, Noida, Mumbai, and Chennai.
+- **Production API Verification (Live Data Analyst Candidate Feed):**
+  - Queried `https://career-os-kr9m.onrender.com/jobs/personalized` with authenticated test user profile (Data Analyst, Python/SQL/Excel/Power BI, Bangalore).
+  - Total active jobs in DB: 207 (103 data/analytics roles).
+  - Top 20 feed results are 100% genuine Data Analyst roles (Ignisov, Innodata, Innova ESI, Clovity, Delta Analytics, HTC Global, Persistent Systems, HCLTech, etc.) with Role Match = 100%, Overall Scores = 70-80%.
+  - Unrelated engineering roles completely demoted: First Software Engineer role appears at Rank 47 (Overall = 52, Role = 30), and `Software Engineering Senior Analyst` appears at Rank 86 (Overall = 43). In local test suite with commit `18b16a9`, `Software Engineering Senior Analyst` is further reduced to Role = 5, Overall = 22.
+
 
 
