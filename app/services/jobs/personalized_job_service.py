@@ -146,14 +146,25 @@ class PersonalizedJobService:
         }
 
     def _score_role_match(self, job: NormalizedJob, profile: UserProfile) -> float:
+        from app.parsing.role_family import evaluate_role_compatibility
+
         title = (job.title or "").lower().strip()
         desired = (profile.desired_role or "").lower().strip()
         if not desired:
             return 50.0
 
+        # Enforce deterministic role-family compatibility guard first
+        compat_label, compat_mult = evaluate_role_compatibility(
+            desired,
+            job.title or "",
+            job.description or "",
+        )
+        if compat_label == "MISMATCH":
+            return 5.0
+
         # Exact substring match (e.g., "data analyst" in "senior data analyst")
         if desired in title:
-            return 100.0
+            return round(100.0 * compat_mult, 1)
 
         desired_canonical = normalize_role(desired)
         job_canonical = normalize_role(title)
@@ -161,8 +172,8 @@ class PersonalizedJobService:
         if desired_canonical and job_canonical:
             if desired_canonical == job_canonical:
                 if desired in title or title in desired:
-                    return 100.0
-                return 85.0
+                    return round(100.0 * compat_mult, 1)
+                return round(85.0 * compat_mult, 1)
 
             # Direct taxonomy relationship check
             desired_related = get_related_roles(desired_canonical)
@@ -266,8 +277,10 @@ class PersonalizedJobService:
         title = (job.title or "").lower()
 
         experience_rank = {
-            "intern": 0, "internship": 0, "trainee": 0, "fresher": 0, "graduate": 0,
+            "intern": 0, "internship": 0, "trainee": 0, "fresher": 0, "freshers": 0,
             "junior": 1, "entry": 1, "entry-level": 1, "associate": 1,
+            "accelerator program": 0, "early-career": 1, "early career": 1,
+            "graduate trainee": 0, "management trainee": 0,
             "mid": 2, "mid-level": 2, "intermediate": 2,
             "senior": 3, "sr": 3, "sr.": 3,
             "staff": 4, "lead": 4, "team lead": 4,
@@ -277,13 +290,20 @@ class PersonalizedJobService:
         def _extract_rank(text: str) -> Optional[int]:
             if not text:
                 return None
+            t_low = text.lower()
+            if re.search(r"\b(?:engineer|developer|analyst|scientist)\s*(?:[3-9]|iii|iv|v)\b", t_low) or re.search(r"\b(?:level\s*[3-9]|l[3-9]|ic[3-9])\b", t_low):
+                return 3
+            if re.search(r"\b(?:engineer|developer|analyst|scientist)\s*(?:2|ii)\b", t_low) or re.search(r"\b(?:level\s*2|l2|ic2)\b", t_low):
+                return 2
             for kw, r in experience_rank.items():
-                if re.search(rf"\b{re.escape(kw)}\b", text):
+                if re.search(rf"\b{re.escape(kw)}\b", t_low):
                     return r
-            m = re.search(r"(\d+)\s*(?:\+|-\d+)?\s*(?:year|yr)", text)
+            m = re.search(r"(\d+)\s*(?:\+|-\d+)?\s*(?:year|yr)", t_low)
             if m:
                 years = int(m.group(1))
-                if years <= 1:
+                if years == 0:
+                    return 0
+                elif years <= 2:
                     return 1
                 elif years <= 4:
                     return 2
@@ -299,7 +319,20 @@ class PersonalizedJobService:
         if job_rank is None:
             job_rank = _extract_rank(title)
         if job_rank is None:
-            job_rank = 2
+            # Check description for explicit years or indicators
+            from app.services.jobs.extraction_utils import extract_years_of_experience
+            years_min, _ = extract_years_of_experience(f"{title} {job.description or ''}")
+            if years_min is not None:
+                if years_min <= 2:
+                    job_rank = 1
+                elif years_min <= 4:
+                    job_rank = 2
+                elif years_min <= 7:
+                    job_rank = 3
+                else:
+                    job_rank = 4
+            else:
+                job_rank = 2
 
         user_rank = _extract_rank(user_exp)
         if user_rank is None:
@@ -307,14 +340,23 @@ class PersonalizedJobService:
         if user_rank is None:
             user_rank = 2
 
+        # Special priority protection for entry candidates:
+        if user_rank <= 1:
+            if job_rank <= 1:
+                return 100.0
+            if job_rank == 2:
+                return 60.0
+            # Senior/lead/staff for entry candidate receives strong penalty
+            return 10.0
+
         diff = abs(user_rank - job_rank)
         if diff == 0:
             return 100.0
         if diff == 1:
             return 75.0
         if diff == 2:
-            return 40.0
-        return 15.0
+            return 35.0
+        return 10.0
 
     def _score_location_match(self, job: NormalizedJob, profile: UserProfile) -> float:
         user_location = (profile.location or "").lower().strip()

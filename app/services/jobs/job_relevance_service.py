@@ -80,6 +80,20 @@ def _recency_key(job: NormalizedJob) -> str:
 
 def _get_job_seniority(job: NormalizedJob) -> str:
     """Classify seniority level from job attributes, title, and description."""
+    import re
+    t_lower = (job.title or "").lower().strip()
+    if t_lower:
+        if re.search(r"\b(?:senior|sr\.?)\b", t_lower):
+            return "senior"
+        if re.search(r"\b(?:team\s+lead(?:er)?|engineering\s+manager|project\s+manager|product\s+manager|manager|director|vp|vice\s+president|head\s+of|principal|architect|staff)\b", t_lower):
+            return "lead"
+        if re.search(r"\b(?:engineer|developer|analyst|scientist)\s*(?:[3-9]|iii|iv|v)\b", t_lower) or re.search(r"\b(?:level\s*[3-9]|l[3-9]|ic[3-9])\b", t_lower):
+            return "senior"
+        if re.search(r"\b(?:engineer|developer|analyst|scientist)\s*(?:2|ii)\b", t_lower) or re.search(r"\b(?:level\s*2|l2|ic2)\b", t_lower):
+            return "mid"
+        if re.search(r"\b(?:junior|jr\.?|fresher|freshers|trainee|apprentice|intern|internship|entry\s+level)\b", t_lower):
+            return "entry"
+
     lvl = (job.experience_level or "").lower().strip()
     if lvl:
         for key in ("entry", "fresher", "intern", "junior", "mid", "senior", "staff", "lead", "principal"):
@@ -333,51 +347,79 @@ class JobRelevanceService:
 
         has_python_filter = bool(company or skills or remote is not None or employment_type or experience)
 
-        # Stage 0 Opportunity Tier / Fresher / Mass-Hiring helpers
+        # Determine if current profile represents an entry/fresher candidate
+        is_entry_candidate = False
+        if profile:
+            cand_exp = (profile.experience or "").lower()
+            is_entry_candidate = any(
+                w in cand_exp for w in ("fresher", "freshers", "entry", "junior", "intern", "trainee", "0")
+            ) or (not cand_exp)
+
+        # Stage 0 Opportunity Tier / Priority Band helpers
         def _job_tier(j: NormalizedJob, match_score: float = 0.0) -> int:
-            """Opportunity ranking tier (higher integer = better tier):
-            Tier 4: High-priority opportunity:
-                    - Highly relevant fresh entry/fresher (posted <= 7d, match >= 50 or unauth)
-                    - OR Active verified mass-hiring with strong relevance (match >= 60 or unauth)
-            Tier 3: Active entry/fresher opportunity (match >= 45 or unauth)
-                    - OR Active verified mass-hiring with acceptable relevance (match >= 45)
-            Tier 2: Fresh relevant mid-level (match >= 45 or unauth fresh)
-            Tier 1: Older ordinary relevant (match >= 40 or unauth)
-            Tier 0: Weakly relevant / role mismatch (match < 40) or expired campaign
+            """Opportunity ranking priority bands:
+            For entry-level candidates:
+              Tier 4 (Priority A): ENTRY/FRESHER + strongly role-compatible + active
+                                   OR active verified mass-hiring with strong role compatibility
+              Tier 3 (Priority B): ENTRY/FRESHER + role-compatible
+              Tier 2 (Priority C): MID / BASE + strongly role-compatible + active
+              Tier 1 (Priority D): SENIOR + strongly role-compatible (or acceptable mid)
+              Tier 0 (Priority E): Weakly relevant jobs / role mismatches / expired campaigns
             """
-            is_active_mass = _is_verified_active_mass_hiring(j)
+            role_match = (j.match.get("role_match", 0) if j.match else 0) if profile else 100.0
+
+            # Role mismatch guard: incompatible role families cannot enter priority tiers
+            if profile is not None and role_match < 40.0:
+                return 0
+
             is_expired_mass = getattr(j, "mass_hiring_status", None) == "EXPIRED"
             if is_expired_mass:
-                return 0 if (match_score > 0 and match_score < 50.0) else 1
+                return 0
 
+            is_active_mass = _is_verified_active_mass_hiring(j)
             is_entry = _is_entry_or_fresher(j)
-            rec = _recency_key(j)
-            is_fresh = False
-            if rec:
-                try:
-                    from datetime import datetime
-                    dt = datetime.fromisoformat(rec.replace("Z", "+00:00"))
-                    now = datetime.now(dt.tzinfo or timezone.utc)
-                    is_fresh = (now - dt).total_seconds() / 86400 <= 7.0
-                except Exception:
-                    is_fresh = False
+            seniority = _get_job_seniority(j)
+            is_senior = seniority in ("senior", "staff", "lead", "principal", "manager", "director", "executive")
+            is_active = getattr(j, "is_active", True) is not False
+            is_strong = (role_match >= 75.0 or profile is None)
+            is_compat = (role_match >= 40.0 or profile is None)
 
-            # Semantic relevance checks (0.0 means unauthenticated feed)
-            is_strong = (match_score >= 60.0 or match_score == 0.0)
-            is_acceptable = (match_score >= 45.0 or match_score == 0.0)
+            if profile is not None and is_entry_candidate:
+                # Priority A: ENTRY/FRESHER + strongly role-compatible + active
+                if is_entry and is_strong and is_active and (match_score >= 40.0 or profile is None):
+                    return 4
+                if is_active_mass and is_strong and is_active and (match_score >= 45.0 or profile is None):
+                    return 4
 
-            # Mass hiring requires acceptable relevance; does not elevate unrelated jobs
-            if is_active_mass and is_strong:
+                # Priority B: ENTRY/FRESHER + role-compatible
+                if is_entry and is_compat and (match_score >= 35.0 or profile is None):
+                    return 3
+
+                # Priority C: MID / BASE + strongly role-compatible + active
+                if not is_senior and is_strong and is_active and (match_score >= 40.0 or profile is None):
+                    return 2
+
+                # Priority D: SENIOR + strongly role-compatible (or active mid)
+                if is_strong and (match_score >= 35.0 or profile is None):
+                    return 1
+                if is_compat and not is_senior and (match_score >= 40.0 or profile is None):
+                    return 1
+
+                # Priority E: weakly relevant
+                return 0
+
+            # Unauthenticated or non-entry candidates:
+            if is_active_mass and is_strong and (match_score >= 55.0 or profile is None):
                 return 4
-            if is_entry and is_fresh and is_acceptable:
+            if is_entry and is_strong and (match_score >= 45.0 or profile is None):
                 return 4
-            if is_active_mass and is_acceptable:
+            if is_active_mass and is_compat and (match_score >= 45.0 or profile is None):
                 return 3
-            if is_entry and is_acceptable:
+            if is_entry and is_compat:
                 return 3
-            if is_fresh and is_acceptable:
+            if not is_senior and is_compat and (match_score >= 45.0 or profile is None):
                 return 2
-            if match_score >= 40.0 or match_score == 0.0:
+            if match_score >= 35.0 or profile is None:
                 return 1
             return 0
 
@@ -387,8 +429,6 @@ class JobRelevanceService:
             if sort in ("newest", "oldest", "salary"):
                 self._sort_jobs(jobs, sort)
             else:
-                # Opportunity ranking: Tier first, India-first, source quality, recency.
-                # Fresher/entry gets intentional default advantage.
                 def _unauth_rank_key(j: NormalizedJob) -> tuple:
                     tier = _job_tier(j, match_score=0.0)
                     fresher_bonus = 10.0 if _is_entry_or_fresher(j) else 0.0
@@ -426,12 +466,13 @@ class JobRelevanceService:
             # Tiered opportunity rank + match score + Fresher advantage + bounded Mass Hiring + India boost.
             def _rank_key(j: NormalizedJob) -> tuple:
                 match_overall = j.match.get("overall", 0) if j.match else 0
+                role_match = j.match.get("role_match", 0) if j.match else 0
                 tier = _job_tier(j, match_score=match_overall)
                 fresher_bonus = 8.0 if _is_entry_or_fresher(j) else 0.0
 
-                # Bounded mass hiring priority modifier only if active and sufficiently relevant
+                # Bounded mass hiring priority modifier only if active and sufficiently role-relevant
                 is_active_mass = _is_verified_active_mass_hiring(j)
-                mass_bonus = 6.0 if (is_active_mass and match_overall >= 45.0) else 0.0
+                mass_bonus = 6.0 if (is_active_mass and role_match >= 45.0 and match_overall >= 45.0) else 0.0
 
                 ind = _india_first_score(j)
                 ind_boost = {3: 6.0, 2: 4.0, 1: 2.0, 0: 0.0}.get(ind, 0.0)

@@ -175,7 +175,7 @@ _ROLE_TAXONOMY: dict[str, list[dict[str, Any]]] = {
                 "sap fico", "sap mm", "sap sd", "sap bw", "sap basis",
                 "sap functional consultant", "sap technical consultant",
             ],
-            "related": ["Backend Developer", "Software Engineer", "Financial Analyst"],
+            "related": ["SAP Developer", "ERP Consultant"],
         },
     ],
     "Data & Analytics": [
@@ -291,7 +291,6 @@ _ROLE_TAXONOMY: dict[str, list[dict[str, Any]]] = {
                 "data integration engineer",
             ],
             "related": [
-                "Software Engineer", "Data Analyst", "Data Scientist",
                 "Analytics Engineer", "Database Administrator",
             ],
         },
@@ -304,8 +303,7 @@ _ROLE_TAXONOMY: dict[str, list[dict[str, Any]]] = {
                 "deep learning engineer",
             ],
             "related": [
-                "Data Scientist", "Data Engineer", "Software Engineer",
-                "AI Engineer",
+                "Data Scientist", "AI Engineer",
             ],
         },
     ],

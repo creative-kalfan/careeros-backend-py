@@ -261,6 +261,12 @@ _SENIORITY_INDICATORS: dict[str, tuple[str, float]] = {
     "trainee": ("entry", 0.9),
     "graduate trainee": ("entry", 0.95),
     "management trainee": ("entry", 0.9),
+    "accelerator program": ("entry", 0.95),
+    "early-career": ("entry", 0.9),
+    "early career": ("entry", 0.9),
+    "campus recruitment": ("entry", 0.9),
+    "campus hiring": ("entry", 0.9),
+    "graduate program": ("entry", 0.9),
     "new graduate": ("entry", 0.95),
     "recent graduate": ("entry", 0.95),
     "apprentice": ("entry", 0.9),
@@ -309,23 +315,54 @@ def classify_seniority(text: str, title: str | None = None) -> tuple[str | None,
         if re.search(r"\b(?:senior|sr\.?)\b", t_lower):
             return "senior", "high"
 
+        # Check numerical career levels in title (e.g. Engineer 3, Software Engineer III)
+        if re.search(r"\b(?:engineer|developer|analyst|scientist)\s*(?:[3-9]|iii|iv|v)\b", t_lower) or re.search(r"\b(?:level\s*[3-9]|l[3-9]|ic[3-9])\b", t_lower):
+            return "senior", "high"
+        if re.search(r"\b(?:engineer|developer|analyst|scientist)\s*(?:2|ii)\b", t_lower) or re.search(r"\b(?:level\s*2|l2|ic2)\b", t_lower):
+            return "mid", "high"
+
         # Check explicit entry/intern/fresher in title
         if re.search(r"\b(?:intern|internship)\b", t_lower):
             return "intern", "high"
         if re.search(r"\b(?:junior|jr\.?|fresher|freshers|trainee|apprentice|entry\s+level)\b", t_lower):
             return "entry", "high"
 
-    haystack = f"{t_lower} {desc_lower}".strip()
+    # Extract years of experience from title + description
+    haystack_raw = f"{t_lower} {desc_lower}".strip()
+    years_min, _ = extract_years_of_experience(haystack_raw)
+
+    # If experience explicitly requires 3+ years, it can NEVER be classified as entry
+    if years_min is not None and years_min >= 3:
+        if years_min >= 7:
+            return "lead", "high"
+        if years_min >= 5:
+            return "senior", "high"
+        return "mid", "medium"
 
     # 2. Explicit 0-1, 0-2 years check in title/text: strongly entry
-    if re.search(r"\b0\s*(?:[-–]|to)\s*[12]\s*(?:years?|yrs?)\b", haystack) or re.search(r"\b0\s*(?:years?|yrs?)\b", haystack):
+    if re.search(r"\b0\s*(?:[-–]|to)\s*[12]\s*(?:years?|yrs?)\b", haystack_raw) or re.search(r"\b0\s*(?:years?|yrs?)\b", haystack_raw):
         return "entry", "high"
 
-    # 3. Contextual check for 'associate': if title has associate but description or title has entry/junior/fresher/0-2 yrs, entry. Otherwise mid.
+    # 3. Clean description for keyword scanning:
+    # Filter out mentorship phrasing (e.g. "mentor junior developers" is NOT a junior job)
+    cleaned_desc = re.sub(
+        r"\b(?:mentor(?:ing)?|guide|guiding|lead(?:ing)?|supervis(?:e|ing)|assist(?:ing)?|support(?:ing)?)\s+(?:junior|entry|fresher|intern)\w*",
+        " ",
+        desc_lower,
+    )
+    # Filter out generic educational qualification language (e.g. "graduate or above", "graduate degree")
+    cleaned_desc = re.sub(
+        r"\b(?:graduate\s+or\s+above|must\s+be\s+a\s+graduate|graduate\s+degree|post\s+graduate|graduation)\b",
+        " ",
+        cleaned_desc,
+    )
+
+    cleaned_haystack = f"{t_lower} {cleaned_desc}".strip()
+
+    # Contextual check for 'associate': if title has associate but description or title has entry/junior/fresher/0-2 yrs, entry. Otherwise mid.
     if re.search(r"\bassociate\b", t_lower):
-        if any(w in haystack for w in ("entry", "fresher", "junior", "trainee", "intern", "0-1", "0-2", "0 to 1", "0 to 2")):
+        if any(w in cleaned_haystack for w in ("entry", "fresher", "junior", "trainee", "intern", "0-1", "0-2", "0 to 1", "0 to 2")):
             return "entry", "high"
-        years_min, _ = extract_years_of_experience(haystack)
         if years_min is not None and years_min <= 2:
             return "entry", "high"
         return "mid", "medium"
@@ -334,11 +371,11 @@ def classify_seniority(text: str, title: str | None = None) -> tuple[str | None,
     best_confidence = "low"
     best_score = 0.0
 
-    # Match longest indicator first to avoid partial conflicts (e.g. 'entry level' before 'entry')
+    # Match longest indicator first to avoid partial conflicts
     sorted_indicators = sorted(_SENIORITY_INDICATORS.items(), key=lambda x: len(x[0]), reverse=True)
     for indicator, (level, score) in sorted_indicators:
         pattern = rf"\b{re.escape(indicator)}\b"
-        if re.search(pattern, haystack):
+        if re.search(pattern, cleaned_haystack):
             if score > best_score:
                 best_score = score
                 best_level = level
