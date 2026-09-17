@@ -408,14 +408,14 @@ class PersonalizedJobService:
         return 0.0
 
     def _score_freshness(self, job: NormalizedJob) -> float:
-        # Active mass-hiring override: an actively hiring mass-hiring campaign
-        # retains fresh priority even if the posting is older.
+        # Active mass-hiring: an actively hiring verified campaign
+        # retains a bounded fresh baseline (85.0) rather than unconstrained 95.0.
         is_active_mass_hiring = (
             getattr(job, "mass_hiring", None) == "VERIFIED_MASS_HIRING"
             and getattr(job, "mass_hiring_status", None) == "ACTIVE"
         )
         if is_active_mass_hiring:
-            return 95.0
+            return 85.0
 
         # Expired mass-hiring loses special boost:
         if getattr(job, "mass_hiring_status", None) == "EXPIRED":

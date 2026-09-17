@@ -200,17 +200,9 @@ class JobRelevanceService:
 
         return result
 
-    @staticmethod
-    def _diversify_by_company(jobs: list[NormalizedJob]) -> list[NormalizedJob]:
-        """Round-robin interleave by company over rank order.
-
-        Companies take turns in order of first appearance (i.e. best rank
-        first); within a company, ranked order is preserved. Deterministic,
-        lossless (no job is hidden — extras surface on later pages), and
-        applied only to default relevance ranking, never to explicit
-        newest/oldest/salary sorts. Jobs without a company each get their
-        own slot so they are not throttled as one group.
-        """
+    @classmethod
+    def _diversify_single_tier(cls, jobs: list[NormalizedJob]) -> list[NormalizedJob]:
+        """Round-robin interleave by company within a single tier block."""
         groups: dict[str, list[NormalizedJob]] = {}
         order: list[str] = []
         for job in jobs:
@@ -233,6 +225,28 @@ class JobRelevanceService:
             if not progressed:
                 break
         return out
+
+    @classmethod
+    def _diversify_by_company(
+        cls,
+        jobs: list[NormalizedJob],
+        tier_getter: Optional[Any] = None,
+    ) -> list[NormalizedJob]:
+        """Round-robin interleave by company over rank order.
+
+        When tier_getter is provided, diversification operates tier-by-tier
+        so company diversification never pushes high-priority opportunities
+        below lower-tier or unrelated jobs.
+        """
+        if not jobs:
+            return []
+        if tier_getter is not None:
+            from itertools import groupby
+            out: list[NormalizedJob] = []
+            for _, tier_group in groupby(jobs, key=tier_getter):
+                out.extend(cls._diversify_single_tier(list(tier_group)))
+            return out
+        return cls._diversify_single_tier(jobs)
 
     @staticmethod
     def _sort_jobs(jobs: list[NormalizedJob], sort: Optional[str]) -> list[NormalizedJob]:
@@ -322,14 +336,20 @@ class JobRelevanceService:
         # Stage 0 Opportunity Tier / Fresher / Mass-Hiring helpers
         def _job_tier(j: NormalizedJob, match_score: float = 0.0) -> int:
             """Opportunity ranking tier (higher integer = better tier):
-            Tier 5: Active verified mass hiring + strong/good relevance (match >= 50)
-            Tier 4: Fresh entry/fresher (posted <= 7d or re-observed)
-            Tier 3: Active entry/fresher
-            Tier 2: Fresh relevant mid-level (match >= 50 or unauthenticated fresh)
-            Tier 1: Older ordinary relevant
-            Tier 0: Weakly relevant / expired
+            Tier 4: High-priority opportunity:
+                    - Highly relevant fresh entry/fresher (posted <= 7d, match >= 50 or unauth)
+                    - OR Active verified mass-hiring with strong relevance (match >= 60 or unauth)
+            Tier 3: Active entry/fresher opportunity (match >= 45 or unauth)
+                    - OR Active verified mass-hiring with acceptable relevance (match >= 45)
+            Tier 2: Fresh relevant mid-level (match >= 45 or unauth fresh)
+            Tier 1: Older ordinary relevant (match >= 40 or unauth)
+            Tier 0: Weakly relevant / role mismatch (match < 40) or expired campaign
             """
             is_active_mass = _is_verified_active_mass_hiring(j)
+            is_expired_mass = getattr(j, "mass_hiring_status", None) == "EXPIRED"
+            if is_expired_mass:
+                return 0 if (match_score > 0 and match_score < 50.0) else 1
+
             is_entry = _is_entry_or_fresher(j)
             rec = _recency_key(j)
             is_fresh = False
@@ -342,15 +362,20 @@ class JobRelevanceService:
                 except Exception:
                     is_fresh = False
 
-            is_relevant = (match_score >= 45.0 or match_score == 0.0)
+            # Semantic relevance checks (0.0 means unauthenticated feed)
+            is_strong = (match_score >= 60.0 or match_score == 0.0)
+            is_acceptable = (match_score >= 45.0 or match_score == 0.0)
 
-            if is_active_mass and is_relevant:
-                return 5
-            if is_entry and is_fresh and is_relevant:
+            # Mass hiring requires acceptable relevance; does not elevate unrelated jobs
+            if is_active_mass and is_strong:
                 return 4
-            if is_entry and is_relevant:
+            if is_entry and is_fresh and is_acceptable:
+                return 4
+            if is_active_mass and is_acceptable:
                 return 3
-            if is_fresh and is_relevant:
+            if is_entry and is_acceptable:
+                return 3
+            if is_fresh and is_acceptable:
                 return 2
             if match_score >= 40.0 or match_score == 0.0:
                 return 1
@@ -367,8 +392,10 @@ class JobRelevanceService:
                 def _unauth_rank_key(j: NormalizedJob) -> tuple:
                     tier = _job_tier(j, match_score=0.0)
                     fresher_bonus = 10.0 if _is_entry_or_fresher(j) else 0.0
+                    is_active_mass = _is_verified_active_mass_hiring(j)
+                    mass_bonus = 6.0 if is_active_mass else 0.0
                     ind = _india_first_score(j)
-                    score = fresher_bonus + source_quality_bonus(j)
+                    score = fresher_bonus + mass_bonus + source_quality_bonus(j)
                     return (
                         tier,
                         score,
@@ -378,7 +405,7 @@ class JobRelevanceService:
                     )
 
                 jobs.sort(key=_unauth_rank_key, reverse=True)
-                jobs = self._diversify_by_company(jobs)
+                jobs = self._diversify_by_company(jobs, tier_getter=lambda j: _job_tier(j, 0.0))
             start = (page - 1) * page_size
             return jobs[start : start + page_size], total
 
@@ -396,14 +423,19 @@ class JobRelevanceService:
             self._sort_jobs(filtered_jobs, sort)
         else:
             # Stage 2 Ranking:
-            # Tiered opportunity rank + match score + Fresher advantage + India boost.
+            # Tiered opportunity rank + match score + Fresher advantage + bounded Mass Hiring + India boost.
             def _rank_key(j: NormalizedJob) -> tuple:
                 match_overall = j.match.get("overall", 0) if j.match else 0
                 tier = _job_tier(j, match_score=match_overall)
                 fresher_bonus = 8.0 if _is_entry_or_fresher(j) else 0.0
+
+                # Bounded mass hiring priority modifier only if active and sufficiently relevant
+                is_active_mass = _is_verified_active_mass_hiring(j)
+                mass_bonus = 6.0 if (is_active_mass and match_overall >= 45.0) else 0.0
+
                 ind = _india_first_score(j)
                 ind_boost = {3: 6.0, 2: 4.0, 1: 2.0, 0: 0.0}.get(ind, 0.0)
-                score = combined_rank_score(match_overall, j) + fresher_bonus + ind_boost
+                score = combined_rank_score(match_overall, j) + fresher_bonus + mass_bonus + ind_boost
                 return (
                     tier,
                     score,
@@ -413,7 +445,10 @@ class JobRelevanceService:
                 )
 
             filtered_jobs.sort(key=_rank_key, reverse=True)
-            filtered_jobs = self._diversify_by_company(filtered_jobs)
+            filtered_jobs = self._diversify_by_company(
+                filtered_jobs,
+                tier_getter=lambda j: _job_tier(j, match_score=j.match.get("overall", 0) if j.match else 0),
+            )
 
         # Paginate AFTER sorting/diversification.
         start = (page - 1) * page_size

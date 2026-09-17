@@ -871,3 +871,25 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
 
 ### 9.12 Regression Test Suite
 - **Full Suite Status:** 1,107 passed across application suite; 176/176 passed with 0 failures across all job intelligence tests (`test_job_discovery_3o.py`, `test_job_feed_fix.py`, `test_role_relevance_fixture.py`, `test_redis_config.py`, `test_redis_efficiency.py`, `test_applications_route_order.py`).
+
+### 9.13 Fresher-First & Mass-Hiring Production QA Pass (Final Stabilization)
+- **Mass-Hiring Detector Hardening (`mass_hiring_detector.py`):**
+  - Added strict incidental pattern filters eliminating vendor marketing ("provide mass hiring solutions") and recruiter job requirements ("previous hiring drive experience", "campus hiring operations") from false-positive verification.
+  - Required explicit campaign-specific indicators (walk-in drive, off-campus drive, batch drive, registration deadline, fresher drive).
+  - Robust multi-format deadline parser (`%Y-%m-%d`, `%d-%m-%Y`, `%d/%m/%Y`, `%d %b %Y`, etc.). Unparseable dates conservatively yield `status = "UNKNOWN"` without fabricating deadlines or defaulting to `ACTIVE`.
+- **Seniority Classification Precedence (`extraction_utils.py`):**
+  - Removed bare `"graduate"` keyword which incorrectly scored education degree text ("Graduate or above") as entry-level for senior roles.
+  - Enforced title seniority precedence: leadership titles ("Team Leader", "Engineering Manager", "Senior Backend Engineer") override body qualification text.
+- **Semantic-Relevance Gated Opportunity Tiers (`job_relevance_service.py`):**
+  - Eliminated arbitrary Tier 5 stomping and universal +95 freshness overrides.
+  - Replaced with semantic-relevance gated tiers (Tiers 0–4): unrelated mass-hiring (`match < 40`) remains Tier 0 and never outranks relevant fresh jobs.
+  - Bounded mass hiring priority modifier (+6.0) applied only if verified, active, and `match >= 45.0`.
+  - Tier-scoped company diversification (`_diversify_by_company(jobs, tier_getter=...)`) ensures high-priority opportunities are never pushed below lower-tier jobs during round-robin interleaving.
+- **5-Profile Benchmark on Live Inventory (2,952 jobs):**
+  - **Data Analyst:** 20/20 (100%) available, 4/20 entry, 17/20 (85%) India/remote-aligned, 17 unique companies. Top 1: Risk Analyst @ Paytm.
+  - **Backend Engineer:** 20/20 available, 2/20 entry, 15/20 (75%) India/remote-aligned, 5 unique companies. Top 1: Software Engineer @ OpenAI.
+  - **Data Engineer:** 20/20 available, 4/20 entry, 20/20 (100%) India/remote-aligned, 16 unique companies. Top 1: Software Engineer @ OpenAI.
+  - **AI/ML Engineer:** 20/20 available, 3/20 entry, 20/20 (100%) India/remote-aligned, 17 unique companies. Top 1: Software Engineer @ OpenAI.
+  - **SAP Consultant:** 20/20 available, 3/20 entry, 19/20 (95%) India/remote-aligned, 4 unique companies.
+- **Frontend Selection Synchronization (`_app.jobs.tsx`):**
+  - Added `setSelectedId(null)` on search parameter changes so job selection immediately synchronizes with the top opportunity of the updated query.
