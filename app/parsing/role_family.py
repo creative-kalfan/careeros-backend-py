@@ -126,6 +126,14 @@ _ROLE_FAMILY_PATTERNS: list[tuple[str, list[str]]] = [
 ]
 
 
+# Explicit non-technical titles that should never be mapped to technical families via description
+_NON_TECH_TITLE_PATTERN = re.compile(
+    r"\b(?:sales|marketing|recruiter|recruiting|talent\s+acquisition|hr|human\s+resources|legal|compliance|"
+    r"accountant|accounts\s+payable|accounts\s+receivable|payroll|receptionist|customer\s+service|cst|content\s+writer|"
+    r"helpdesk|vendor\s+onboarding|onboarding|support\s+desk|customer\s+support|virtual\s+drive|recruitment\s+drive)\b"
+)
+
+
 def classify_role_family(title: str, description: str = "") -> str:
     """Deterministically classify a role title into its canonical RoleFamily.
 
@@ -142,10 +150,19 @@ def classify_role_family(title: str, description: str = "") -> str:
             if re.search(pat, t_lower):
                 return family
 
+    # Guard: Non-technical titles never map to engineering families via description
+    if _NON_TECH_TITLE_PATTERN.search(t_lower):
+        return RoleFamily.OTHER
+
     # 2. If title is generic (e.g. "Engineer", "Developer", "Consultant", "Specialist")
     # or not matched, check description for explicit role family markers.
     d_lower = (description or "")[:1000].lower()
     for family, patterns in _ROLE_FAMILY_PATTERNS:
+        if family == RoleFamily.SAP_ERP:
+            # Description must explicitly indicate an SAP engineering/consulting role, not casual tool mention
+            if re.search(r"\b(?:abap|s/4hana|sap\s+(?:consultant|developer|engineer|specialist|lead|architect|functional|technical|basis|fico|hana|implementation))\b", d_lower):
+                return family
+            continue
         for pat in patterns:
             if re.search(pat, d_lower):
                 return family

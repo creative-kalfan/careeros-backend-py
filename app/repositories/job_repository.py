@@ -420,7 +420,11 @@ class JobRepository:
         if role:
             query = query.ilike("title", f"%{role}%")
         if location:
-            query = query.ilike("location", f"%{location}%")
+            loc_clean = location.strip()
+            if loc_clean.lower() in ("bangalore", "bengaluru"):
+                query = query.or_("location.ilike.%bangalore%,location.ilike.%bengaluru%")
+            else:
+                query = query.ilike("location", f"%{loc_clean}%")
         if role_category:
             query = query.eq("role_category", role_category)
         if company:
@@ -461,7 +465,11 @@ class JobRepository:
             if role:
                 chunk_query = chunk_query.ilike("title", f"%{role}%")
             if location:
-                chunk_query = chunk_query.ilike("location", f"%{location}%")
+                loc_clean = location.strip()
+                if loc_clean.lower() in ("bangalore", "bengaluru"):
+                    chunk_query = chunk_query.or_("location.ilike.%bangalore%,location.ilike.%bengaluru%")
+                else:
+                    chunk_query = chunk_query.ilike("location", f"%{loc_clean}%")
             if role_category:
                 chunk_query = chunk_query.eq("role_category", role_category)
             if company:

@@ -162,9 +162,11 @@ class PersonalizedJobService:
         if compat_label == "MISMATCH":
             return 5.0
 
+        baseline_score = round(85.0 * compat_mult, 1) if compat_label == "STRONG" else 0.0
+
         # Exact substring match (e.g., "data analyst" in "senior data analyst")
         if desired in title:
-            return round(100.0 * compat_mult, 1)
+            return max(round(100.0 * compat_mult, 1), baseline_score)
 
         desired_canonical = normalize_role(desired)
         job_canonical = normalize_role(title)
@@ -216,22 +218,22 @@ class PersonalizedJobService:
         if desired_tokens and title_tokens:
             overlap = desired_tokens & title_tokens
             if len(overlap) >= 2:
-                return 75.0
+                return max(75.0, baseline_score)
             if len(overlap) == 1:
                 desired_cat = classify(desired)
                 job_cat = classify(title)
                 if desired_cat == job_cat and desired_cat != "Other":
-                    return 65.0
-                return 40.0
+                    return max(65.0, baseline_score)
+                return max(40.0, baseline_score)
 
         category = (job.role_category or "").lower()
         if category:
             desired_cat = (classify(desired) or "").lower()
             if desired in category or (desired_cat and desired_cat in category):
-                return 50.0
+                return max(50.0, baseline_score)
 
         # Truly unrelated role family (e.g. Data Analyst vs Software Engineer)
-        return 5.0
+        return max(5.0, baseline_score)
 
     def _score_skill_match(self, job: NormalizedJob, profile: UserProfile) -> float:
         user_skills = [s.lower() for s in (profile.skills or []) if s]
