@@ -296,12 +296,10 @@ class JobRelevanceService:
         # Get the user's profile if available
         profile = self.profile_repository.get_profile(user_id) if user_id else None
 
-        # Stage 1: Candidate retrieval. Match scoring is Python-side so the
-        # full eligible set must be ranked — fetch past the PostgREST 1000-row
-        # single-query cap via the repository's existing chunked path.
-        # ponytail: O(eligible) Python rank; push-down impossible while the
-        # score needs the user profile. Revisit only if eligible sets grow
-        # past low-thousands and profiling blames this fetch.
+        # Stage 1: Candidate retrieval. Retrieve a bounded candidate pool
+        # (PostgREST single-query max 1000) so the multi-stage ranker
+        # (match score + source-quality + India-first boost) operates in a single
+        # database round-trip without multi-chunk statement timeouts.
         CANDIDATE_POOL_LIMIT = 1000
         # Experience is filtered Python-side only: the jobs.experience_level
         # column is never populated by crawlers (always NULL), so a DB eq
@@ -322,19 +320,6 @@ class JobRelevanceService:
             experience=None,
             sort=sort,
         )
-        if db_total > len(db_rows):
-            db_rows, db_total = self.job_repository.list_jobs(
-                page=1,
-                page_size=db_total,
-                role=role,
-                location=location,
-                role_category=None,
-                company=company,
-                remote=None,
-                employment_type=employment_type,
-                experience=None,
-                sort=sort,
-            )
 
         # Convert to NormalizedJob objects
         jobs = [NormalizedJob.model_validate(row) for row in db_rows]

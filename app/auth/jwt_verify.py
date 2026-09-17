@@ -128,6 +128,7 @@ class JWKSVerifier:
                 algorithms=ALLOWED_ALGORITHMS,
                 issuer=self.expected_issuer,
                 audience=self.expected_audience,
+                leeway=10,
                 options={
                     "require": REQUIRED_CLAIMS,
                     "verify_signature": True,

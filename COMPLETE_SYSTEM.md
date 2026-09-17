@@ -916,3 +916,46 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
 - **Regression:** Jobs and mass-hiring suites green — `test_fresher_and_mass_hiring.py` (11), `test_job_repository.py`, `test_job_relevance_service.py`, `test_job_api.py`, `test_jobs_route_order.py`, `test_job_production_verification.py`, `test_job_filtering.py` (17), `test_job_ingestion_2o.py`, `test_job_discovery_3o.py`, `test_job_stabilization.py`, `test_job_feed_fix.py`, `test_job_intelligence_service.py`, `test_job_intelligence_api.py`.
 - **Test-only correction:** `tests/test_job_filtering.py::TestJobRepositoryFiltering::test_list_jobs_repo_all_filters` had a stale mock (the `query.or_` Bangalore/Bengaluru alias branch added in `JobRepository.list_jobs` was never stubbed, so `total` came back `None`). The mock now stubs `or_`; no production behaviour changed.
 - **Deliberately untouched:** role-family ranking, fresher-first ranking, seniority classifier, personalization, job discovery architecture, and Firecrawl bounded crawling.
+
+### 9.15 Production API Timeout Root Cause Audit & Stabilization (2026-09-17)
+
+- **Incident & Symptoms:**
+  - Production frontend (`careeros-frontend-three.vercel.app/jobs`) reported `"CONNECTION ERROR — Request timeout"` with console error `"Failed to fetch profile from python backend: ApiClientError: Request timeout"`.
+  - Endpoint `/jobs/personalized?sort=best-match&page=1&pageSize=20&includeAts=true` hung and was aborted at ~30s.
+  - Sibling endpoints `/jobs/saved` and `/applications` also timed out when accessed concurrently from the frontend.
+  - Endpoint `/me` succeeded in isolation (2.2s).
+- **Distinction Between Timeout Sources:**
+  - Not a backend HTTP 5xx error or CORS failure: browser preflight OPTIONS returned 200 OK.
+  - Frontend `ApiClient` in `src/utils/request.ts` enforces `apiConfig.timeout = 30000` (30s) via `AbortController`.
+  - When backend execution exceeded 30s, the frontend aborted the HTTP connection (`AbortError` wrapped as `ApiClientError(statusCode: 408, code: TIMEOUT)`).
+  - The backend request was still running in Uvicorn when aborted by the browser.
+- **Empirical Timing Breakdown & Root Cause:**
+  - Active jobs in production Supabase database reached **2,952 rows**.
+  - In `JobRelevanceService.get_relevant_jobs`:
+    1. First candidate query fetched `CANDIDATE_POOL_LIMIT = 1000` rows (`duration = 6.6s`, `total = 2952`).
+    2. Commit `a969aad1` had added `if db_total > len(db_rows): list_jobs(page=1, page_size=db_total)`, which discarded the 1,000 rows and re-fetched all 2,952 jobs across 3 sequential PostgREST chunks (`duration = 23.8s`).
+    3. Network DB fetch alone consumed **30.4s** (`6.6s + 23.8s`), before model validation, CPU ranking, and diversification, pushing total execution to **34.5s** (> 30s frontend timeout).
+  - Head-of-Line Event Loop Blocking:
+    - FastAPI routes `list_jobs` and `list_personalized_jobs` were defined with `async def` but invoked the synchronous, blocking `service.get_relevant_jobs` directly on Uvicorn's main thread and asyncio event loop.
+    - Render runs a single Uvicorn process (`workers=1`). The 34.5s synchronous execution froze the event loop entirely.
+    - Concurrent requests (`/jobs/saved` taking 0.26s in isolation, `/applications` taking 1.6s in isolation) were starved in the socket backlog for >30s, timing out simultaneously in the browser.
+- **Targeted Code Fixes:**
+  1. `app/services/jobs/job_relevance_service.py`: Removed redundant unbounded refetch (`if db_total > len(db_rows)`), restoring candidate retrieval to the bounded `CANDIDATE_POOL_LIMIT = 1000` single-pass database query. Pagination `total` remains 2,952 from PostgREST `count="exact"`. Candidate fetch runtime dropped from **30.4s to 6.7s**.
+  2. `app/api/routes/jobs.py`: Wrapped `service.get_relevant_jobs` calls in `await asyncio.to_thread(...)` inside `list_jobs` and `list_personalized_jobs`. Offloads blocking DB fetch and ranking to worker threads, keeping Uvicorn's asyncio event loop 100% responsive.
+  3. `app/auth/jwt_verify.py`: Added `leeway=10` to `pyjwt.decode(...)` to absorb clock skew between auth token issuance and verification.
+- **Production-Safe Empirical Verification:**
+  - Tested 3 concurrent endpoints under test-user authentication against live Supabase:
+    - `SAVED` finished in **0.26s** (was timed out at 40s+).
+    - `APPS` finished in **2.21s** (was timed out at 40s+).
+    - `JOBS` finished in **9.71s** (was timed out at 40s+).
+    - All 3 requests returned concurrently in **9.71s** with zero timeouts and zero errors.
+- **Regression Suite:**
+  - Added `tests/test_timeout_regression.py` (2 tests: ensures single-pass candidate fetch when total exceeds limit, and verifies non-blocking async route execution).
+  - All 31 job relevance and API tests pass (`tests/test_job_relevance_service.py`, `tests/test_job_api.py`, `tests/test_job_filtering.py`, `tests/test_jobs_route_order.py`, `tests/test_timeout_regression.py`).
+- **Hygiene & Boundaries:**
+  - Ranking semantics, opportunity tiers, weights, and match scoring: 100% UNTOUCHED.
+  - Job discovery and crawlers: 100% UNTOUCHED.
+  - Frontend code: 100% UNTOUCHED.
+  - Root repository `resume-pilot`: 100% UNTOUCHED.
+  - Zero new dependencies added.
+

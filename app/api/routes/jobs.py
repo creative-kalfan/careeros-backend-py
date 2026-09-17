@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated, Any, Optional
 
@@ -46,7 +47,8 @@ async def list_jobs(
     """List all active jobs (unauthenticated)."""
     # Frontend sends camelCase pageSize; accept snake_case too.
     page_size = pageSize or page_size
-    jobs, total = service.get_relevant_jobs(
+    jobs, total = await asyncio.to_thread(
+        service.get_relevant_jobs,
         user_id=None,
         page=page,
         page_size=page_size,
@@ -95,7 +97,8 @@ async def list_personalized_jobs(
     """
     # Frontend sends camelCase pageSize; accept snake_case too.
     page_size = pageSize or page_size
-    jobs, total = service.get_relevant_jobs(
+    jobs, total = await asyncio.to_thread(
+        service.get_relevant_jobs,
         user_id=auth.user.id,
         page=page,
         page_size=page_size,
