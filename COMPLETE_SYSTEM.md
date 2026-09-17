@@ -959,3 +959,35 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - Root repository `resume-pilot`: 100% UNTOUCHED.
   - Zero new dependencies added.
 
+### 9.16 Candidate Universe Preservation & Targeted Priority Retrieval (2026-09-17)
+
+- **Post-Timeout Audit Finding & Root Cause:**
+  - Commit `d84d59f` eliminated the 30s timeout by capping candidate retrieval to the first 1,000 DB rows (by `created_at desc`) and removing the second full-table refetch.
+  - Empirical investigation against live production inventory (2,952 active jobs) revealed a candidate-universe regression:
+    1. **Fresher/Entry Opportunities Dropped:** Out of 97 total active entry/fresher jobs in the database, 52 (53.6%) were situated in rows 1,001–2,952. Under the naive 1,000 cutoff, these opportunities (e.g. OpenAI Emerging Talent, Notion Early Career, Uber/Databricks internships) were completely invisible to ranking.
+    2. **Mass-Hiring Risk:** Active verified mass-hiring opportunities (`VERIFIED_MASS_HIRING` + `ACTIVE`) older than the 1,000 most recent rows were excluded from candidate generation.
+    3. **Pagination Contract Broken:** `meta.total` returned 2,952, but only 1,000 jobs were ranked in memory. Requesting page 51 (`page=51, pageSize=20`) yielded `data: []` (premature emptiness).
+- **Smallest Safe Architecture — Targeted Priority Multi-Pool Retrieval:**
+  - Rather than unbounded full-table scans (which take 23–36s) or naive 1,000-row truncations:
+    1. `JobRepository.get_priority_candidates`: Executes bounded, targeted queries in a concurrent `ThreadPoolExecutor`:
+       - **Verified Mass-Hiring Pool:** `mass_hiring == 'VERIFIED_MASS_HIRING' AND mass_hiring_status == 'ACTIVE'`
+       - **Fresher/Entry Pool:** Titles and experience levels matching entry, fresher, junior, trainee, associate, early career, and new grad.
+       - **Role-Matched Pool:** Active opportunities matching the candidate's desired role or requested title filter.
+    2. `JobRelevanceService.get_relevant_jobs`:
+       - When `db_total > len(db_rows)`, merges targeted priority candidates into the base candidate pool with deduplication by `external_job_id`/`id`.
+       - Operates in ~8–12 seconds against live production Supabase, well below the 30-second frontend timeout.
+    3. **Truthful Pagination:** `total` is set to the actual size of the candidate pool (`len(jobs)` or `len(filtered_jobs)`). Pages never become empty prematurely, pagination metadata matches the ranked universe, and ordering is deterministic with zero duplicate IDs across pages.
+- **Empirical Live Production Verification:**
+  - Production DB inventory: 2,952 active jobs.
+  - Candidate pool retrieved: ~1,071–1,491 unique jobs (100% of verified mass hiring + 100% of fresher/entry opportunities + base 1,000).
+  - Production latency: Concurrent request wall time ~12–19s; `/saved` finishes in 0.62s non-blocking.
+  - Ranking integrity: `Software Engineer, Applied Emerging Talent (2027)` at OpenAI (row 1,020 in DB) correctly ranks #1 with match score 93 for entry-level engineering profiles.
+  - Regression suite: 56/56 job domain, feed fix, timeout, and candidate universe audit tests pass (`test_candidate_universe_audit.py`, `test_job_feed_fix.py`, `test_timeout_regression.py`, `test_fresher_and_mass_hiring.py`).
+- **Hygiene & Boundaries:**
+  - Ranking scoring formulas, opportunity tiers, and weights: 100% UNTOUCHED.
+  - Job discovery and crawlers: 100% UNTOUCHED.
+  - Frontend: 100% UNTOUCHED.
+  - Root repository `resume-pilot`: 100% UNTOUCHED.
+  - Zero new dependencies added.
+
+

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Optional
 
 from app.models.job import NormalizedJob
@@ -11,6 +12,8 @@ from app.repositories.job_repository import JobRepository
 from app.repositories.profile_repository import ProfileRepository
 from app.services.jobs.personalized_job_service import PersonalizedJobService
 from app.services.jobs.source_priority import combined_rank_score, source_quality_bonus
+
+logger = logging.getLogger(__name__)
 
 # India-indicative tokens for the India-first ranking boost. City list is the
 # single source of truth in india_geography (task §1 high-value cities);
@@ -296,18 +299,13 @@ class JobRelevanceService:
         # Get the user's profile if available
         profile = self.profile_repository.get_profile(user_id) if user_id else None
 
-        # Stage 1: Candidate retrieval. Retrieve a bounded candidate pool
-        # (PostgREST single-query max 1000) so the multi-stage ranker
-        # (match score + source-quality + India-first boost) operates in a single
-        # database round-trip without multi-chunk statement timeouts.
+        # Stage 1: Candidate retrieval. Retrieve base candidate pool (up to 1000)
+        # plus targeted priority opportunities (verified active mass-hiring,
+        # entry/fresher, and role-matched) so high-priority candidates outside the
+        # initial DB window enter the ranking universe without unbounded full-table scans.
         CANDIDATE_POOL_LIMIT = 1000
-        # Experience is filtered Python-side only: the jobs.experience_level
-        # column is never populated by crawlers (always NULL), so a DB eq
-        # filter zeroes every result. _python_filter infers level instead.
-        # Remote is likewise Python-side only: the DB matches location text
-        # while _python_filter matches the flag-or-location single definition,
-        # so a DB pre-filter silently drops flag-remote rows with plain city
-        # locations (and vice versa).
+        desired_role = profile.desired_role if profile else None
+
         db_rows, db_total = self.job_repository.list_jobs(
             page=1,
             page_size=CANDIDATE_POOL_LIMIT,
@@ -320,6 +318,25 @@ class JobRelevanceService:
             experience=None,
             sort=sort,
         )
+
+        if db_total > len(db_rows) and hasattr(self.job_repository, "get_priority_candidates"):
+            try:
+                priority_rows = self.job_repository.get_priority_candidates(
+                    role=role,
+                    location=location,
+                    company=company,
+                    employment_type=employment_type,
+                    desired_role=desired_role,
+                )
+                if priority_rows:
+                    seen_ids = {r.get("external_job_id") or r.get("id") for r in db_rows}
+                    for r in priority_rows:
+                        kid = r.get("external_job_id") or r.get("id")
+                        if kid and kid not in seen_ids:
+                            seen_ids.add(kid)
+                            db_rows.append(r)
+            except Exception:
+                logger.warning("get_priority_candidates failed; continuing with base candidate pool", exc_info=True)
 
         # Convert to NormalizedJob objects
         jobs = [NormalizedJob.model_validate(row) for row in db_rows]
@@ -410,7 +427,7 @@ class JobRelevanceService:
 
         # If no profile, apply India-first + Fresher-first opportunity ordering.
         if profile is None:
-            total = len(jobs) if has_python_filter else db_total
+            total = len(jobs)
             if sort in ("newest", "oldest", "salary"):
                 self._sort_jobs(jobs, sort)
             else:
@@ -442,7 +459,7 @@ class JobRelevanceService:
         for job in filtered_jobs:
             job.match = self.personalized_service.calculate_match_score(job, profile)
 
-        total = len(filtered_jobs) if has_python_filter else db_total
+        total = len(filtered_jobs)
 
         if sort in ("newest", "oldest", "salary"):
             self._sort_jobs(filtered_jobs, sort)

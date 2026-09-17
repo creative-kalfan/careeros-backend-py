@@ -531,3 +531,111 @@ class JobRepository:
             return rows[0] if rows else None
         except Exception:
             return None
+
+    def get_priority_candidates(
+        self,
+        role: Optional[str] = None,
+        location: Optional[str] = None,
+        company: Optional[str] = None,
+        employment_type: Optional[str] = None,
+        desired_role: Optional[str] = None,
+        limit_per_category: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Retrieve verified active mass-hiring, fresher/entry, and role-matched jobs.
+
+        Guarantees high-priority opportunities outside the first 1000 rows
+        enter the ranking universe without requiring an unbounded full-table scan.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _fetch_mass() -> list[dict[str, Any]]:
+            try:
+                q = (
+                    self._client.table("jobs")
+                    .select("*")
+                    .eq("is_active", True)
+                    .eq("mass_hiring", "VERIFIED_MASS_HIRING")
+                    .eq("mass_hiring_status", "ACTIVE")
+                )
+                if location:
+                    q = q.ilike("location", f"%{location}%")
+                if company:
+                    q = q.ilike("company", f"%{company}%")
+                if employment_type:
+                    q = q.ilike("employment_type", f"%{employment_type}%")
+                res = q.execute()
+                return res.data or []
+            except Exception:
+                logger.warning("get_priority_candidates: mass hiring query failed", exc_info=True)
+                return []
+
+        def _fetch_freshers() -> list[dict[str, Any]]:
+            try:
+                fresher_filter = (
+                    "title.ilike.%intern%,title.ilike.%fresher%,title.ilike.%junior%,"
+                    "title.ilike.%trainee%,title.ilike.%entry%,title.ilike.%associate%,"
+                    "title.ilike.%early career%,title.ilike.%early talent%,title.ilike.%new grad%,"
+                    "experience_level.ilike.%entry%,experience_level.ilike.%fresher%,experience_level.ilike.%intern%"
+                )
+                q = (
+                    self._client.table("jobs")
+                    .select("*")
+                    .eq("is_active", True)
+                    .or_(fresher_filter)
+                )
+                if location:
+                    q = q.ilike("location", f"%{location}%")
+                if company:
+                    q = q.ilike("company", f"%{company}%")
+                if employment_type:
+                    q = q.ilike("employment_type", f"%{employment_type}%")
+                res = q.execute()
+                return res.data or []
+            except Exception:
+                logger.warning("get_priority_candidates: fresher query failed", exc_info=True)
+                return []
+
+        def _fetch_role() -> list[dict[str, Any]]:
+            target = (role or desired_role or "").strip()
+            if not target:
+                return []
+            try:
+                q = (
+                    self._client.table("jobs")
+                    .select("*")
+                    .eq("is_active", True)
+                    .ilike("title", f"%{target}%")
+                    .limit(limit_per_category)
+                )
+                if location:
+                    q = q.ilike("location", f"%{location}%")
+                if company:
+                    q = q.ilike("company", f"%{company}%")
+                if employment_type:
+                    q = q.ilike("employment_type", f"%{employment_type}%")
+                res = q.execute()
+                return res.data or []
+            except Exception:
+                logger.warning("get_priority_candidates: role query failed", exc_info=True)
+                return []
+
+        try:
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                f_mass = pool.submit(_fetch_mass)
+                f_fresh = pool.submit(_fetch_freshers)
+                f_role = pool.submit(_fetch_role)
+                mass_rows = f_mass.result()
+                fresh_rows = f_fresh.result()
+                role_rows = f_role.result()
+
+            seen: set[str] = set()
+            out: list[dict[str, Any]] = []
+            for r in mass_rows + fresh_rows + role_rows:
+                rid = r.get("external_job_id") or r.get("id")
+                if rid and rid not in seen:
+                    seen.add(rid)
+                    out.append(r)
+            return out
+        except Exception:
+            logger.warning("get_priority_candidates failed", exc_info=True)
+            return []

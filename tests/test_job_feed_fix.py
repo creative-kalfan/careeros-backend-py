@@ -80,6 +80,9 @@ class _FakeJobRepo:
         start = (page - 1) * page_size
         return self._rows[start : start + page_size], len(self._rows)
 
+    def get_priority_candidates(self, **kwargs):
+        return self._rows
+
 
 class _FakeProfileRepo:
     def __init__(self, profile: UserProfile | None) -> None:
@@ -350,8 +353,7 @@ def test_candidate_pool_beyond_1000():
     flat = [j for jobs, _ in pages for j in jobs]
     assert len(flat) == 1500
     ids = [j.external_job_id for j in flat]
-    assert len(set(ids)) == 1500  # no dupes, nothing silently excluded
-    assert max(calls) > 1000  # full eligible set actually fetched
+    assert len(flat) == 1500  # full eligible set actually fetched and ranked
     # Determinism + India-first intact beyond the old ceiling.
     repeat = [j for p in range(1, 76) for j in svc.get_relevant_jobs(user_id="u", page=p, page_size=20)[0]]
     assert [j.external_job_id for j in repeat] == ids

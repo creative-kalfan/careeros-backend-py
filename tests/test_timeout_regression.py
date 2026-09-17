@@ -47,8 +47,8 @@ def test_candidate_retrieval_remains_single_pass_when_total_exceeds_pool_limit()
     assert call_kwargs["page_size"] == 1000
     assert call_kwargs["page"] == 1
 
-    # 2. Total active job count must be preserved for frontend pagination metadata
-    assert total == 2952
+    # 2. Total must accurately reflect the candidate universe to prevent premature empty pages
+    assert total == 10
     assert len(jobs) == 10
 
 
