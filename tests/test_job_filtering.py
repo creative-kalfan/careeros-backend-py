@@ -329,6 +329,7 @@ class TestJobRepositoryFiltering:
         mock_client.select.return_value = mock_client
         mock_client.eq.return_value = mock_client
         mock_client.ilike.return_value = mock_client
+        mock_client.or_.return_value = mock_client
         mock_client.order.return_value = mock_client
         mock_client.range.return_value = mock_client
         mock_client.execute.return_value = MagicMock(data=[{"id": "j1"}], count=1)

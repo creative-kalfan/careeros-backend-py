@@ -285,7 +285,7 @@ resume-pilot/ (Parent Wrapper)
 ## 7. Database Structure & Migrations
 
 **Database:** Supabase PostgreSQL 15+ (PostgREST + Auth + Storage).
-**Migrations (`sql/migrations/`):** Exactly 15 migration files (gaps 003–005 are historical consolidations).
+**Migrations (`sql/migrations/`):** Migration files `000`–`021` (gaps 003–005 are historical consolidations). The §7.1 inventory below enumerates `000`–`017`; `018`–`021` are covered by the Job Intelligence sections, and `021_mass_hiring.sql` was applied to production on 2026-09-17 (§9.14).
 
 ### 7.1 Migration Inventory
 1. `000_baseline_schema.sql`: Core tables (`profiles`, `jobs`, `applications`, `work_experiences`, `education_entries`, `preferred_companies`, `notifications`, `recommendations`, `saved_jobs`, `notification_preferences`, `company_ats_mapping`, `ats_reports`), RLS policies, indexes, and storage buckets (`resumes`, `avatars`).
@@ -893,3 +893,26 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - **SAP Consultant:** 20/20 available, 3/20 entry, 19/20 (95%) India/remote-aligned, 4 unique companies.
 - **Frontend Selection Synchronization (`_app.jobs.tsx`):**
   - Added `setSelectedId(null)` on search parameter changes so job selection immediately synchronizes with the top opportunity of the updated query.
+
+### 9.14 Mass-Hiring Schema Enablement — Migration 021 Applied (2026-09-17)
+
+- **Migration:** `sql/migrations/021_mass_hiring.sql` executed idempotently against the live Supabase project (Supabase Dashboard SQL Editor, `Success. No rows returned`). DDL only — three nullable columns plus two partial indexes; **no backfill, no UPDATE, no DELETE**.
+- **Live schema:** `jobs.mass_hiring` (text), `jobs.mass_hiring_status` (text), `jobs.mass_hiring_details` (jsonb), `idx_jobs_mass_hiring` and `idx_jobs_mass_hiring_status` (partial, `WHERE is_active = true`).
+- **Tooling added (canonical backend repo):**
+  - `scripts/apply_mass_hiring_migration.py` — idempotent applier; fingerprints `public.jobs` (row counts + id/is_active digest + per-source counts) before and after, and refuses to report success if any row count, source distribution, or content digest changed.
+  - `scripts/verify_mass_hiring_schema.py` — the 10-point live verifier over the normal application path; `--write-probe` performs a temporary INSERT → SELECT → UPDATE → SELECT → DELETE round-trip on an `is_active = false` sentinel row (invisible to every feed/relevance query, removed in `finally`).
+- **Production verification (live Supabase, 2026-09-17): 9 PASS / 0 FAIL / 1 SKIP**
+  1. `mass_hiring` exists — PASS
+  2. `mass_hiring_status` exists — PASS
+  3. `mass_hiring_details` exists — PASS
+  4. Mass-hiring indexes — SKIP (index introspection needs a direct Postgres connection; the DDL batch that created both indexes returned `Success. No rows returned`)
+  5. Normal repository SELECT uses the real columns, no lazy-column fallback — PASS (`_probe_has_mass_hiring() = True`)
+  6. Normal INSERT/UPDATE path persists the fields — PASS (3 fields round-tripped; sentinel deleted immediately; 0 probe rows remain)
+  7. Existing jobs unaffected — PASS (total = 5,900, active = 2,952, delta 0, no per-source drift)
+  8. No fake mass-hiring records — PASS (0 persisted classifications; every value canonical)
+  9. Truthful state preserved — PASS (deterministic detector over 2,952 active jobs: 0 VERIFIED / 7 POSSIBLE / 2,945 NOT; no persisted value contradicts the detector)
+  10. Firecrawl bounded, no broad recrawl — PASS (`FIRECRAWL_MAX_PAGES_PER_CRAWL = 15`; firecrawl rows 31 pre- and post-migration, delta 0)
+- **Truthfulness:** the migration adds storage only. Existing rows keep `mass_hiring = NULL` until the normal bounded ingestion path classifies them, so production remains **0 VERIFIED / 7 POSSIBLE** — nothing was backfilled, fabricated, or inflated.
+- **Regression:** Jobs and mass-hiring suites green — `test_fresher_and_mass_hiring.py` (11), `test_job_repository.py`, `test_job_relevance_service.py`, `test_job_api.py`, `test_jobs_route_order.py`, `test_job_production_verification.py`, `test_job_filtering.py` (17), `test_job_ingestion_2o.py`, `test_job_discovery_3o.py`, `test_job_stabilization.py`, `test_job_feed_fix.py`, `test_job_intelligence_service.py`, `test_job_intelligence_api.py`.
+- **Test-only correction:** `tests/test_job_filtering.py::TestJobRepositoryFiltering::test_list_jobs_repo_all_filters` had a stale mock (the `query.or_` Bangalore/Bengaluru alias branch added in `JobRepository.list_jobs` was never stubbed, so `total` came back `None`). The mock now stubs `or_`; no production behaviour changed.
+- **Deliberately untouched:** role-family ranking, fresher-first ranking, seniority classifier, personalization, job discovery architecture, and Firecrawl bounded crawling.
