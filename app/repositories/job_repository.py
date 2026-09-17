@@ -31,7 +31,10 @@ _CONTENT_FIELDS = (
     "title", "company", "location", "description", "url", "posted_at",
     "role_category", "application_deadline", "employment_type", "salary",
     "salary_min", "salary_max", "skills", "experience_level", "remote",
+    "mass_hiring", "mass_hiring_status", "mass_hiring_details",
 )
+
+_MASS_HIRING_FIELDS = ("mass_hiring", "mass_hiring_status", "mass_hiring_details")
 
 _DUPLICATE_KEY_CODE = "23505"
 
@@ -51,6 +54,7 @@ class JobRepository:
         # Column availability flags (probed lazily so tests can override).
         self._has_last_seen_at: Optional[bool] = None
         self._has_provenance: Optional[bool] = None
+        self._has_mass_hiring: Optional[bool] = None
 
     # ------------------------------------------------------------------
     # Column probing
@@ -75,6 +79,16 @@ class JobRepository:
             except Exception:
                 self._has_provenance = False
         return self._has_provenance
+
+    def _probe_has_mass_hiring(self) -> bool:
+        """Check whether mass_hiring columns exist (migration 021)."""
+        if self._has_mass_hiring is None:
+            try:
+                self._client.table("jobs").select("mass_hiring").limit(1).execute()
+                self._has_mass_hiring = True
+            except Exception:
+                self._has_mass_hiring = False
+        return self._has_mass_hiring
 
     # ------------------------------------------------------------------
     # Helpers
@@ -178,6 +192,8 @@ class JobRepository:
         now_iso = datetime.now(timezone.utc).isoformat()
         has_last_seen = self._probe_has_last_seen_at()
 
+        has_mass_hiring = self._probe_has_mass_hiring()
+
         for job in jobs:
             if not job.external_job_id or not job.source_platform:
                 skipped += 1
@@ -190,6 +206,9 @@ class JobRepository:
             seen_keys.add(key)
 
             row = job.to_db_row()
+            if not has_mass_hiring:
+                for f in _MASS_HIRING_FIELDS:
+                    row.pop(f, None)
             if has_last_seen:
                 row["last_seen_at"] = now_iso
 

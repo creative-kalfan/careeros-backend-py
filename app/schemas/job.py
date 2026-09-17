@@ -42,6 +42,9 @@ class JobOut(BaseModel):
     experience_level: Optional[str] = None
     match: Optional[dict[str, Any]] = None
     ats_score: Optional[float] = None
+    mass_hiring: Optional[str] = None
+    mass_hiring_status: Optional[str] = None
+    mass_hiring_details: Optional[dict[str, Any]] = None
     raw: Optional[dict[str, Any]] = None
 
     @classmethod
@@ -85,5 +88,8 @@ class JobOut(BaseModel):
             experience_level=row.get("experience_level"),
             match=row.get("match"),
             ats_score=row.get("ats_score") if row.get("ats_score") else None,
+            mass_hiring=row.get("mass_hiring"),
+            mass_hiring_status=row.get("mass_hiring_status"),
+            mass_hiring_details=row.get("mass_hiring_details"),
             raw=row.get("raw"),
         )

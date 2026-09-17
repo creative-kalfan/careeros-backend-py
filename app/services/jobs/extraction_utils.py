@@ -253,14 +253,30 @@ def extract_years_of_experience(text: str) -> tuple[float | None, float | None]:
 
 
 _SENIORITY_INDICATORS: dict[str, tuple[str, float]] = {
-    "entry level": ("entry", 0.9),
-    "entry-level": ("entry", 0.9),
-    "junior": ("junior", 0.85),
-    "associate": ("junior", 0.7),
+    "fresher": ("entry", 0.95),
+    "freshers": ("entry", 0.95),
+    "entry level": ("entry", 0.95),
+    "entry-level": ("entry", 0.95),
+    "entry": ("entry", 0.9),
+    "trainee": ("entry", 0.9),
+    "graduate trainee": ("entry", 0.95),
+    "management trainee": ("entry", 0.9),
+    "new graduate": ("entry", 0.95),
+    "recent graduate": ("entry", 0.95),
+    "graduate": ("entry", 0.85),
+    "apprentice": ("entry", 0.9),
+    "apprenticeship": ("entry", 0.9),
+    "junior": ("entry", 0.85),
+    "junior analyst": ("entry", 0.9),
+    "junior engineer": ("entry", 0.9),
+    "junior developer": ("entry", 0.9),
+    "intern": ("intern", 0.95),
+    "internship": ("intern", 0.95),
     "mid level": ("mid", 0.85),
     "mid-level": ("mid", 0.85),
     "intermediate": ("mid", 0.7),
     "senior": ("senior", 0.9),
+    "sr.": ("senior", 0.85),
     "lead": ("lead", 0.85),
     "staff": ("staff", 0.8),
     "principal": ("principal", 0.85),
@@ -269,21 +285,38 @@ _SENIORITY_INDICATORS: dict[str, tuple[str, float]] = {
     "vp": ("executive", 0.85),
     "vice president": ("executive", 0.9),
     "c-level": ("executive", 0.9),
-    "graduate": ("entry", 0.8),
-    "fresher": ("entry", 0.9),
-    "intern": ("intern", 0.9),
 }
 
 
 def classify_seniority(text: str, title: str | None = None) -> tuple[str | None, str]:
     """Classify seniority from text/title. Returns (level, confidence)."""
-    haystack = " ".join(filter(None, [text.lower(), (title or "").lower()]))
+    t_lower = (title or "").lower()
+    desc_lower = (text or "").lower()
+    haystack = f"{t_lower} {desc_lower}".strip()
+
+    # Explicit 0-1, 0-2 years check in title/text: strongly entry
+    if re.search(r"\b0\s*(?:[-–]|to)\s*[12]\s*(?:years?|yrs?)\b", haystack) or re.search(r"\b0\s*(?:years?|yrs?)\b", haystack):
+        return "entry", "high"
+
+    # Contextual check for 'associate': if title has associate but description or title has entry/junior/fresher/0-2 yrs, entry. Otherwise mid.
+    if re.search(r"\bassociate\b", t_lower):
+        if any(w in haystack for w in ("entry", "fresher", "junior", "trainee", "intern", "0-1", "0-2", "0 to 1", "0 to 2")):
+            return "entry", "high"
+        years_min, _ = extract_years_of_experience(haystack)
+        if years_min is not None and years_min <= 2:
+            return "entry", "high"
+        return "mid", "medium"
+
     best_level: str | None = None
     best_confidence = "low"
     best_score = 0.0
 
-    for indicator, (level, score) in _SENIORITY_INDICATORS.items():
-        if indicator in haystack:
+    # Match longest indicator first to avoid partial conflicts (e.g. 'entry level' before 'entry')
+    sorted_indicators = sorted(_SENIORITY_INDICATORS.items(), key=lambda x: len(x[0]), reverse=True)
+    for indicator, (level, score) in sorted_indicators:
+        # Match as word boundary if short or single word
+        pattern = rf"\b{re.escape(indicator)}\b"
+        if re.search(pattern, haystack):
             if score > best_score:
                 best_score = score
                 best_level = level

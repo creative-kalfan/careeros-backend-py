@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.models.job import NormalizedJob
@@ -77,6 +78,53 @@ def _recency_key(job: NormalizedJob) -> str:
     )
 
 
+def _get_job_seniority(job: NormalizedJob) -> str:
+    """Classify seniority level from job attributes, title, and description."""
+    lvl = (job.experience_level or "").lower().strip()
+    if lvl:
+        for key in ("entry", "fresher", "intern", "junior", "mid", "senior", "staff", "lead", "principal"):
+            if key in lvl:
+                return "entry" if key in ("entry", "fresher", "intern", "junior") else key
+        return lvl
+
+    try:
+        from app.services.jobs.extraction_utils import (
+            classify_seniority,
+            extract_years_of_experience,
+        )
+
+        inferred, _ = classify_seniority(job.description or "", job.title or "")
+        if inferred:
+            inf = inferred.lower()
+            return "entry" if inf in ("entry", "fresher", "intern", "junior") else inf
+
+        years_min, _ = extract_years_of_experience(f"{job.title or ''} {job.description or ''}")
+        if years_min is not None:
+            if years_min <= 2:
+                return "entry"
+            if years_min < 5:
+                return "mid"
+            if years_min < 8:
+                return "senior"
+            return "staff"
+    except Exception:
+        pass
+    return ""
+
+
+def _is_entry_or_fresher(job: NormalizedJob) -> bool:
+    """Check if job is entry-level, fresher, junior, or internship."""
+    return _get_job_seniority(job) in ("entry", "fresher", "intern", "junior")
+
+
+def _is_verified_active_mass_hiring(job: NormalizedJob) -> bool:
+    """Check if job is verified active mass hiring."""
+    return (
+        getattr(job, "mass_hiring", None) == "VERIFIED_MASS_HIRING"
+        and getattr(job, "mass_hiring_status", None) == "ACTIVE"
+    )
+
+
 class JobRelevanceService:
     """Combines repository and personalized service for job relevance."""
 
@@ -148,49 +196,7 @@ class JobRelevanceService:
                 "lead": {"staff", "principal", "lead"},
             }
             levels = groups.get(needle, {needle})
-
-            def _level_of(job: NormalizedJob) -> str:
-                lvl = (job.experience_level or "").lower().strip()
-                if lvl:
-                    if lvl in levels:
-                        return lvl
-                    # Stored values are free-form ("Entry Level"); match the
-                    # bucket keyword inside instead of requiring exact equality.
-                    for key in groups:
-                        if key in lvl:
-                            return key
-                    return lvl
-                # No crawler populates experience_level (always NULL in prod),
-                # so infer from title+description via the existing classifier,
-                # falling back to years-of-experience buckets when no keyword
-                # matches ("1-2 years" with no seniority word).
-                try:
-                    from app.services.jobs.extraction_utils import (
-                        classify_seniority,
-                        extract_years_of_experience,
-                    )
-
-                    inferred, _ = classify_seniority(
-                        job.description or "", job.title or ""
-                    )
-                    if inferred:
-                        return inferred.lower()
-                    years_min, _ = extract_years_of_experience(
-                        f"{job.title or ''} {job.description or ''}"
-                    )
-                    if years_min is not None:
-                        if years_min < 2:
-                            return "entry"
-                        if years_min < 5:
-                            return "mid"
-                        if years_min < 8:
-                            return "senior"
-                        return "staff"
-                except Exception:
-                    pass
-                return ""
-
-            result = [j for j in result if _level_of(j) in levels]
+            result = [j for j in result if _get_job_seniority(j) in levels]
 
         return result
 
@@ -313,23 +319,65 @@ class JobRelevanceService:
 
         has_python_filter = bool(company or skills or remote is not None or employment_type or experience)
 
-        # If no profile, apply India-first / dynamic ordering.
+        # Stage 0 Opportunity Tier / Fresher / Mass-Hiring helpers
+        def _job_tier(j: NormalizedJob, match_score: float = 0.0) -> int:
+            """Opportunity ranking tier (higher integer = better tier):
+            Tier 5: Active verified mass hiring + strong/good relevance (match >= 50)
+            Tier 4: Fresh entry/fresher (posted <= 7d or re-observed)
+            Tier 3: Active entry/fresher
+            Tier 2: Fresh relevant mid-level (match >= 50 or unauthenticated fresh)
+            Tier 1: Older ordinary relevant
+            Tier 0: Weakly relevant / expired
+            """
+            is_active_mass = _is_verified_active_mass_hiring(j)
+            is_entry = _is_entry_or_fresher(j)
+            rec = _recency_key(j)
+            is_fresh = False
+            if rec:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(rec.replace("Z", "+00:00"))
+                    now = datetime.now(dt.tzinfo or timezone.utc)
+                    is_fresh = (now - dt).total_seconds() / 86400 <= 7.0
+                except Exception:
+                    is_fresh = False
+
+            is_relevant = (match_score >= 45.0 or match_score == 0.0)
+
+            if is_active_mass and is_relevant:
+                return 5
+            if is_entry and is_fresh and is_relevant:
+                return 4
+            if is_entry and is_relevant:
+                return 3
+            if is_fresh and is_relevant:
+                return 2
+            if match_score >= 40.0 or match_score == 0.0:
+                return 1
+            return 0
+
+        # If no profile, apply India-first + Fresher-first opportunity ordering.
         if profile is None:
             total = len(jobs) if has_python_filter else db_total
             if sort in ("newest", "oldest", "salary"):
                 self._sort_jobs(jobs, sort)
             else:
-                # India-first without match scores; recent first as a
-                # deterministic tiebreak (canonical id last so pages are stable).
-                jobs.sort(
-                    key=lambda j: (
-                        _india_first_score(j),
-                        source_quality_bonus(j),
+                # Opportunity ranking: Tier first, India-first, source quality, recency.
+                # Fresher/entry gets intentional default advantage.
+                def _unauth_rank_key(j: NormalizedJob) -> tuple:
+                    tier = _job_tier(j, match_score=0.0)
+                    fresher_bonus = 10.0 if _is_entry_or_fresher(j) else 0.0
+                    ind = _india_first_score(j)
+                    score = fresher_bonus + source_quality_bonus(j)
+                    return (
+                        tier,
+                        score,
+                        ind,
                         _recency_key(j),
                         j.external_job_id or "",
-                    ),
-                    reverse=True,
-                )
+                    )
+
+                jobs.sort(key=_unauth_rank_key, reverse=True)
                 jobs = self._diversify_by_company(jobs)
             start = (page - 1) * page_size
             return jobs[start : start + page_size], total
@@ -347,15 +395,17 @@ class JobRelevanceService:
         if sort in ("newest", "oldest", "salary"):
             self._sort_jobs(filtered_jobs, sort)
         else:
-            # Stage 2 Ranking: match score + source-quality bonus + India/Bangalore boost.
-            # Bounded India boost strongly prioritizes India and Bangalore tech hubs
-            # for comparable matches without hiding high-relevance global roles.
+            # Stage 2 Ranking:
+            # Tiered opportunity rank + match score + Fresher advantage + India boost.
             def _rank_key(j: NormalizedJob) -> tuple:
                 match_overall = j.match.get("overall", 0) if j.match else 0
+                tier = _job_tier(j, match_score=match_overall)
+                fresher_bonus = 8.0 if _is_entry_or_fresher(j) else 0.0
                 ind = _india_first_score(j)
                 ind_boost = {3: 6.0, 2: 4.0, 1: 2.0, 0: 0.0}.get(ind, 0.0)
-                score = combined_rank_score(match_overall, j) + ind_boost
+                score = combined_rank_score(match_overall, j) + fresher_bonus + ind_boost
                 return (
+                    tier,
                     score,
                     ind,
                     _recency_key(j),

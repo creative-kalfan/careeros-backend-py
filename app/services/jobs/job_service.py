@@ -178,6 +178,25 @@ class JobService:
     def normalize_job(self, crawled: CrawledJob) -> NormalizedJob:
         """Convert a crawled job into the normalized CareerOS model."""
         canonical = canonicalize_url(crawled.apply_url) or None
+
+        # Detect mass hiring
+        from app.services.jobs.mass_hiring_detector import detect_mass_hiring
+        mass_info = detect_mass_hiring(
+            title=crawled.title,
+            description=crawled.description or "",
+            url=crawled.apply_url or "",
+            location=crawled.location or "",
+            deadline_str=crawled.expires_date,
+        )
+
+        # Experience level classification if missing
+        exp_lvl = crawled.experience_level
+        if not exp_lvl:
+            from app.services.jobs.extraction_utils import classify_seniority
+            inferred, _ = classify_seniority(crawled.description or "", crawled.title or "")
+            if inferred:
+                exp_lvl = inferred
+
         return NormalizedJob(
             external_job_id=crawled.external_job_id,
             source_platform=crawled.source_platform,
@@ -196,10 +215,13 @@ class JobService:
             apply_url=crawled.apply_url,
             posted_date=crawled.posted_date,
             expires_date=crawled.expires_date,
-            experience_level=crawled.experience_level,
+            experience_level=exp_lvl,
             skills=crawled.skills,
             requirements=crawled.requirements,
             responsibilities=crawled.responsibilities,
+            mass_hiring=mass_info.get("confidence"),
+            mass_hiring_status=mass_info.get("status"),
+            mass_hiring_details=mass_info,
             raw=crawled.raw,
         )
 

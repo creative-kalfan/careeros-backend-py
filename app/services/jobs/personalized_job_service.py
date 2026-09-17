@@ -408,6 +408,19 @@ class PersonalizedJobService:
         return 0.0
 
     def _score_freshness(self, job: NormalizedJob) -> float:
+        # Active mass-hiring override: an actively hiring mass-hiring campaign
+        # retains fresh priority even if the posting is older.
+        is_active_mass_hiring = (
+            getattr(job, "mass_hiring", None) == "VERIFIED_MASS_HIRING"
+            and getattr(job, "mass_hiring_status", None) == "ACTIVE"
+        )
+        if is_active_mass_hiring:
+            return 95.0
+
+        # Expired mass-hiring loses special boost:
+        if getattr(job, "mass_hiring_status", None) == "EXPIRED":
+            return 20.0
+
         # Observation-aware: re-observed jobs regain freshness without
         # rewriting posted_date. Score = max(posting age, observation age).
         posted_score = self._freshness_from_iso(job.posted_date)
@@ -419,7 +432,7 @@ class PersonalizedJobService:
     @staticmethod
     def _freshness_from_iso(value: object) -> float:
         if not value:
-            return 50.0
+            return 40.0
         try:
             posted = value
             if isinstance(posted, str):
@@ -427,15 +440,15 @@ class PersonalizedJobService:
                 posted_dt = datetime.fromisoformat(posted.replace("Z", "+00:00"))
                 now = datetime.now(posted_dt.tzinfo)
                 diff_days = (now - posted_dt).total_seconds() / 86400
-                if diff_days <= 3:
+                if diff_days <= 1:
                     return 100.0
                 if diff_days <= 7:
                     return 85.0
                 if diff_days <= 14:
-                    return 70.0
+                    return 60.0
                 if diff_days <= 30:
-                    return 50.0
-                return 30.0
+                    return 35.0
+                return 15.0
         except Exception:
-            return 50.0
-        return 50.0
+            return 40.0
+        return 40.0

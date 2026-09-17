@@ -58,6 +58,11 @@ class NormalizedJob(BaseModel):
     match: Optional[dict[str, float]] = None
     ats_score: Optional[float] = None
 
+    # Mass hiring intelligence
+    mass_hiring: Optional[str] = None
+    mass_hiring_status: Optional[str] = None
+    mass_hiring_details: Optional[dict[str, Any]] = None
+
     # Source provenance / quality (see app.crawlers.source_quality)
     source_tier: Optional[int] = None
     source_provider: Optional[str] = None
@@ -172,6 +177,9 @@ class NormalizedJob(BaseModel):
             "company_website",
             "careers_url",
             "logo_url",
+            "mass_hiring",
+            "mass_hiring_status",
+            "mass_hiring_details",
         }
     )
 
@@ -218,5 +226,8 @@ class NormalizedJob(BaseModel):
             "company_website": self.company_website,
             "careers_url": self.careers_url,
             "logo_url": self.logo_url,
+            "mass_hiring": self.mass_hiring,
+            "mass_hiring_status": self.mass_hiring_status,
+            "mass_hiring_details": self.mass_hiring_details,
         }
         return {k: v for k, v in row.items() if k in self._DB_COLUMNS and v is not None}

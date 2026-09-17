@@ -233,6 +233,15 @@ class FirecrawlAdapter(BaseCrawler):
         remote = "remote" in (title + " " + (location or "")).lower() or None
         posted_date = _extract_posted_date(description)
 
+        from app.services.jobs.mass_hiring_detector import detect_mass_hiring
+
+        mass_info = detect_mass_hiring(
+            title=title,
+            description=description,
+            url=url,
+            location=location or "",
+        )
+
         raw: dict[str, Any] = {
             "retrieval": "firecrawl",
             "careers_url": self.careers_url,
@@ -244,6 +253,9 @@ class FirecrawlAdapter(BaseCrawler):
             "ats_provider": detect_ats_provider(url),
             "aggregator": is_aggregator_url(url),
             "first_discovered_at": datetime.now(timezone.utc).isoformat(),
+            "mass_hiring": mass_info.get("confidence"),
+            "mass_hiring_status": mass_info.get("status"),
+            "mass_hiring_details": mass_info,
         }
 
         return CrawledJob(
