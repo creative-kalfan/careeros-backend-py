@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -104,6 +107,8 @@ ADZUNA_BATCH_SIZE = 3
 # ~6 calls/crawl/day, ~180/mo, well inside the ~1000/mo free allowance).
 ADZUNA_BROAD_COUNTRIES = ("in",)
 
+logger = logging.getLogger(__name__)
+
 
 class JobIngestionService:
     """Orchestrates the job ingestion pipeline."""
@@ -116,12 +121,29 @@ class JobIngestionService:
         self.job_repository = job_repository or JobRepository()
         self.job_service = job_service or JobService()
 
+    async def _persist_offloop(self, normalized_jobs: list) -> dict[str, int]:
+        """Run the synchronous N+1 Supabase upsert off the event loop.
+
+        ``upsert_jobs`` issues sequential blocking HTTP calls (one SELECT +
+        one INSERT/UPDATE per row). Awaiting it directly stalls ARQ polling,
+        Redis I/O, and APScheduler on the shared worker loop; ``to_thread``
+        preserves exact ordering/semantics while the loop stays responsive.
+        """
+        start = time.monotonic()
+        result = await asyncio.to_thread(self.job_repository.upsert_jobs, normalized_jobs)
+        logger.info(
+            "persistence duration_ms=%d phase=upsert discovered=%d",
+            int((time.monotonic() - start) * 1000),
+            len(normalized_jobs),
+        )
+        return result
+
     async def ingest_ashby_jobs(self, slug: str) -> dict[str, int]:
         """Ingest jobs from Ashby."""
         adapter = AshbyAdapter(slug)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return self.job_repository.upsert_jobs(normalized_jobs)
+        return await self._persist_offloop(normalized_jobs)
 
     async def ingest_greenhouse_jobs(self, slug: str, india_only: bool = False) -> dict[str, int]:
         """Ingest jobs from Greenhouse.
@@ -133,21 +155,21 @@ class JobIngestionService:
         adapter = GreenhouseAdapter(slug, india_only=india_only)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return self.job_repository.upsert_jobs(normalized_jobs)
+        return await self._persist_offloop(normalized_jobs)
 
     async def ingest_smartrecruiters_jobs(self, slug: str) -> dict[str, int]:
         """Ingest jobs from SmartRecruiters."""
         adapter = SmartRecruitersAdapter(slug)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return self.job_repository.upsert_jobs(normalized_jobs)
+        return await self._persist_offloop(normalized_jobs)
 
     async def ingest_lever_jobs(self, slug: str) -> dict[str, int]:
         """Ingest jobs from Lever."""
         adapter = LeverAdapter(slug)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return self.job_repository.upsert_jobs(normalized_jobs)
+        return await self._persist_offloop(normalized_jobs)
 
     def _apply_source_quality(self, job: NormalizedJob, careers_url: Optional[str] = None) -> NormalizedJob:
         """Attach verified source provenance to a normalized job.
@@ -192,7 +214,7 @@ class JobIngestionService:
             self._apply_source_quality(self.job_service.normalize_and_classify(j))
             for j in crawled_jobs
         ]
-        return self.job_repository.upsert_jobs(normalized_jobs)
+        return await self._persist_offloop(normalized_jobs)
 
     async def ingest_firecrawl_jobs(
         self,
@@ -219,7 +241,7 @@ class JobIngestionService:
             )
             for j in crawled_jobs
         ]
-        return self.job_repository.upsert_jobs(normalized_jobs)
+        return await self._persist_offloop(normalized_jobs)
 
     @staticmethod
     def adzuna_rotation_batch(ordinal: int, batch_size: int = ADZUNA_BATCH_SIZE) -> list[str]:
@@ -280,7 +302,7 @@ class JobIngestionService:
             crawled_jobs.extend(await adapter.search_by_query(extra, country="us", results_per_page=per_page))
 
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return self.job_repository.upsert_jobs(self._drop_invalid(normalized_jobs))
+        return await self._persist_offloop(self._drop_invalid(normalized_jobs))
 
     @staticmethod
     def _drop_invalid(jobs: list) -> list:
@@ -323,7 +345,7 @@ class JobIngestionService:
             self._apply_source_quality(self.job_service.normalize_and_classify(j))
             for j in crawled_jobs
         ]
-        return self.job_repository.upsert_jobs(self._drop_invalid(normalized_jobs))
+        return await self._persist_offloop(self._drop_invalid(normalized_jobs))
 
     async def ingest_all(self) -> dict[str, dict[str, int]]:
         """Ingest jobs from all configured sources.

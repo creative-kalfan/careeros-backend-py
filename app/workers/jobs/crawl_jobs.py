@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -89,6 +90,44 @@ async def _record_crawl_status(
         await redis.set(key, json.dumps(payload, default=str), ex=CRAWL_STATUS_TTL_SECONDS)
     except Exception as exc:  # non-blocking observability
         logger.warning("crawl-status write failed (non-blocking): %s", exc)
+
+
+def _deactivate_after_success(
+    ingestion: Any,
+    source: str,
+    slug: str,
+    crawl_started_at: str,
+    max_age_days: int,
+) -> tuple[int, int]:
+    """Synchronous post-ingestion deactivation; runs in a worker thread.
+
+    Ordering is load-bearing and preserved exactly: not-seen reconciliation
+    first (complete-inventory sources only), then the age-based staleness
+    backstop for all providers. Raises on DB errors so the caller keeps the
+    existing best-effort warning behavior.
+    """
+    not_seen_kwargs: dict[str, Any] = {}
+    if source == "firecrawl":
+        _, _, careers_url_scope = slug.partition("|")
+        not_seen_kwargs["careers_url"] = careers_url_scope
+    if _uses_complete_inventory(source):
+        deactivated_not_seen = ingestion.job_repository.deactivate_not_seen_since(
+            source_platform=source,
+            since_iso=crawl_started_at,
+            **not_seen_kwargs,
+        )
+    else:
+        logger.info(
+            "Skipping not-seen deactivation for %s (query-based provider: "
+            "today's bounded query rotation is not the full inventory)",
+            source,
+        )
+        deactivated_not_seen = 0
+    deactivated = ingestion.job_repository.deactivate_stale_jobs(
+        source_platform=source,
+        max_age_days=max_age_days,
+    )
+    return deactivated_not_seen, deactivated
 
 
 @register_job(
@@ -191,25 +230,20 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
     try:
         from app.config import get_settings
 
-        not_seen_kwargs: dict[str, Any] = {}
-        if source == "firecrawl":
-            _, _, careers_url_scope = slug.partition("|")
-            not_seen_kwargs["careers_url"] = careers_url_scope
-        if _uses_complete_inventory(source):
-            deactivated_not_seen = ingestion.job_repository.deactivate_not_seen_since(
-                source_platform=source,
-                since_iso=crawl_started_at,
-                **not_seen_kwargs,
-            )
-        else:
-            logger.info(
-                "Skipping not-seen deactivation for %s (query-based provider: "
-                "today's bounded query rotation is not the full inventory)",
-                source,
-            )
-        deactivated = ingestion.job_repository.deactivate_stale_jobs(
-            source_platform=source,
-            max_age_days=get_settings().job_stale_after_days,
+        max_age_days = get_settings().job_stale_after_days
+        persist_start = time.monotonic()
+        deactivated_not_seen, deactivated = await asyncio.to_thread(
+            _deactivate_after_success,
+            ingestion,
+            source,
+            slug,
+            crawl_started_at,
+            max_age_days,
+        )
+        logger.info(
+            "persistence duration_ms=%d phase=deactivation source=%s",
+            int((time.monotonic() - persist_start) * 1000),
+            source,
         )
     except Exception as exc:
         logger.warning(

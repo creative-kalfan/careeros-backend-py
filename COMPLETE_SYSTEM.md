@@ -1122,6 +1122,35 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
 - **Verify in worker logs:** `crawler scheduler initialization started`,
   `crawler scheduler started`, `next crawl scheduled id=...`.
 
+### 9.21 Sync persistence off the ARQ event loop (2026-09-23)
+
+- **Root cause:** `crawl_company_job` is `async`, but its persistence phase
+  is synchronous Supabase HTTP: `upsert_jobs()` (one SELECT + one
+  INSERT/UPDATE per row — ~1,750 blocking calls for an 878-row board) plus
+  `deactivate_not_seen_since()` / `deactivate_stale_jobs()`, all awaited
+  directly on the worker's single event loop. While blocked: ARQ polling,
+  Redis I/O, APScheduler, and sibling crawls stall — matching production's
+  delayed jobs, scheduler misfires, and `TimeoutError: Timeout connecting
+  to server` in `_record_crawl_status` (first Redis op after the block;
+  `socket_connect_timeout=1s`, unchanged). Pool exhaustion ruled out
+  (`max_connections=2**31` default; per-job Redis footprint is one `SET`).
+- **Fix (thread-offload only, zero config changes):**
+  `JobIngestionService._persist_offloop()` wraps all 8 `upsert_jobs` call
+  sites via `asyncio.to_thread`; `crawl_jobs._deactivate_after_success()`
+  wraps the not-seen→stale deactivation pair (ordering preserved) via
+  `asyncio.to_thread`. Return values, exceptions, retry, deactivation and
+  status semantics unchanged. No Redis/ARQ/scheduler/provider changes.
+  One timing line per phase: `persistence duration_ms=... phase=upsert|deactivation`.
+- **Tests:** `tests/test_crawl_persistence_offloop.py` (4 tests: off-loop
+  thread proof, exception propagation, deactivation ordering + result
+  shape, failure status behavior). Focused suites: 77 passed / 1 skipped
+  (live-Redis skip) + `test_job_discovery_3o` 7 passed; `compileall` clean.
+- **Production verification still required:** redeploy worker; confirm
+  `persistence duration_ms` lines appear, loop stays responsive under big
+  boards (no new misfires/delays), and `_record_crawl_status` timeouts stop.
+  If timeouts persist during idle periods, suspect raw TLS handshake
+  latency (H2) next.
+
 
 
 
