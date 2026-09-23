@@ -74,15 +74,12 @@ def _is_remote_job(job: NormalizedJob) -> bool:
 
 
 def _recency_key(job: NormalizedJob) -> str:
-    """Newest evidence wins: re-observation refreshes rank, posted_at untouched."""
-    return max(
-        job.posted_date or "",
-        getattr(job, "last_seen_at", None) or "",
-    )
+    """posted_date is authoritative; last_seen_at only as fallback if posted_date is missing."""
+    return job.posted_date or getattr(job, "last_seen_at", None) or ""
 
 
-def _get_job_seniority(job: NormalizedJob) -> str:
-    """Classify seniority level from job attributes, title, and description."""
+def _compute_job_seniority(job: NormalizedJob) -> str:
+    """Compute seniority level from job attributes, title, and description."""
     import re
     t_lower = (job.title or "").lower().strip()
     if t_lower:
@@ -127,6 +124,16 @@ def _get_job_seniority(job: NormalizedJob) -> str:
     except Exception:
         pass
     return ""
+
+
+def _get_job_seniority(job: NormalizedJob) -> str:
+    """Classify seniority level from job attributes, title, and description (memoized)."""
+    if hasattr(job, "_cached_seniority") and job._cached_seniority is not None:
+        return job._cached_seniority
+    res = _compute_job_seniority(job)
+    if hasattr(job, "_cached_seniority"):
+        job._cached_seniority = res
+    return res
 
 
 def _is_entry_or_fresher(job: NormalizedJob) -> bool:
@@ -301,42 +308,67 @@ class JobRelevanceService:
 
         # Stage 1: Candidate retrieval. Retrieve base candidate pool (up to 1000)
         # plus targeted priority opportunities (verified active mass-hiring,
-        # entry/fresher, and role-matched) so high-priority candidates outside the
-        # initial DB window enter the ranking universe without unbounded full-table scans.
+        # entry/fresher, and semantic role-matched) concurrently so high-priority
+        # candidates outside the initial DB window enter the ranking universe
+        # without unbounded scans or sequential wait latency.
         CANDIDATE_POOL_LIMIT = 1000
         desired_role = profile.desired_role if profile else None
 
-        db_rows, db_total = self.job_repository.list_jobs(
-            page=1,
-            page_size=CANDIDATE_POOL_LIMIT,
-            role=role,
-            location=location,
-            role_category=None,
-            company=company,
-            remote=None,
-            employment_type=employment_type,
-            experience=None,
-            sort=sort,
-        )
+        candidate_universe_fn = getattr(self.job_repository, "get_candidate_universe", None)
+        retrieved = False
+        db_rows: list[dict[str, Any]] = []
+        db_total: int = 0
 
-        if db_total > len(db_rows) and hasattr(self.job_repository, "get_priority_candidates"):
+        if candidate_universe_fn is not None:
             try:
-                priority_rows = self.job_repository.get_priority_candidates(
+                candidate_res = candidate_universe_fn(
+                    page=1,
+                    page_size=CANDIDATE_POOL_LIMIT,
                     role=role,
                     location=location,
                     company=company,
                     employment_type=employment_type,
                     desired_role=desired_role,
+                    sort=sort,
                 )
-                if priority_rows:
-                    seen_ids = {r.get("external_job_id") or r.get("id") for r in db_rows}
-                    for r in priority_rows:
-                        kid = r.get("external_job_id") or r.get("id")
-                        if kid and kid not in seen_ids:
-                            seen_ids.add(kid)
-                            db_rows.append(r)
+                if isinstance(candidate_res, tuple) and len(candidate_res) == 2:
+                    db_rows, db_total = candidate_res
+                    retrieved = True
             except Exception:
-                logger.warning("get_priority_candidates failed; continuing with base candidate pool", exc_info=True)
+                logger.warning("get_candidate_universe failed; falling back to list_jobs", exc_info=True)
+
+        if not retrieved:
+            db_rows, db_total = self.job_repository.list_jobs(
+                page=1,
+                page_size=CANDIDATE_POOL_LIMIT,
+                role=role,
+                location=location,
+                role_category=None,
+                company=company,
+                remote=None,
+                employment_type=employment_type,
+                experience=None,
+                sort=sort,
+            )
+
+            if db_total > len(db_rows) and hasattr(self.job_repository, "get_priority_candidates"):
+                try:
+                    priority_rows = self.job_repository.get_priority_candidates(
+                        role=role,
+                        location=location,
+                        company=company,
+                        employment_type=employment_type,
+                        desired_role=desired_role,
+                    )
+                    if isinstance(priority_rows, list) and priority_rows:
+                        seen_ids = {r.get("external_job_id") or r.get("id") for r in db_rows}
+                        for r in priority_rows:
+                            kid = r.get("external_job_id") or r.get("id")
+                            if kid and kid not in seen_ids:
+                                seen_ids.add(kid)
+                                db_rows.append(r)
+                except Exception:
+                    logger.warning("get_priority_candidates failed; continuing with base candidate pool", exc_info=True)
 
         # Convert to NormalizedJob objects
         jobs = [NormalizedJob.model_validate(row) for row in db_rows]

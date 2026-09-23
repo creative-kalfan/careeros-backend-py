@@ -90,6 +90,20 @@ class JobRepository:
                 self._has_mass_hiring = False
         return self._has_mass_hiring
 
+    def _get_candidate_select_columns(self) -> str:
+        """Return projected columns for candidate universe queries to eliminate payload bloat."""
+        base = (
+            "id,title,company,location,description,url,posted_at,role_category,is_active,"
+            "source_platform,external_job_id,remote,workplace_type,employment_type,"
+            "salary_min,salary_max,experience_level,skills,"
+            "source_tier,source_provider,canonical_url,source_verified,source_confidence"
+        )
+        if self._probe_has_last_seen_at():
+            base += ",last_seen_at"
+        if self._probe_has_mass_hiring():
+            base += ",mass_hiring,mass_hiring_status,mass_hiring_details"
+        return base
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -415,7 +429,8 @@ class JobRepository:
         experience (eq). Sort: newest/oldest (posted_at), salary (salary_max).
         """
         offset = (page - 1) * page_size
-        query = self._client.table("jobs").select("*", count="exact").eq("is_active", True)
+        cols = self._get_candidate_select_columns()
+        query = self._client.table("jobs").select(cols, count="exact").eq("is_active", True)
 
         if role:
             query = query.ilike("title", f"%{role}%")
@@ -461,7 +476,7 @@ class JobRepository:
         while len(rows) < min(page_size, total_count):
             start = offset + len(rows)
             end = min(offset + page_size, offset + len(rows) + 1000) - 1
-            chunk_query = self._client.table("jobs").select("*").eq("is_active", True)
+            chunk_query = self._client.table("jobs").select(cols).eq("is_active", True)
             if role:
                 chunk_query = chunk_query.ilike("title", f"%{role}%")
             if location:
@@ -541,18 +556,20 @@ class JobRepository:
         desired_role: Optional[str] = None,
         limit_per_category: int = 500,
     ) -> list[dict[str, Any]]:
-        """Retrieve verified active mass-hiring, fresher/entry, and role-matched jobs.
+        """Retrieve verified active mass-hiring, fresher/entry, and semantic role-matched jobs.
 
         Guarantees high-priority opportunities outside the first 1000 rows
         enter the ranking universe without requiring an unbounded full-table scan.
         """
         from concurrent.futures import ThreadPoolExecutor
 
+        cols = self._get_candidate_select_columns()
+
         def _fetch_mass() -> list[dict[str, Any]]:
             try:
                 q = (
                     self._client.table("jobs")
-                    .select("*")
+                    .select(cols)
                     .eq("is_active", True)
                     .eq("mass_hiring", "VERIFIED_MASS_HIRING")
                     .eq("mass_hiring_status", "ACTIVE")
@@ -574,12 +591,12 @@ class JobRepository:
                 fresher_filter = (
                     "title.ilike.%intern%,title.ilike.%fresher%,title.ilike.%junior%,"
                     "title.ilike.%trainee%,title.ilike.%entry%,title.ilike.%associate%,"
-                    "title.ilike.%early career%,title.ilike.%early talent%,title.ilike.%new grad%,"
+                    "title.ilike.%early%career%,title.ilike.%early%talent%,title.ilike.%new%grad%,"
                     "experience_level.ilike.%entry%,experience_level.ilike.%fresher%,experience_level.ilike.%intern%"
                 )
                 q = (
                     self._client.table("jobs")
-                    .select("*")
+                    .select(cols)
                     .eq("is_active", True)
                     .or_(fresher_filter)
                 )
@@ -600,13 +617,40 @@ class JobRepository:
             if not target:
                 return []
             try:
-                q = (
-                    self._client.table("jobs")
-                    .select("*")
-                    .eq("is_active", True)
-                    .ilike("title", f"%{target}%")
-                    .limit(limit_per_category)
-                )
+                import re
+                from app.parsing.role_family import get_semantic_role_expansion
+
+                expansions = get_semantic_role_expansion(target)
+                clean_terms = [re.sub(r"[^\w\s]", "", exp).strip() for exp in expansions if exp.strip()]
+                clean_terms = [t for t in clean_terms if t][:10]
+
+                if len(clean_terms) > 1:
+                    role_filter = ",".join(f"title.ilike.%{t.replace(' ', '%')}%" for t in clean_terms)
+                    q = (
+                        self._client.table("jobs")
+                        .select(cols)
+                        .eq("is_active", True)
+                        .or_(role_filter)
+                        .limit(limit_per_category)
+                    )
+                elif clean_terms:
+                    clean_target = clean_terms[0].replace(" ", "%")
+                    q = (
+                        self._client.table("jobs")
+                        .select(cols)
+                        .eq("is_active", True)
+                        .ilike("title", f"%{clean_target}%")
+                        .limit(limit_per_category)
+                    )
+                else:
+                    clean_target = target.replace(" ", "%")
+                    q = (
+                        self._client.table("jobs")
+                        .select(cols)
+                        .eq("is_active", True)
+                        .ilike("title", f"%{clean_target}%")
+                        .limit(limit_per_category)
+                    )
                 if location:
                     q = q.ilike("location", f"%{location}%")
                 if company:
@@ -624,6 +668,7 @@ class JobRepository:
                 f_mass = pool.submit(_fetch_mass)
                 f_fresh = pool.submit(_fetch_freshers)
                 f_role = pool.submit(_fetch_role)
+
                 mass_rows = f_mass.result()
                 fresh_rows = f_fresh.result()
                 role_rows = f_role.result()
@@ -639,3 +684,173 @@ class JobRepository:
         except Exception:
             logger.warning("get_priority_candidates failed", exc_info=True)
             return []
+
+    def get_candidate_universe(
+        self,
+        page: int = 1,
+        page_size: int = 1000,
+        role: Optional[str] = None,
+        location: Optional[str] = None,
+        company: Optional[str] = None,
+        employment_type: Optional[str] = None,
+        desired_role: Optional[str] = None,
+        sort: Optional[str] = None,
+        limit_per_priority_category: int = 500,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Retrieve candidate universe concurrently (base pool + priority pools in a single pool).
+
+        Preserves 100% candidate universe coverage while eliminating sequential wait latency.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        cols = self._get_candidate_select_columns()
+
+        def _fetch_base() -> tuple[list[dict[str, Any]], int]:
+            try:
+                q = self._client.table("jobs").select(cols, count="exact").eq("is_active", True)
+                if role:
+                    q = q.ilike("title", f"%{role}%")
+                if location:
+                    loc_clean = location.strip()
+                    if loc_clean.lower() in ("bangalore", "bengaluru"):
+                        q = q.or_("location.ilike.%bangalore%,location.ilike.%bengaluru%")
+                    else:
+                        q = q.ilike("location", f"%{loc_clean}%")
+                if company:
+                    q = q.ilike("company", f"%{company}%")
+                if employment_type:
+                    q = q.ilike("employment_type", f"%{employment_type}%")
+
+                if sort == "newest":
+                    q = q.order("posted_at", desc=True)
+                elif sort == "oldest":
+                    q = q.order("posted_at", desc=False)
+                elif sort == "salary":
+                    q = q.order("salary_max", desc=True)
+                else:
+                    q = q.order("created_at", desc=True)
+
+                res = q.range(0, page_size - 1).execute()
+                return (res.data or []), (res.count or 0)
+            except Exception:
+                logger.warning("get_candidate_universe: base query failed", exc_info=True)
+                return [], 0
+
+        def _fetch_mass() -> list[dict[str, Any]]:
+            try:
+                q = (
+                    self._client.table("jobs")
+                    .select(cols)
+                    .eq("is_active", True)
+                    .eq("mass_hiring", "VERIFIED_MASS_HIRING")
+                    .eq("mass_hiring_status", "ACTIVE")
+                )
+                if location:
+                    q = q.ilike("location", f"%{location}%")
+                if company:
+                    q = q.ilike("company", f"%{company}%")
+                if employment_type:
+                    q = q.ilike("employment_type", f"%{employment_type}%")
+                res = q.execute()
+                return res.data or []
+            except Exception:
+                logger.warning("get_candidate_universe: mass query failed", exc_info=True)
+                return []
+
+        def _fetch_freshers() -> list[dict[str, Any]]:
+            try:
+                fresher_filter = (
+                    "title.ilike.%intern%,title.ilike.%fresher%,title.ilike.%junior%,"
+                    "title.ilike.%trainee%,title.ilike.%entry%,title.ilike.%associate%,"
+                    "title.ilike.%early%career%,title.ilike.%early%talent%,title.ilike.%new%grad%,"
+                    "experience_level.ilike.%entry%,experience_level.ilike.%fresher%,experience_level.ilike.%intern%"
+                )
+                q = (
+                    self._client.table("jobs")
+                    .select(cols)
+                    .eq("is_active", True)
+                    .or_(fresher_filter)
+                )
+                if location:
+                    q = q.ilike("location", f"%{location}%")
+                if company:
+                    q = q.ilike("company", f"%{company}%")
+                if employment_type:
+                    q = q.ilike("employment_type", f"%{employment_type}%")
+                res = q.execute()
+                return res.data or []
+            except Exception:
+                logger.warning("get_candidate_universe: fresher query failed", exc_info=True)
+                return []
+
+        def _fetch_role() -> list[dict[str, Any]]:
+            target = (role or desired_role or "").strip()
+            if not target:
+                return []
+            try:
+                import re
+                from app.parsing.role_family import get_semantic_role_expansion
+
+                expansions = get_semantic_role_expansion(target)
+                clean_terms = [re.sub(r"[^\w\s]", "", exp).strip() for exp in expansions if exp.strip()]
+                clean_terms = [t for t in clean_terms if t][:10]
+
+                if len(clean_terms) > 1:
+                    role_filter = ",".join(f"title.ilike.%{t.replace(' ', '%')}%" for t in clean_terms)
+                    q = (
+                        self._client.table("jobs")
+                        .select(cols)
+                        .eq("is_active", True)
+                        .or_(role_filter)
+                        .limit(limit_per_priority_category)
+                    )
+                elif clean_terms:
+                    clean_target = clean_terms[0].replace(" ", "%")
+                    q = (
+                        self._client.table("jobs")
+                        .select(cols)
+                        .eq("is_active", True)
+                        .ilike("title", f"%{clean_target}%")
+                        .limit(limit_per_priority_category)
+                    )
+                else:
+                    clean_target = target.replace(" ", "%")
+                    q = (
+                        self._client.table("jobs")
+                        .select(cols)
+                        .eq("is_active", True)
+                        .ilike("title", f"%{clean_target}%")
+                        .limit(limit_per_priority_category)
+                    )
+                if location:
+                    q = q.ilike("location", f"%{location}%")
+                if company:
+                    q = q.ilike("company", f"%{company}%")
+                if employment_type:
+                    q = q.ilike("employment_type", f"%{employment_type}%")
+                res = q.execute()
+                return res.data or []
+            except Exception:
+                logger.warning("get_candidate_universe: role query failed", exc_info=True)
+                return []
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            f_base = pool.submit(_fetch_base)
+            f_mass = pool.submit(_fetch_mass)
+            f_fresh = pool.submit(_fetch_freshers)
+            f_role = pool.submit(_fetch_role)
+
+            base_rows, db_total = f_base.result()
+            mass_rows = f_mass.result()
+            fresh_rows = f_fresh.result()
+            role_rows = f_role.result()
+
+        seen_ids = {r.get("external_job_id") or r.get("id") for r in base_rows}
+        for r in mass_rows + fresh_rows + role_rows:
+            kid = r.get("external_job_id") or r.get("id")
+            if kid and kid not in seen_ids:
+                seen_ids.add(kid)
+                base_rows.append(r)
+
+        return base_rows, db_total
+

@@ -73,10 +73,30 @@ ADZUNA_BROAD_QUERIES = [
     "data analyst Pune",
     "software engineer Pune",
     "data analyst Mumbai",
-    # Batch 13 (Day % 13 == 12)
+    # Batch 13 (Day % 18 == 12)
     "data analyst Chennai",
     "software engineer Chennai",
     "data analyst Gurugram",
+    # Batch 14: Fresher Data Engineering (Day % 18 == 13)
+    "junior data engineer India",
+    "fresher data engineer India",
+    "graduate data engineer India",
+    # Batch 15: Fresher SAP / ERP (Day % 18 == 14)
+    "SAP fresher India",
+    "junior SAP India",
+    "entry level SAP India",
+    # Batch 16: Fresher Analytics / BI (Day % 18 == 15)
+    "junior data analyst India",
+    "fresher data analyst India",
+    "graduate data analyst India",
+    # Batch 17: Fresher Backend (Day % 18 == 16)
+    "junior backend engineer India",
+    "fresher backend developer India",
+    "graduate backend developer India",
+    # Batch 18: Fresher AI / ML & Trainees (Day % 18 == 17)
+    "junior machine learning engineer India",
+    "fresher AI engineer India",
+    "trainee data engineer India",
 ]
 ADZUNA_BATCH_SIZE = 3
 # Broad rotation is India-scoped only; the primary query already covers

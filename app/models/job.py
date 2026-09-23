@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 # Jobs older than this many days are considered stale and hidden from results.
 STALE_JOB_DAYS = 30
@@ -18,6 +18,9 @@ STALE_JOB_DAYS = 30
 
 class NormalizedJob(BaseModel):
     """A job normalized into the CareerOS representation."""
+
+    # Internal memoization (never serialized or persisted)
+    _cached_seniority: Optional[str] = PrivateAttr(default=None)
 
     # Persisted identity
     id: Optional[str] = None

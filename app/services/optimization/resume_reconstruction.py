@@ -56,7 +56,7 @@ _WEAK_OPENERS = re.compile(
     re.IGNORECASE,
 )
 
-# Common problem/trigger patterns in engineering, data, finance, and operations
+# Common problem/trigger patterns across 6 domains (Data Analyst, Business Analyst, Data Engineer, Backend Engineer, AI/ML, SAP/ERP)
 _PROBLEM_TRIGGERS: List[Tuple[Tuple[str, ...], str]] = [
     (("data inconsistenc", "discrepanc", "bad data", "cleaning", "dirty data"), "recurring data inconsistencies"),
     (("manual reconcil", "reconciliation", "invoice lag", "billing delay"), "manual reconciliation bottlenecks"),
@@ -66,9 +66,16 @@ _PROBLEM_TRIGGERS: List[Tuple[Tuple[str, ...], str]] = [
     (("repetitive task", "manual entry", "manual work", "time consuming"), "repetitive manual workflows"),
     (("communication gap", "misalignment", "cross team", "silo"), "cross-functional coordination gaps"),
     (("unclear req", "vague", "stakeholder alignment"), "ambiguous reporting requirements"),
+    # Domain-specific additions
+    (("kpi tracking", "metric gap", "reporting delay", "dashboard delay"), "reporting latency and fragmented KPI tracking"),
+    (("business requirement", "brd", "gap analysis", "process map", "user stories"), "ambiguous business process workflows and requirement misalignment"),
+    (("etl failure", "pipeline failure", "data pipeline", "schema drift", "ingestion lag"), "data ingestion bottlenecks and pipeline reliability risks"),
+    (("api latency", "endpoint slow", "concurrency", "rate limit", "service timeout"), "API latency bottlenecks and throughput constraints"),
+    (("model drift", "inference delay", "training bottleneck", "overfitting", "feature store"), "model inference latency and feature processing overhead"),
+    (("sap config", "idoc failure", "idoc error", "posting error", "functional spec"), "ERP transaction processing exceptions and integration bottlenecks"),
 ]
 
-# Qualitative outcome templates logically mapped to candidate actions
+# Qualitative outcome templates logically mapped to candidate actions across 6 domains
 _QUALITATIVE_OUTCOMES: List[Tuple[Tuple[str, ...], str]] = [
     (("churn", "retention", "customer segmentation"), "to identify behavioral patterns and support customer segmentation"),
     (("customer data", "user data", "churn"), "to identify behavioral patterns and support customer segmentation"),
@@ -79,6 +86,13 @@ _QUALITATIVE_OUTCOMES: List[Tuple[Tuple[str, ...], str]] = [
     (("dashboard", "reporting", "reports", "metrics"), "improving stakeholder visibility and operational tracking"),
     (("usability", "onboarding", "redesign", "ux", "wireframe"), "enhancing user engagement and interface clarity"),
     (("automated", "automation", "script"), "reducing repetitive manual tasks and improving execution consistency"),
+    # Domain-specific qualitative outcomes
+    (("power bi", "tableau", "looker", "kpi"), "delivering executive decision-making visibility and real-time KPI tracking"),
+    (("brd", "user stories", "jira", "confluence", "requirements"), "ensuring cross-functional stakeholder alignment and streamlined delivery acceptance"),
+    (("pipeline", "etl", "airflow", "spark", "kafka", "dbt"), "ensuring timely data availability and fault-tolerant pipeline execution"),
+    (("grpc", "fastapi", "microservice", "asyncio", "cache", "redis"), "improving service responsiveness and horizontal scalability under high concurrency"),
+    (("machine learning", "pytorch", "tensorflow", "transformer", "embedding", "llm", "scikit"), "enhancing inference efficiency and predictive accuracy across production workloads"),
+    (("sap", "erp", "idoc", "bapi", "fico", "mm", "sd", "hana"), "improving enterprise process continuity and reducing system transaction turnaround time"),
 ]
 
 

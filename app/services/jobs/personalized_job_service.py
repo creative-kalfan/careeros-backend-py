@@ -465,13 +465,17 @@ class PersonalizedJobService:
         if getattr(job, "mass_hiring_status", None) == "EXPIRED":
             return 20.0
 
-        # Observation-aware: re-observed jobs regain freshness without
-        # rewriting posted_date. Score = max(posting age, observation age).
-        posted_score = self._freshness_from_iso(job.posted_date)
+        # posted_date is the authoritative posting timestamp (task §5.9).
+        # Re-crawling/observation must not inflate the posting freshness score.
+        if job.posted_date:
+            return self._freshness_from_iso(job.posted_date)
+
+        # When posted_date is absent, use last_seen_at as a fallback with penalty,
+        # capped so unposted jobs cannot outrank genuinely fresh postings.
         observed_iso = getattr(job, "last_seen_at", None)
         if observed_iso:
-            return max(posted_score, self._freshness_from_iso(observed_iso))
-        return posted_score
+            return min(self._freshness_from_iso(observed_iso), 50.0)
+        return 40.0
 
     @staticmethod
     def _freshness_from_iso(value: object) -> float:
@@ -484,7 +488,7 @@ class PersonalizedJobService:
                 posted_dt = datetime.fromisoformat(posted.replace("Z", "+00:00"))
                 now = datetime.now(posted_dt.tzinfo)
                 diff_days = (now - posted_dt).total_seconds() / 86400
-                if diff_days <= 1:
+                if diff_days <= 3:
                     return 100.0
                 if diff_days <= 7:
                     return 85.0

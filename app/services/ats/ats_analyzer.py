@@ -54,12 +54,44 @@ class ATSAnalyzer:
 
         Returns a human-readable section identifier like "skills",
         "experience[0]", "projects[1]", etc., or None if not found.
+        Experiential sections are prioritized over bare skills to reward demonstrated proof.
         """
         if not evidence_text:
             return None
         ev_lower = evidence_text.lower()
 
-        # Skills section
+        # 1. Experience section (highest proof)
+        for i, exp in enumerate(profile.experience):
+            for bullet in exp.get_all_bullet_texts():
+                if ev_lower in bullet.lower() or bullet.lower() in ev_lower:
+                    return f"experience[{i}]"
+            for tool in exp.tools:
+                if tool.lower() in ev_lower or ev_lower in tool.lower():
+                    return f"experience[{i}].tools"
+
+        # 2. Internships
+        for i, intern in enumerate(profile.internships):
+            for bullet in intern.get_all_bullet_texts():
+                if ev_lower in bullet.lower() or bullet.lower() in ev_lower:
+                    return f"internships[{i}]"
+            for tool in intern.tools:
+                if tool.lower() in ev_lower or ev_lower in tool.lower():
+                    return f"internships[{i}].tools"
+
+        # 3. Projects
+        for i, proj in enumerate(profile.projects):
+            for tech in proj.technologies:
+                if tech.lower() in ev_lower or ev_lower in tech.lower():
+                    return f"projects[{i}].technologies"
+            if proj.description and (ev_lower in proj.description.lower() or proj.description.lower() in ev_lower):
+                return f"projects[{i}]"
+
+        # 4. Achievements
+        for i, ach in enumerate(profile.achievements):
+            if ev_lower in ach.lower() or ach.lower() in ev_lower:
+                return f"achievements[{i}]"
+
+        # 5. Skills section (bare keyword listing)
         s = profile.skills
         if s:
             for item in s.technical + s.tools + s.languages + s.databases + s.analytics + s.soft_skills:
@@ -70,33 +102,7 @@ class ATSAnalyzer:
                     if item.lower() in ev_lower or ev_lower in item.lower():
                         return "skills"
 
-        # Experience section
-        for i, exp in enumerate(profile.experience):
-            for bullet in exp.get_all_bullet_texts():
-                if ev_lower in bullet.lower() or bullet.lower() in ev_lower:
-                    return f"experience[{i}]"
-            for tool in exp.tools:
-                if tool.lower() in ev_lower or ev_lower in tool.lower():
-                    return f"experience[{i}].tools"
-
-        # Internships
-        for i, intern in enumerate(profile.internships):
-            for bullet in intern.get_all_bullet_texts():
-                if ev_lower in bullet.lower() or bullet.lower() in ev_lower:
-                    return f"internships[{i}]"
-            for tool in intern.tools:
-                if tool.lower() in ev_lower or ev_lower in tool.lower():
-                    return f"internships[{i}].tools"
-
-        # Projects
-        for i, proj in enumerate(profile.projects):
-            for tech in proj.technologies:
-                if tech.lower() in ev_lower or ev_lower in tech.lower():
-                    return f"projects[{i}].technologies"
-            if proj.description and (ev_lower in proj.description.lower() or proj.description.lower() in ev_lower):
-                return f"projects[{i}]"
-
-        # Education
+        # 6. Education
         for i, edu in enumerate(profile.education):
             if edu.degree and (ev_lower in edu.degree.lower() or edu.degree.lower() in ev_lower):
                 return f"education[{i}]"
@@ -106,19 +112,14 @@ class ATSAnalyzer:
                 if cw.lower() in ev_lower or ev_lower in cw.lower():
                     return f"education[{i}].coursework"
 
-        # Certifications
+        # 7. Certifications
         for i, cert in enumerate(profile.certifications):
             if cert.name and (ev_lower in cert.name.lower() or cert.name.lower() in ev_lower):
                 return f"certifications[{i}]"
 
-        # Summary
+        # 8. Summary
         if profile.summary and ev_lower in profile.summary.lower():
             return "summary"
-
-        # Achievements
-        for i, ach in enumerate(profile.achievements):
-            if ev_lower in ach.lower() or ach.lower() in ev_lower:
-                return f"achievements[{i}]"
 
         return None
 
@@ -133,6 +134,8 @@ class ATSAnalyzer:
     ) -> str:
         """Generate a user-safe explanation for the requirement evidence mapping."""
         if final_status == "matched":
+            if evidence_source_section == "skills":
+                return f"'{requirement}' is mentioned in your skills section without demonstrated experiential context."
             section_desc = _SECTION_DESCRIPTIONS.get(evidence_source_section.split("[")[0] if evidence_source_section else "", "your resume")
             if reasoning_source == "LLM":
                 base = f"Your resume contains evidence satisfying the '{requirement}' requirement, identified through semantic analysis."
@@ -331,9 +334,16 @@ class ATSAnalyzer:
             status_w = _STATUS_WEIGHT.get(status, 0.0)
             effective_weight = imp * status_w
 
+            # Locate which resume section provided the evidence
+            source_section = self._locate_evidence_section(profile, evidence) if (profile and evidence) else None
+
             if status == "matched":
                 ev_list = [evidence]
-                ev_level = EvidenceLevel.STRONG
+                # Distinguish bare skill mentions from demonstrated experiential context
+                if source_section == "skills":
+                    ev_level = EvidenceLevel.PARTIAL
+                else:
+                    ev_level = EvidenceLevel.STRONG
             elif status == "partial":
                 ev_list = [evidence]
                 ev_level = EvidenceLevel.PARTIAL
@@ -359,9 +369,6 @@ class ATSAnalyzer:
                     missing_kw.append(canonical)
                 kw_weight_total += imp
                 kw_weight_hit += effective_weight
-
-            # Locate which resume section provided the evidence
-            source_section = self._locate_evidence_section(profile, evidence) if evidence else None
 
             # Generate user-safe explanation
             explanation = self._generate_evidence_explanation(
@@ -469,7 +476,7 @@ class ATSAnalyzer:
                     # Filter out common stop words
                     meaningful_intersection = {w for w in intersection if len(w) > 3}
 
-                    if len(meaningful_intersection) >= 2 or any(word in bullet.lower() for word in ["analyze", "dashboard", "reporting", "built", "develop"] if word in resp_lower):
+                    if len(meaningful_intersection) >= 2 or any(stem in bullet.lower() for stem in ["analyz", "dashboard", "report", "build", "built", "develop", "engin", "design", "implement", "document", "manag", "lead", "config"] if stem in resp_lower):
                         evidence.append(bullet)
                         found_in_exp = True
 
@@ -479,7 +486,7 @@ class ATSAnalyzer:
             # Search in projects
             for proj in profile.projects:
                 found_in_proj = False
-                if proj.description and any(word in proj.description.lower() for word in ["analyze", "dashboard", "build", "develop", "report"] if word in resp_lower):
+                if proj.description and any(stem in proj.description.lower() for stem in ["analyz", "dashboard", "build", "built", "develop", "report", "engin", "design", "document", "manag", "lead", "config"] if stem in resp_lower):
                     evidence.append(proj.description)
                     found_in_proj = True
 
@@ -491,7 +498,9 @@ class ATSAnalyzer:
                 # If there's at least one evidence with very high overlap, mark as STRONG
                 has_strong = False
                 for ev in evidence:
-                    if any(word in ev.lower() for word in ["analyze", "dashboard", "build", "develop", "report"] if word in resp_lower):
+                    ev_words = set(re.findall(r"\w+", ev.lower()))
+                    overlap = {w for w in ev_words.intersection(resp_words) if len(w) > 3}
+                    if len(overlap) >= 2 or any(stem in ev.lower() for stem in ["analyz", "dashboard", "report", "build", "built", "develop", "engin", "design", "implement", "document", "manag", "lead", "config"] if stem in resp_lower):
                         has_strong = True
                         break
                 if has_strong or len(evidence) >= 2:

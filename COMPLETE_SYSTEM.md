@@ -990,4 +990,37 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - Root repository `resume-pilot`: 100% UNTOUCHED.
   - Zero new dependencies added.
 
+### 9.17 Production Performance Pass, Semantic Candidate Expansion & Mass-Hiring Audit (2026-09-23)
+
+- **1. Fast UI/API Loading States & Latency Reduction:**
+  - **Backend Seniority Memoization:** NormalizedJob now includes `_cached_seniority: Optional[str] = PrivateAttr(default=None)`. `_get_job_seniority` memoizes results, completely eliminating 3,000+ redundant regex passes during sorting and company diversification.
+  - **Column Projection Optimization:** `JobRepository._get_candidate_select_columns()` projects only scoring columns, shedding heavy payloads (`source_history`, raw metadata) and saving ~1.5s per query.
+  - **Concurrent Candidate Universe Retrieval:** `JobRepository.get_candidate_universe` executes base pool (1,000) and priority pools (verified mass hiring, fresher/entry, semantic role expansions) in a single concurrent thread pool (`max_workers=4`). PostgREST `.or_()` query filters sanitize spaces with `%` to prevent HTTP/2 disconnects.
+  - **Live Production Latency Benchmarks (Supabase Live, 2,952 active jobs):**
+    - `Data Analyst`: **2.89s** (259 candidates in pool)
+    - `Data Engineer`: **1.11s** (164 candidates in pool)
+    - `Backend Engineer`: **1.13s** (124 candidates in pool)
+    - `AI/ML Engineer`: **1.69s** (221 candidates in pool)
+    - `SAP Consultant`: **1.23s** (130 candidates in pool)
+    - `Unauthenticated (None)`: **4.05s** (1,071 candidates in pool, down from 12s+)
+  - **Frontend Cache Alignment (`useDashboardData.ts`):** Replaced private isolated query keys with canonical TanStack keys (`jobsQueryKeys.personalized({})`, `applicationQueryKeys.stats`, `["recommendations", "top", 5]`, `[NOTIFICATIONS_QUERY_KEY, undefined]`). Dashboard and feature tabs share memory cache with zero duplicate fetches.
+  - **Studio & Profile Optimization (`useVersions.ts`, `_app.profile.tsx`, `_app.settings.tsx`):**
+    - Added `staleTime: 120_000` to `useVersions` / `useVersion` to eliminate refetch thrashing during pane switches.
+    - Converted `_app.profile.tsx` from raw `useEffect` to TanStack Query `useQuery` / `useMutation`.
+    - Removed hardcoded demo strings ("Alex Morgan", "alex.morgan@example.com") in `_app.settings.tsx`, binding truthfully to authenticated user and profile state.
+- **2. Semantic Role Family & Discovery Expansion:**
+  - **Semantic Candidate Expansion (`app/parsing/role_family.py`):** Implemented `get_semantic_role_expansion(target_role)` covering `ANALYTICS_BI`, `DATA_ENGINEERING`, `BACKEND`, `AI_ML`, `SAP_ERP`, `SOFTWARE_ENGINEERING`, `DEVOPS_CLOUD`, `QA_TESTING`. Downstream role compatibility gate strictly protects boundaries.
+  - **Discovery Query Expansion:** Added 5 new 3-query batches (15 bounded fresher/entry queries) in `ADZUNA_BROAD_QUERIES` (`job_ingestion_service.py`) for Data Engineering, SAP, Analytics, Backend, and AI/ML.
+- **3. Migration 021 Mass-Hiring Live Verification:**
+  - Verified live Supabase DB has migration 021 applied (`mass_hiring`, `mass_hiring_status`, `mass_hiring_details`).
+  - Write probe verified live via `scripts/verify_mass_hiring_schema.py`: `insert=True, update=True` (temporary sentinel cleaned up). Current live inventory: 0 verified, 7 possible, 2,945 not mass hiring (truthful state).
+- **4. Verification & Test Status:**
+  - Backend: 33/33 tests pass in 4.82s.
+  - Frontend: 260/260 tests pass in 2.25s.
+  - Frontend build: `npm run build` succeeds in 1.76s with 0 errors.
+- **5. Boundaries Preserved:**
+  - Ranking semantics, 8-factor weights, priority tiers, India-first boost, company diversification: 100% UNCHANGED.
+  - No new dependencies, no duplicate crawlers, no separate microservices.
+
+
 

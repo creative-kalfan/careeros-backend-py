@@ -121,6 +121,8 @@ _ROLE_FAMILY_PATTERNS: list[tuple[str, list[str]]] = [
             r"\bfull[-\s]?stack\b", r"\bfront[-\s]?end\b",
             r"\bapplication\s+engineer\b", r"\bapplication\s+developer\b",
             r"\bweb\s+developer\b", r"\bswe\b", r"\bsde\b",
+            r"\bsoftware\s+trainee\b", r"\bengineer\s+trainee\b",
+            r"\bsoftware\s+intern\b", r"\bsoftware\s+engineering\b",
         ],
     ),
 ]
@@ -249,3 +251,86 @@ def evaluate_role_compatibility(
 
     # Default fallback when families differ
     return "MISMATCH", 0.05
+
+
+# Deterministic semantic role expansion dictionary mapping canonical families
+# to known equivalent titles, bounded adjacent titles, and entry-level variants.
+_ROLE_FAMILY_EXPANSIONS: dict[str, list[str]] = {
+    RoleFamily.ANALYTICS_BI: [
+        "data analyst", "business analyst", "bi analyst", "bi developer",
+        "business intelligence", "reporting analyst", "product analyst",
+        "operations analyst", "financial analyst", "marketing analyst",
+        "data analytics", "risk analyst", "quantitative analyst",
+        "mis analyst", "mis executive", "junior data analyst",
+        "graduate data analyst", "associate data analyst", "fresher data analyst",
+    ],
+    RoleFamily.DATA_ENGINEERING: [
+        "data engineer", "data engineering", "analytics engineer",
+        "etl engineer", "etl developer", "data platform engineer",
+        "data infrastructure engineer", "big data engineer",
+        "data warehouse engineer", "data pipeline", "database engineer",
+        "junior data engineer", "associate data engineer",
+        "graduate data engineer", "trainee data engineer", "fresher data engineer",
+    ],
+    RoleFamily.BACKEND: [
+        "backend engineer", "backend developer", "back end engineer",
+        "back end developer", "api engineer", "api developer",
+        "server side engineer", "server side developer", "python backend",
+        "java developer", "golang developer", "node developer",
+        "junior backend engineer", "associate backend engineer",
+        "graduate backend engineer", "fresher backend developer",
+    ],
+    RoleFamily.AI_ML: [
+        "machine learning", "ml engineer", "ai engineer", "applied scientist",
+        "research scientist", "nlp", "computer vision", "deep learning",
+        "mlops", "data scientist", "generative ai", "junior ml engineer",
+        "graduate ml engineer", "fresher ai engineer", "associate ml engineer",
+    ],
+    RoleFamily.SAP_ERP: [
+        "sap", "abap", "fico", "hana", "basis", "sap mm", "sap sd", "sap bw",
+        "erp consultant", "sap consultant", "sap developer", "sap fresher",
+        "junior sap", "entry level sap", "sap trainee", "associate sap",
+    ],
+    RoleFamily.SOFTWARE_ENGINEERING: [
+        "software engineer", "software developer", "full stack",
+        "application engineer", "swe", "sde", "software trainee",
+        "engineer trainee", "junior software engineer",
+        "associate software engineer", "graduate software engineer",
+        "fresher software engineer",
+    ],
+    RoleFamily.DEVOPS_CLOUD: [
+        "devops", "site reliability", "sre", "cloud engineer",
+        "platform engineer", "infrastructure engineer",
+    ],
+    RoleFamily.QA_TESTING: [
+        "qa", "quality assurance", "test engineer", "automation engineer",
+        "sdet", "software tester",
+    ],
+}
+
+
+def get_semantic_role_expansion(target_role: str) -> list[str]:
+    """Deterministically expand a target role string into equivalent and entry-level title variants.
+
+    Reuses canonical RoleFamily taxonomy. Bounded and deduplicated.
+    """
+    clean = (target_role or "").strip().lower()
+    if not clean:
+        return []
+
+    family = classify_role_family(clean)
+    expansions = _ROLE_FAMILY_EXPANSIONS.get(family, [])
+
+    seen: set[str] = set()
+    result: list[str] = []
+
+    # Target itself is always first
+    seen.add(clean)
+    result.append(clean)
+
+    for item in expansions:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+
+    return result
