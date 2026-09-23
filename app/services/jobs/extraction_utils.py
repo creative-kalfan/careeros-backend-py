@@ -227,9 +227,9 @@ def extract_section_content(text: str, headers: list[str] | None = None) -> dict
 # ---------------------------------------------------------------------------
 
 _EXPERIENCE_PATTERNS = [
-    re.compile(r"(\d+)\s*[-–to]\s*(\d+)\s*years?", re.IGNORECASE),
-    re.compile(r"(\d+)\s*[\+-]?\s*years?", re.IGNORECASE),
-    re.compile(r"(\d+)\s*years?", re.IGNORECASE),
+    re.compile(r"(\d+)\s*(?:[-–]|to)\s*(\d+)\s*(?:years?|yrs?)", re.IGNORECASE),
+    re.compile(r"(\d+)\s*[\+-]?\s*(?:years?|yrs?)", re.IGNORECASE),
+    re.compile(r"(\d+)\s*(?:years?|yrs?)", re.IGNORECASE),
 ]
 
 
@@ -329,19 +329,19 @@ def classify_seniority(text: str, title: str | None = None) -> tuple[str | None,
 
     # Extract years of experience from title + description
     haystack_raw = f"{t_lower} {desc_lower}".strip()
-    years_min, _ = extract_years_of_experience(haystack_raw)
+    years_min, years_max = extract_years_of_experience(haystack_raw)
 
-    # If experience explicitly requires 3+ years, it can NEVER be classified as entry
-    if years_min is not None and years_min >= 3:
+    # 2. Years of experience boundaries:
+    # 0 to 2 years -> entry; 2-3+ years -> mid; 5+ years -> senior; 7+ years -> lead
+    if years_min is not None:
         if years_min >= 7:
             return "lead", "high"
         if years_min >= 5:
             return "senior", "high"
-        return "mid", "medium"
-
-    # 2. Explicit 0-1, 0-2 years check in title/text: strongly entry
-    if re.search(r"\b0\s*(?:[-–]|to)\s*[12]\s*(?:years?|yrs?)\b", haystack_raw) or re.search(r"\b0\s*(?:years?|yrs?)\b", haystack_raw):
-        return "entry", "high"
+        if years_min >= 3 or (years_min >= 2 and (years_max is None or years_max > 2)):
+            return "mid", "medium"
+        if years_min <= 1 or (years_min <= 2 and years_max is not None and years_max <= 2):
+            return "entry", "high"
 
     # 3. Clean description for keyword scanning:
     # Filter out mentorship phrasing (e.g. "mentor junior developers" is NOT a junior job)

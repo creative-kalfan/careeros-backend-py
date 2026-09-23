@@ -1022,5 +1022,50 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - Ranking semantics, 8-factor weights, priority tiers, India-first boost, company diversification: 100% UNCHANGED.
   - No new dependencies, no duplicate crawlers, no separate microservices.
 
+### 9.18 Production Job Feed Consistency, Freshness & Seniority Correction (2026-09-23)
+
+- **1. Production Audit & Root Cause Analysis:**
+  - **Symptom:** UI screenshot on `/jobs` ("SHOWING 1–20 OF 1,177 OPPORTUNITIES", `RANKED BY MATCH`) showed a 2-week-old "Data Analyst" role with a description describing sales incentives / commissions / sales operations and requiring "2–5 years" experience mixed into the fresher feed. Genuinely new jobs were reported missing from the first page.
+  - **Source Integrity Finding (Q3):** Title and description belong to the exact same requisition from the source provider (Adzuna). In corporate sales operations, roles with the literal title "Data Analyst" commonly handle incentive compensation modeling and quota analysis requiring 2–5 years experience. Zero cross-record contamination or mapping corruption exists in the pipeline.
+  - **Seniority Misclassification Root Cause:** In `extraction_utils.py` and `job_relevance_service.py`, experience check `if years_min <= 2: return "entry"` evaluated to `True` for `"2–5 years"` (where `years_min = 2, years_max = 5`). This caused 2–5 year experienced roles to be falsely classified as `"entry"`, triggering the fresher bonus (+8.0 / +10.0 pts) and elevating them into Tier 4 (Priority A: ENTRY/FRESHER) on page 1.
+  - **Recent-Job Visibility Root Cause (Q1/Q2):** In databases with >1,000 active jobs, the candidate universe previously relied on `_fetch_base` (ordered by `created_at desc`). When older crawl batches occupied the top 1,000 insertion slots, recently-posted jobs without explicit fresher/entry keywords were omitted from the candidate pool.
+
+- **2. Targeted Architectural Corrections:**
+  - **Experience & Seniority Boundaries (`extraction_utils.py`, `job_relevance_service.py`):**
+    - `0 years`, `0–1 years`, `0–2 years`, `1–2 years` strictly map to `"entry"`.
+    - `2–3 years`, `2–5 years`, `3–5 years` (where `years_min >= 2` and `years_max > 2` or `years_min >= 3`) strictly map to `"mid"`.
+    - `5+ years` maps to `"senior"`; `7+ years` maps to `"lead"`.
+    - `_EXPERIENCE_PATTERNS` regex hardened to support `(?:[-–]|to)` and both `years?` and `yrs?`.
+    - Screenshot job ("Data Analyst / Sales Operations / 2–5 years") now cleanly classifies as `"mid"`, drops `_is_entry_or_fresher = False`, receives 0 fresher bonus, and is demoted from Tier 4 to Tier 2 (mid-level baseline).
+  - **Bounded Recent Candidate Pool (`JobRepository.get_candidate_universe`, `get_priority_candidates`):**
+    - Added `_fetch_recent`: retrieves active opportunities ordered by `posted_at desc nullsfirst=False` (bounded to 500 rows).
+    - Executed concurrently in `ThreadPoolExecutor(max_workers=5)` alongside `_fetch_base`, `_fetch_mass`, `_fetch_freshers`, and `_fetch_role`.
+    - Bounded merge with deduplication guarantees that the freshest-posted jobs in the database always enter the candidate universe for ranking, without unbounded full-table scans and without modifying base pool semantics or changing ranking weights.
+
+- **3. Empirical Live Production Verification (Supabase Live, 2,952 active jobs):**
+  - **Active Job Inventory by Freshness:**
+    - `<= 24h`: 0 | `<= 3d`: 0 | `<= 7d`: 1 | `8–14d`: 78 | `15–30d`: 71 | `> 30d`: 36 | `missing posted_at` (ATS jobs): 814 (27.6%).
+  - **Candidate Universe & Pool Impact:**
+    - `_fetch_recent` rows returned: 500.
+    - Base pool rows: 1,000.
+    - Overlap: 179.
+    - **Genuinely new jobs rescued into universe: 321** (previously omitted from ranking pool).
+    - Candidate universe size: 1,365 unique jobs (0 duplicate IDs).
+    - Latency: `_fetch_base` = 1,568.1ms; `_fetch_recent` = 1,226.9ms; concurrent wall time = 3,471.9ms (added network latency: ~0ms due to concurrent execution).
+  - **Top 20 Feed Breakdown Across 5 Profiles:**
+    - `Data Analyst` (pool: 1,374, latency: 6.7s): #1 = `Data Analyst (Fresher)` at Clovity (2026-09-16, 79% match); #2 = `Accelerator Program - Data Analyst` at Jobgether (2026-09-12, 73% match); #3 = `Data Analyst` at Lonza (2026-09-11, 73% match).
+    - `Data Engineer` (pool: 1,379, latency: 6.6s): #1 = `IT Controls Data Engineer` at OpenAI; #2 = `Data Engineer - INTL India` at Insight Global.
+    - `Backend Engineer` (pool: 1,373, latency: 6.7s): #1 = `Software Engineer Intern (Winter 2027)` at Notion; #2 = `2026 Software Engineering Internship India` at Uber.
+    - `AI/ML Engineer` (pool: 1,425, latency: 6.8s): #1 = `Data Science Intern (Winter 2027)` at Notion; #2 = `AI Engineer, Internship` at Postman; #3 = `PhD GenAI Research Scientist Intern` at Databricks.
+    - `SAP Consultant` (pool: 1,375, latency: 6.5s): #1 = `SAP ABAP Developer` at Diensten Tech (2026-09-12); #2 = `SAP ABAP Consultant - Fiori` at Dautom (2026-09-13).
+  - **Screenshot Job Verification:** Data Analyst with sales operations / 2–5 years experience classified as `'mid'`, `_is_entry_or_fresher = False`, match score 83% without fresher bonus.
+  - **Mass-Hiring & Recency Invariants:**
+    - 60-day-old active verified mass hiring evaluates to `freshness = 85.0` (exception intact). Expired mass hiring evaluates to `20.0`.
+    - 40-day-old job with `last_seen_at = NOW()` evaluates to `freshness = 15.0` (authoritative `posted_at` strictly preserved; `last_seen_at` never falsely inflates posting freshness).
+
+- **4. Test Suite Pass:**
+  - 85/85 tests passed across 11 test suites in 103s (`test_job_relevance_service`, `test_job_api`, `test_job_feed_fix`, `test_timeout_regression`, `test_candidate_universe_audit`, `test_job_filtering`, `test_job_filter_audit`, `test_job_stabilization`, `test_role_family_ranking`, `test_job_production_verification`, `test_fresher_and_mass_hiring`).
+
+
 
 

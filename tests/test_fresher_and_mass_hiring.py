@@ -23,6 +23,19 @@ def test_seniority_classification_fresher():
     assert classify_seniority("0 years experience required", "Junior Analyst")[0] == "entry"
 
 
+def test_seniority_classification_mid_experience_range():
+    # 2-5 years experience is mid-level, not entry/fresher
+    assert classify_seniority("Sales incentives and commissions with 2-5 years experience", "Data Analyst")[0] == "mid"
+    assert classify_seniority("Requires 2 to 5 yrs experience", "Data Analyst")[0] == "mid"
+    job = NormalizedJob(
+        title="Data Analyst",
+        company="SalesCo",
+        description="Responsible for sales operations and commissions. 2-5 years experience required.",
+    )
+    assert _get_job_seniority(job) == "mid"
+    assert _is_entry_or_fresher(job) is False
+
+
 def test_seniority_classification_associate():
     # Context indicates junior/entry
     assert classify_seniority("Entry level associate role, 0-1 yrs", "Associate Developer")[0] == "entry"

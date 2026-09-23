@@ -112,9 +112,9 @@ def _compute_job_seniority(job: NormalizedJob) -> str:
             inf = inferred.lower()
             return "entry" if inf in ("entry", "fresher", "intern", "junior") else inf
 
-        years_min, _ = extract_years_of_experience(f"{job.title or ''} {job.description or ''}")
+        years_min, years_max = extract_years_of_experience(f"{job.title or ''} {job.description or ''}")
         if years_min is not None:
-            if years_min <= 2:
+            if years_min <= 1 or (years_min <= 2 and years_max is not None and years_max <= 2):
                 return "entry"
             if years_min < 5:
                 return "mid"

@@ -663,19 +663,46 @@ class JobRepository:
                 logger.warning("get_priority_candidates: role query failed", exc_info=True)
                 return []
 
+        def _fetch_recent() -> list[dict[str, Any]]:
+            try:
+                q = (
+                    self._client.table("jobs")
+                    .select(cols)
+                    .eq("is_active", True)
+                    .order("posted_at", desc=True, nullsfirst=False)
+                    .limit(limit_per_category)
+                )
+                if location:
+                    loc_clean = location.strip()
+                    if loc_clean.lower() in ("bangalore", "bengaluru"):
+                        q = q.or_("location.ilike.%bangalore%,location.ilike.%bengaluru%")
+                    else:
+                        q = q.ilike("location", f"%{loc_clean}%")
+                if company:
+                    q = q.ilike("company", f"%{company}%")
+                if employment_type:
+                    q = q.ilike("employment_type", f"%{employment_type}%")
+                res = q.execute()
+                return res.data or []
+            except Exception:
+                logger.warning("get_priority_candidates: recent query failed", exc_info=True)
+                return []
+
         try:
-            with ThreadPoolExecutor(max_workers=3) as pool:
+            with ThreadPoolExecutor(max_workers=4) as pool:
                 f_mass = pool.submit(_fetch_mass)
                 f_fresh = pool.submit(_fetch_freshers)
                 f_role = pool.submit(_fetch_role)
+                f_recent = pool.submit(_fetch_recent)
 
                 mass_rows = f_mass.result()
                 fresh_rows = f_fresh.result()
                 role_rows = f_role.result()
+                recent_rows = f_recent.result()
 
             seen: set[str] = set()
             out: list[dict[str, Any]] = []
-            for r in mass_rows + fresh_rows + role_rows:
+            for r in mass_rows + fresh_rows + role_rows + recent_rows:
                 rid = r.get("external_job_id") or r.get("id")
                 if rid and rid not in seen:
                     seen.add(rid)
@@ -834,19 +861,46 @@ class JobRepository:
                 logger.warning("get_candidate_universe: role query failed", exc_info=True)
                 return []
 
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        def _fetch_recent() -> list[dict[str, Any]]:
+            try:
+                q = (
+                    self._client.table("jobs")
+                    .select(cols)
+                    .eq("is_active", True)
+                    .order("posted_at", desc=True, nullsfirst=False)
+                    .limit(limit_per_priority_category)
+                )
+                if location:
+                    loc_clean = location.strip()
+                    if loc_clean.lower() in ("bangalore", "bengaluru"):
+                        q = q.or_("location.ilike.%bangalore%,location.ilike.%bengaluru%")
+                    else:
+                        q = q.ilike("location", f"%{loc_clean}%")
+                if company:
+                    q = q.ilike("company", f"%{company}%")
+                if employment_type:
+                    q = q.ilike("employment_type", f"%{employment_type}%")
+                res = q.execute()
+                return res.data or []
+            except Exception:
+                logger.warning("get_candidate_universe: recent query failed", exc_info=True)
+                return []
+
+        with ThreadPoolExecutor(max_workers=5) as pool:
             f_base = pool.submit(_fetch_base)
             f_mass = pool.submit(_fetch_mass)
             f_fresh = pool.submit(_fetch_freshers)
             f_role = pool.submit(_fetch_role)
+            f_recent = pool.submit(_fetch_recent)
 
             base_rows, db_total = f_base.result()
             mass_rows = f_mass.result()
             fresh_rows = f_fresh.result()
             role_rows = f_role.result()
+            recent_rows = f_recent.result()
 
         seen_ids = {r.get("external_job_id") or r.get("id") for r in base_rows}
-        for r in mass_rows + fresh_rows + role_rows:
+        for r in mass_rows + fresh_rows + role_rows + recent_rows:
             kid = r.get("external_job_id") or r.get("id")
             if kid and kid not in seen_ids:
                 seen_ids.add(kid)
