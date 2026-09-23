@@ -1104,6 +1104,24 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   3. Deploy backend commit so scheduler/adapter/probe-cache fixes go live.
   4. Re-run `scripts/audit_discovery_freshness.py` after first successful production crawl.
 
+### 9.20 Scheduler ownership: ARQ worker via on_startup (2026-09-23)
+
+- **Root cause:** `WorkerSettings` had no `on_startup`/`on_shutdown`, so the
+  production ARQ worker never created `ScheduledCrawlRunner`. The scheduler
+  only ran in FastAPI `lifespan` (web process), which sleeps/restarts on
+  Render — worker logs showed `Starting worker for 5 functions` then silence.
+- **Fix:** `app/workers/settings.py` adds `worker_startup`/`worker_shutdown`
+  wired as `WorkerSettings.on_startup`/`on_shutdown` (ARQ 0.26.1 supported).
+  Startup logs `crawler_enabled`, `initialized`, per-provider
+  `next crawl scheduled`, and `started`; failures log
+  `crawler scheduler initialization failed` without killing the worker.
+  Scheduler object retained in module global so it survives polling.
+  `app/main.py` lifespan no longer starts a scheduler — exactly one owner
+  (worker). `JOB_CRAWL_ENABLED=false` cleanly disables. First-run stagger
+  (now+30s, +15s/provider, `next_run_time` set) unchanged.
+- **Verify in worker logs:** `crawler scheduler initialization started`,
+  `crawler scheduler started`, `next crawl scheduled id=...`.
+
 
 
 

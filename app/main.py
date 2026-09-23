@@ -67,13 +67,8 @@ from app.api.routes.resume_templates import router as templates_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.auth.service import AuthError
 from app.config import get_settings
-from app.services.jobs.scheduled_crawl_runner import (
-    ScheduledCrawlRunner,
-)
 
 logger = logging.getLogger(__name__)
-
-_scheduled_runner: ScheduledCrawlRunner | None = None
 
 
 def _init_sentry() -> None:
@@ -145,16 +140,10 @@ def _get_cors_origins() -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start the scheduled crawl runner on server startup, stop on shutdown."""
-    global _scheduled_runner
+    """Web lifespan owns no scheduler; the ARQ worker owns crawling."""
     _init_sentry()
-    _scheduled_runner = ScheduledCrawlRunner()
-    _scheduled_runner.start()
-    logger.info("Scheduled crawl runner started")
+    logger.info("Web lifespan: crawler scheduler owned by ARQ worker (see WorkerSettings.on_startup)")
     yield
-    if _scheduled_runner is not None:
-        _scheduled_runner.shutdown()
-        _scheduled_runner = None
 
 app = FastAPI(
     title="CareerOS Backend (Python)",
