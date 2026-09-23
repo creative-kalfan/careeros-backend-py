@@ -26,10 +26,14 @@ def _clear_settings_cache():
 
 
 def test_settings_exposes_redis_url_contract():
+    # _env_file=None isolates from the local .env REDIS_URL (Upstash) so the
+    # documented default remains redis://localhost:6379 when no env is set.
+    # Aliased names are required when dotenv is disabled.
     settings = Settings(
-        supabase_url="https://example.supabase.co",
-        supabase_anon_key="anon",
-        supabase_service_role_key="service",
+        _env_file=None,
+        NEXT_PUBLIC_SUPABASE_URL="https://example.supabase.co",
+        NEXT_PUBLIC_SUPABASE_ANON_KEY="anon",
+        SUPABASE_SERVICE_ROLE_KEY="service",
     )
     assert settings.redis_url == "redis://localhost:6379"
 
@@ -49,9 +53,10 @@ def test_settings_does_not_alias_wrong_redis_env_name(monkeypatch):
     monkeypatch.delenv("REDIS_URL", raising=False)
     monkeypatch.setenv("REDIS_CONNECTION_STRING", "redis://wrong:6379")
     settings = Settings(
-        supabase_url="https://example.supabase.co",
-        supabase_anon_key="anon",
-        supabase_service_role_key="service",
+        _env_file=None,
+        NEXT_PUBLIC_SUPABASE_URL="https://example.supabase.co",
+        NEXT_PUBLIC_SUPABASE_ANON_KEY="anon",
+        SUPABASE_SERVICE_ROLE_KEY="service",
     )
     assert settings.redis_url == "redis://localhost:6379"
 
@@ -68,11 +73,14 @@ def test_settings_exposes_crawl_lock_ttl():
 
 def test_worker_settings_resolve_redis_configuration():
     """app.workers.settings must build arq RedisSettings from Settings.redis_url."""
+    from app.config import get_settings
     from app.workers.settings import WorkerSettings, redis_settings
 
+    settings = get_settings()
     assert isinstance(redis_settings, RedisSettings)
-    assert redis_settings.host == "localhost"
-    assert redis_settings.port == 6379
+    expected = RedisSettings.from_dsn(settings.redis_url)
+    assert redis_settings.host == expected.host
+    assert redis_settings.port == expected.port
     assert WorkerSettings.redis_settings is redis_settings
     assert WorkerSettings.functions, "WorkerSettings must register ARQ functions"
 

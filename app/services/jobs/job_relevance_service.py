@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from app.models.job import NormalizedJob
 from app.models.profile import UserProfile
@@ -303,7 +303,11 @@ class JobRelevanceService:
         multi-parameter filtering and dynamic sorting with pagination applied
         over the fully filtered set.
         """
-        # Get the user's profile if available
+        # Get the user's profile if available. Profile must load before the
+        # candidate universe because desired_role feeds the role-matching
+        # priority pool — racing without it would sacrifice candidate coverage.
+        # Latency is recovered via the module-level column-probe cache in
+        # JobRepository (schema probes no longer re-run every request).
         profile = self.profile_repository.get_profile(user_id) if user_id else None
 
         # Stage 1: Candidate retrieval. Retrieve base candidate pool (up to 1000)

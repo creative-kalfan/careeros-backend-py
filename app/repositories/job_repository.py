@@ -45,13 +45,21 @@ _PROVENANCE_FIELDS = (
     "first_seen_at", "last_crawled_at", "source_history",
 )
 
+# Module-level column-availability cache. Schema is stable for a process
+# lifetime; per-instance None forced a ~1s SELECT on every request because
+# get_job_relevance_service() constructs a new JobRepository each call.
+# Tests that need a forced re-probe can clear these dicts.
+_PROBE_CACHE_LAST_SEEN: dict[str, bool] = {}
+_PROBE_CACHE_PROVENANCE: dict[str, bool] = {}
+_PROBE_CACHE_MASS_HIRING: dict[str, bool] = {}
+
 
 class JobRepository:
     """Data-access layer for the Supabase ``jobs`` table."""
 
     def __init__(self, client: Optional[Client] = None) -> None:
         self._client = client or get_service_client()
-        # Column availability flags (probed lazily so tests can override).
+        # Column availability flags (instance-level; warm from module cache).
         self._has_last_seen_at: Optional[bool] = None
         self._has_provenance: Optional[bool] = None
         self._has_mass_hiring: Optional[bool] = None
@@ -60,34 +68,61 @@ class JobRepository:
     # Column probing
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _probe_key(client: Client) -> str:
+        """Cache key per underlying Supabase URL (tests may inject clients)."""
+        return str(getattr(client, "rest_url", "") or getattr(client, "url", "") or id(client))
+
+    @classmethod
+    def clear_probe_cache(cls) -> None:
+        """Drop cached column probes (for tests that toggle schema)."""
+        _PROBE_CACHE_LAST_SEEN.clear()
+        _PROBE_CACHE_PROVENANCE.clear()
+        _PROBE_CACHE_MASS_HIRING.clear()
+
     def _probe_has_last_seen_at(self) -> bool:
         """Check whether the ``last_seen_at`` column exists (migration 011)."""
         if self._has_last_seen_at is None:
-            try:
-                self._client.table("jobs").select("last_seen_at").limit(1).execute()
-                self._has_last_seen_at = True
-            except Exception:
-                self._has_last_seen_at = False
+            key = self._probe_key(self._client)
+            cached = _PROBE_CACHE_LAST_SEEN.get(key)
+            if cached is None:
+                try:
+                    self._client.table("jobs").select("last_seen_at").limit(1).execute()
+                    cached = True
+                except Exception:
+                    cached = False
+                _PROBE_CACHE_LAST_SEEN[key] = cached
+            self._has_last_seen_at = cached
         return self._has_last_seen_at
 
     def _probe_has_provenance(self) -> bool:
         """Check whether provenance columns exist (migration 016)."""
         if self._has_provenance is None:
-            try:
-                self._client.table("jobs").select("source_tier").limit(1).execute()
-                self._has_provenance = True
-            except Exception:
-                self._has_provenance = False
+            key = self._probe_key(self._client)
+            cached = _PROBE_CACHE_PROVENANCE.get(key)
+            if cached is None:
+                try:
+                    self._client.table("jobs").select("source_tier").limit(1).execute()
+                    cached = True
+                except Exception:
+                    cached = False
+                _PROBE_CACHE_PROVENANCE[key] = cached
+            self._has_provenance = cached
         return self._has_provenance
 
     def _probe_has_mass_hiring(self) -> bool:
         """Check whether mass_hiring columns exist (migration 021)."""
         if self._has_mass_hiring is None:
-            try:
-                self._client.table("jobs").select("mass_hiring").limit(1).execute()
-                self._has_mass_hiring = True
-            except Exception:
-                self._has_mass_hiring = False
+            key = self._probe_key(self._client)
+            cached = _PROBE_CACHE_MASS_HIRING.get(key)
+            if cached is None:
+                try:
+                    self._client.table("jobs").select("mass_hiring").limit(1).execute()
+                    cached = True
+                except Exception:
+                    cached = False
+                _PROBE_CACHE_MASS_HIRING[key] = cached
+            self._has_mass_hiring = cached
         return self._has_mass_hiring
 
     def _get_candidate_select_columns(self) -> str:

@@ -140,6 +140,9 @@ class AshbyAdapter(BaseCrawler):
             raw.get("employmentType"),
             raw.get("type"),
         )
+        # Trustworthy posting timestamp: publishedAt is the original
+        # publish date. Never use lastUpdatedAt (recrawl would rewrite history).
+        posted_date = _coalesce(raw.get("publishedAt"))
         return CrawledJob(
             title=str(raw.get("title") or ""),
             company=self.slug.replace("-", " ").title(),
@@ -151,6 +154,7 @@ class AshbyAdapter(BaseCrawler):
             remote=_is_remote(raw.get("isRemote"), str(workplace_type or "")),
             external_job_id=str(raw.get("id") or ""),
             source_platform="ashby",
+            posted_date=posted_date,
             skills=_extract_known_skills(content),
             requirements=_extract_list(content, "requirements"),
             responsibilities=_extract_list(content, "responsibilities"),

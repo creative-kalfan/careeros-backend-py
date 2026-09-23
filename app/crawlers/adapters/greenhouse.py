@@ -176,6 +176,9 @@ class GreenhouseAdapter(BaseCrawler):
     def _parse_job(self, raw: dict[str, Any]) -> CrawledJob:
         content = str(raw.get("content") or raw.get("description") or "")
         location = _coalesce(_location_name(raw.get("location")), raw.get("location_name"))
+        # Trustworthy posting timestamp: first_published is the original
+        # publish date. Never use updated_at (recrawl would rewrite history).
+        posted_date = _coalesce(raw.get("first_published"))
         return CrawledJob(
             title=str(raw.get("title") or ""),
             company=_coalesce(raw.get("company_name")) or "",
@@ -188,6 +191,7 @@ class GreenhouseAdapter(BaseCrawler):
                 raw.get("id") if raw.get("id") is not None else raw.get("job_id") or ""
             ),
             source_platform="greenhouse",
+            posted_date=posted_date,
             skills=_extract_known_skills(content),
             requirements=_extract_list(content, "requirements"),
             responsibilities=_extract_list(content, "responsibilities"),

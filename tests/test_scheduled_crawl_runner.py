@@ -66,3 +66,33 @@ async def test_start_and_shutdown_are_idempotent():
     runner.shutdown()
 
     assert runner._scheduler is None
+
+
+@pytest.mark.asyncio
+async def test_start_schedules_immediate_first_run_not_after_full_interval():
+    """First fire must not wait a full IntervalTrigger period.
+
+    Production root cause: IntervalTrigger(hours=24) with no next_run_time
+    meant short-lived Render processes never survived 24h to fire once,
+    so no crawl jobs were enqueued and posted_at inventory went stale.
+    """
+    runner = ScheduledCrawlRunner()
+    runner.start()
+    try:
+        assert runner._scheduler is not None
+        jobs = runner._scheduler.get_jobs()
+        assert jobs, "expected at least one scheduled crawl job"
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        for job in jobs:
+            nxt = job.next_run_time
+            assert nxt is not None, f"{job.id} has no next_run_time"
+            # First run must be imminent (stagger of ~30s + small provider offset),
+            # never hours away waiting for a full 24h interval.
+            delta = (nxt - now).total_seconds()
+            assert delta < 3600, (
+                f"{job.id} first run is {delta}s away; expected staggered immediate start"
+            )
+    finally:
+        runner.shutdown()

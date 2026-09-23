@@ -180,6 +180,9 @@ class SmartRecruitersAdapter(BaseCrawler):
         else:
             company_name = _coalesce(raw.get("companyName"), raw.get("company"))
 
+        # Trustworthy posting timestamp: releasedDate is when the posting
+        # was released. Never use additionalJobLocation or update stamps.
+        posted_date = _coalesce(raw.get("releasedDate"))
         return CrawledJob(
             title=str(raw.get("name") or raw.get("title") or ""),
             company=company_name or self.slug.replace("-", " ").title(),
@@ -190,6 +193,7 @@ class SmartRecruitersAdapter(BaseCrawler):
             remote=_is_remote(raw.get("location", {}).get("remote") if isinstance(raw.get("location"), dict) else None, str(location or "")),
             external_job_id=str(raw.get("id") or ""),
             source_platform="smartrecruiters",
+            posted_date=posted_date,
             skills=_extract_known_skills(content),
             requirements=_extract_list(content, "requirements"),
             responsibilities=_extract_list(content, "responsibilities"),

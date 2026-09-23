@@ -1,7 +1,7 @@
 # CareerOS — Complete System Map & Reality Audit
 **Authoritative Reference & Personal System Map**
-**Date:** 2026-09-03
-**Status:** Local Personal Document (Uncommitted / Reference-Only)
+**Date:** 2026-09-23
+**Status:** Local Personal Document (Reference)
 
 This document is the single source of truth for the entire CareerOS codebase. It reflects the **actual current working tree, file inventory, API contracts, database schemas, background workers, and Git commits** as of today.
 
@@ -13,9 +13,7 @@ This document is the single source of truth for the entire CareerOS codebase. It
 - **Local Path:** `C:\Users\pathan Kalfan\resume-pilot\careeros-backend-py`
 - **Git Remote:** `https://github.com/creative-kalfan/careeros-backend-py.git`
 - **Branch:** `main`
-- **Current HEAD:** `a8595338d4b1ca2436c4685d040b5d87bdb6d76b`
-- **Commit Message:** `feat(ingestion): upgrade India-first multi-source job pipeline`
-- **Preceding Base Release:** `980772448d9f8eba5c972f167b826949500b0e41`
+- **Current HEAD:** see `git rev-parse HEAD` after the 2026-09-23 discovery/latency pass (prior: `3d7eab7df17a874baaa083eaab40b6096e9f0436` — `fix(jobs): correct seniority boundaries and add bounded recent candidate pool`)
 - **Technology:** Python 3.11.9, FastAPI 0.115.6, Uvicorn 0.34.0, Pydantic v2 (2.10.4), Supabase Python client 2.11.0, PyMuPDF 1.25.3, python-docx 1.1.2, ARQ 0.26.1, Redis 5.3.1, APScheduler 3.11.3, PyJWT[crypto] 2.13.0, Sentry SDK 2.19.2.
 - **Rule:** Exact repository name is `careeros-backend-py`. Never create `backend-v2`, `careos-backend-py`, or duplicate folders.
 
@@ -1065,6 +1063,44 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
 
 - **4. Test Suite Pass:**
   - 85/85 tests passed across 11 test suites in 103s (`test_job_relevance_service`, `test_job_api`, `test_job_feed_fix`, `test_timeout_regression`, `test_candidate_universe_audit`, `test_job_filtering`, `test_job_filter_audit`, `test_job_stabilization`, `test_role_family_ranking`, `test_job_production_verification`, `test_fresher_and_mass_hiring`).
+
+### 9.19 Discovery Freshness Root Cause, `posted_at` Mapping & Latency Probe Cache (2026-09-23)
+
+- **1. Discovery root cause (why production had ~zero fresh `posted_at`):**
+  - **Scheduler never fired soon enough.** `ScheduledCrawlRunner.start()` used `IntervalTrigger(hours=24)` with no `next_run_time`, so the first crawl waited a full 24h. Short-lived Render processes (sleep/restart cycles) never survived long enough to fire → no crawl enqueued for 7+ days (`crawl_status:*` keys expired, `arq:queue` depth 0). Last successful observation: **2026-09-16**.
+  - **Broken Redis env.** `.env` had a bare `rediss://...` (no `REDIS_URL=` prefix), so ARQ/dispatcher could not reach Upstash. Fixed locally to `REDIS_URL=rediss://...`. `.env` is gitignored — **production Render must set `REDIS_URL` (and `JOB_CRAWL_ENABLED`) in the dashboard**.
+  - **Adapters discarded trustworthy source dates.** Greenhouse `first_published`, Ashby `publishedAt`, Lever `createdAt` (epoch-ms), SmartRecruiters `releasedDate` were not mapped into `CrawledJob.posted_date`, so ingested jobs often had `posted_at = NULL` or only system insert time.
+
+- **2. Fixes shipped:**
+  - **Immediate staggered first run** (`scheduled_crawl_runner.py`): `first_run = now+30s`, per-provider offset `+15s × index`, `IntervalTrigger(..., start_date=first_run)` + `next_run_time=provider_first_run`.
+  - **ATS `posted_date` mapping** in `greenhouse.py`, `ashby.py`, `lever.py` (new `_posted_date_from_epoch_ms`), `smartrecruiters.py`. Never invent dates; `posted_at` stays `NULL` when no trustworthy source field exists.
+  - **Schema probe cache** (`job_repository.py`): module-level `_PROBE_CACHE_*` keyed by client identity; new `JobRepository()` per request no longer re-runs `last_seen_at` / `source_tier` / `mass_hiring` column probes (~1s cold → warm cache). `clear_probe_cache()` for tests.
+  - **Sequential profile → candidates kept** in `job_relevance_service.py`: `desired_role` must be available before the candidate universe (role-matching priority pool). Latency recovered via probe cache, not by racing profile fetch (coverage tradeoff rejected).
+  - **Migration 022** (`sql/migrations/022_jobs_active_created_at_index.sql`): partial index `(is_active, created_at DESC) WHERE is_active = true` for base-pool ordering. **Not yet applied** — run via Supabase Dashboard SQL Editor (service key cannot DDL).
+
+- **3. Production measurements:**
+  - **Active freshness at audit time:** `<=24h`: 0 | `<=3d`: 0 | `<=7d`: 1 | missing `posted_at`: 814/2,952 (27.6%). DB totals: 5,900 jobs / 2,952 active (PostgREST select cap 1,000).
+  - **Adzuna India freshness probe (live, after fixes ready):** 144 raw → 144 valid → 144 India | fresher-role 24 | `<=3d` 13 | `<=7d` 41 | `<=30d` 75 | no_date 0. Fresh inventory **exists upstream**; production lag was discovery, not supply. (Some fresher/SAP queries transiently 503 — bounded rotation still applies.)
+  - **Latency root causes:** per-request `JobRepository` construction re-ran column probes (~1,056ms); candidate universe 1.7–2.9s (one `count="exact"` outlier ~16.9s on `_fetch_base`); score loop ~1.3s over ~1,365 jobs. Feed wall time had regressed to ~6.6–6.8s vs prior ~1.1–2.9s.
+  - **Probe-cache verification:** cold first repository probes ~1s total; subsequent repositories hit module cache in sub-ms for already-probed columns.
+
+- **4. Tests:**
+  - New: `tests/test_ats_posted_date_mapping.py` (5 adapter mapping tests + epoch helper), `tests/test_job_repository_probe_cache.py` (2), immediate-first-run assertion in `tests/test_scheduled_crawl_runner.py`.
+  - Redis config: `_env_file=None` tests pass aliased names (`NEXT_PUBLIC_SUPABASE_URL`, …); worker test compares against `RedisSettings.from_dsn(settings.redis_url)` (no hardcoded localhost).
+  - **Job-focused suite: 226 passed** (redis, scheduler, ATS mapping, probe cache, ingestion, relevance, repository, API, filtering, stabilization, feed, discovery, production verification, intelligence, route order, fresher/mass-hiring, crawl refresh, source priority/escalation, India-first).
+  - Pre-existing failures (untouched by this pass): `test_role_relevance_fixture` (2), `test_india_target_freshness` (2 — expects `last_seen_at` to inflate freshness, contradicting design), `test_job_feed_fix` pollution under full-suite order, copilot/visual/e2e.
+
+- **5. Boundaries preserved:**
+  - Ranking weights, priority tiers, India-first, freshness scoring, company diversification, semantic expansion, `_fetch_recent` pool (500): **100% UNCHANGED**.
+  - No fabricated freshness: `created_at` / `last_seen_at` never written as `posted_at`; original `posted_at` not overwritten on recrawl.
+  - Adzuna query volume unchanged (rotation bounds intact).
+  - No new dependencies; migration 022 optional until applied in Dashboard.
+
+- **6. Pending ops (manual):**
+  1. Apply migration 022 in Supabase Dashboard SQL Editor.
+  2. Set production Render `REDIS_URL` + `JOB_CRAWL_ENABLED=true`.
+  3. Deploy backend commit so scheduler/adapter/probe-cache fixes go live.
+  4. Re-run `scripts/audit_discovery_freshness.py` after first successful production crawl.
 
 
 

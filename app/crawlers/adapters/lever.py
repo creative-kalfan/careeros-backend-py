@@ -55,6 +55,31 @@ def _location_name(location: Any) -> Optional[str]:
         return name if isinstance(name, str) else None
     return None
 
+
+def _posted_date_from_epoch_ms(value: Any) -> Optional[str]:
+    """Convert Lever ``createdAt`` (epoch milliseconds) to ISO-8601 UTC.
+
+    Returns None when the value is missing or unparseable so we never
+    fabricate a posting date.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        ms = int(value)
+    except (TypeError, ValueError):
+        return None
+    if ms <= 0:
+        return None
+    # Guard against seconds accidentally passed as ms.
+    if ms < 10**11:
+        ms *= 1000
+    from datetime import datetime, timezone
+
+    try:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
 class LeverAdapter(BaseCrawler):
     """Fetch and normalize jobs from a Lever board."""
 
@@ -179,6 +204,8 @@ class LeverAdapter(BaseCrawler):
                 raw.get("id") if raw.get("id") is not None else raw.get("job_id") or ""
             ),
             source_platform="lever",
+            # Trustworthy posting timestamp: createdAt (epoch ms).
+            posted_date=_posted_date_from_epoch_ms(raw.get("createdAt")),
             skills=_extract_known_skills(content),
             requirements=_extract_list(content, "requirements"),
             responsibilities=_extract_list(content, "responsibilities"),

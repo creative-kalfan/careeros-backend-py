@@ -164,9 +164,17 @@ class ScheduledCrawlRunner:
 
         One APScheduler job per provider family so each cadence is independent:
         a slow Firecrawl pass never delays YC discovery.
+
+        Each provider's first run is staggered immediately after start
+        (not after a full IntervalTrigger period). Previously the first
+        fire waited 24h, so short-lived Render processes that sleep/restart
+        more often than that never ran a crawl at all — the root cause of
+        zero fresh ``posted_at`` inventory in production.
         """
         if self._scheduler is not None:
             return
+        from datetime import datetime, timedelta, timezone
+
         from app.config import get_settings
 
         settings = get_settings()
@@ -175,6 +183,9 @@ class ScheduledCrawlRunner:
             return
 
         self._scheduler = AsyncIOScheduler()
+        # Stagger first runs so providers do not all enqueue at once,
+        # but every provider gets a crawl shortly after process start.
+        first_run = datetime.now(timezone.utc) + timedelta(seconds=30)
         for provider in _PROVIDER_CONFIG:
             if not targets_for_provider(provider):
                 continue
@@ -183,18 +194,23 @@ class ScheduledCrawlRunner:
                 logger.info("Scheduled crawl: provider %s disabled", provider)
                 continue
             hours = self._interval_for(provider)
+            provider_first_run = first_run + timedelta(
+                seconds=list(_PROVIDER_CONFIG).index(provider) * 15
+            )
             self._scheduler.add_job(
                 self.run_provider_pass,
-                trigger=IntervalTrigger(hours=hours),
+                trigger=IntervalTrigger(hours=hours, start_date=first_run),
                 args=[provider],
                 id=f"scheduled_crawl_{provider}",
                 replace_existing=True,
                 max_instances=1,
                 coalesce=True,
+                next_run_time=provider_first_run,
             )
             logger.info(
-                "Scheduled crawl: %s pass every %s hours (%d targets)",
-                provider, hours, len(targets_for_provider(provider)),
+                "Scheduled crawl: %s pass every %s hours, first run at %s (%d targets)",
+                provider, hours, provider_first_run.isoformat(),
+                len(targets_for_provider(provider)),
             )
         self._scheduler.start()
 
