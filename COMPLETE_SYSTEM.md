@@ -13,7 +13,9 @@ This document is the single source of truth for the entire CareerOS codebase. It
 - **Local Path:** `C:\Users\pathan Kalfan\resume-pilot\careeros-backend-py`
 - **Git Remote:** `https://github.com/creative-kalfan/careeros-backend-py.git`
 - **Branch:** `main`
-- **Current HEAD:** see `git rev-parse HEAD` after the 2026-09-23 discovery/latency pass (prior: `3d7eab7df17a874baaa083eaab40b6096e9f0436` — `fix(jobs): correct seniority boundaries and add bounded recent candidate pool`)
+- **Current HEAD:** `cc8e4cd85881ef8099391f58aea2505e403bebc6`
+- **Commit Message:** `fix(jobs): restore discovery freshness and cache schema probes`
+- **Preceding:** `3d7eab7df17a874baaa083eaab40b6096e9f0436` — `fix(jobs): correct seniority boundaries and add bounded recent candidate pool`
 - **Technology:** Python 3.11.9, FastAPI 0.115.6, Uvicorn 0.34.0, Pydantic v2 (2.10.4), Supabase Python client 2.11.0, PyMuPDF 1.25.3, python-docx 1.1.2, ARQ 0.26.1, Redis 5.3.1, APScheduler 3.11.3, PyJWT[crypto] 2.13.0, Sentry SDK 2.19.2.
 - **Rule:** Exact repository name is `careeros-backend-py`. Never create `backend-v2`, `careos-backend-py`, or duplicate folders.
 
