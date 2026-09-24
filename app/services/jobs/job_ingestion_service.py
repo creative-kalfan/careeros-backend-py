@@ -129,8 +129,12 @@ class JobIngestionService:
         Redis I/O, and APScheduler on the shared worker loop; ``to_thread``
         preserves exact ordering/semantics while the loop stays responsive.
         """
+        from app.db.supabase import call_serialized
+
         start = time.monotonic()
-        result = await asyncio.to_thread(self.job_repository.upsert_jobs, normalized_jobs)
+        result = await asyncio.to_thread(
+            call_serialized, self.job_repository.upsert_jobs, normalized_jobs
+        )
         logger.info(
             "persistence duration_ms=%d phase=upsert discovered=%d",
             int((time.monotonic() - start) * 1000),

@@ -104,30 +104,37 @@ def _deactivate_after_success(
     Ordering is load-bearing and preserved exactly: not-seen reconciliation
     first (complete-inventory sources only), then the age-based staleness
     backstop for all providers. Raises on DB errors so the caller keeps the
-    existing best-effort warning behavior.
+    existing best-effort warning behavior. The whole pair runs under the
+    shared-client lock so executor threads never drive the client concurrently.
     """
+    from app.db.supabase import call_serialized
+
     not_seen_kwargs: dict[str, Any] = {}
     if source == "firecrawl":
         _, _, careers_url_scope = slug.partition("|")
         not_seen_kwargs["careers_url"] = careers_url_scope
-    if _uses_complete_inventory(source):
-        deactivated_not_seen = ingestion.job_repository.deactivate_not_seen_since(
+
+    def _run() -> tuple[int, int]:
+        if _uses_complete_inventory(source):
+            not_seen = ingestion.job_repository.deactivate_not_seen_since(
+                source_platform=source,
+                since_iso=crawl_started_at,
+                **not_seen_kwargs,
+            )
+        else:
+            logger.info(
+                "Skipping not-seen deactivation for %s (query-based provider: "
+                "today's bounded query rotation is not the full inventory)",
+                source,
+            )
+            not_seen = 0
+        stale = ingestion.job_repository.deactivate_stale_jobs(
             source_platform=source,
-            since_iso=crawl_started_at,
-            **not_seen_kwargs,
+            max_age_days=max_age_days,
         )
-    else:
-        logger.info(
-            "Skipping not-seen deactivation for %s (query-based provider: "
-            "today's bounded query rotation is not the full inventory)",
-            source,
-        )
-        deactivated_not_seen = 0
-    deactivated = ingestion.job_repository.deactivate_stale_jobs(
-        source_platform=source,
-        max_age_days=max_age_days,
-    )
-    return deactivated_not_seen, deactivated
+        return not_seen, stale
+
+    return call_serialized(_run)
 
 
 @register_job(

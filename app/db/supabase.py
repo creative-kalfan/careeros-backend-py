@@ -6,11 +6,29 @@ and an RLS-authenticated client for user-scoped queries.
 
 from __future__ import annotations
 
+import threading
 from functools import lru_cache
+from typing import Any, Callable
 
 from supabase import Client, ClientOptions, create_client
 
 from app.config import get_settings
+
+# Serializes synchronous use of the process-global service client across OS
+# threads. The client multiplexes requests over shared HTTP/2 connections
+# whose state machine is not safe for concurrent multi-threaded use, and
+# postgrest does not retry transport errors (RemoteProtocolError). Executor
+# threads (asyncio.to_thread crawl persistence) must funnel through
+# call_serialized; asyncio primitives must NOT be used here (no running loop
+# in worker threads). ponytail: process-wide for crawl persistence; split
+# per-table/domain only if lock contention ever shows in duration_ms logs.
+_SYNC_CLIENT_LOCK = threading.Lock()
+
+
+def call_serialized(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+    """Run a sync Supabase-client call with cross-thread mutual exclusion."""
+    with _SYNC_CLIENT_LOCK:
+        return fn(*args, **kwargs)
 
 
 @lru_cache

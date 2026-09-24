@@ -1151,6 +1151,38 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   If timeouts persist during idle periods, suspect raw TLS handshake
   latency (H2) next.
 
+### 9.22 Shared Supabase client serialization across executor threads (2026-09-23)
+
+- **New failure after thread-offload:** `httpx.RemoteProtocolError: Server
+  disconnected` inside `to_thread → upsert_jobs → ...update().execute()`.
+  Thread-offload verified working (traceback passes through executor
+  threads) — this is an independent HTTP-layer issue it exposed, not a
+  regression of the loop fix.
+- **Root cause:** `get_service_client()` (`app/db/supabase.py`) is a
+  process-global sync client (postgrest 2.31.0 → httpx 0.28.1, HTTP/2).
+  Serialized pre-fix; post-fix up to ~10 executor threads drive it
+  concurrently. HTTP/2 connections report available while active, request
+  dispatch runs outside the pool lock, and the h2 state machine has no
+  cross-thread serialization; postgrest retries only GET/HEAD 503/520, never
+  transport errors. Pool exhaustion (cap 100) and timeouts (120s) ruled out.
+- **Fix (serialization only):** `app/db/supabase.py` adds
+  `call_serialized()` over a module `threading.Lock` (OS-thread primitive;
+  `asyncio.Lock` would be wrong in worker threads). `_persist_offloop` and
+  `_deactivate_after_success` funnel through it. `to_thread`, N+1
+  semantics, ordering, return values, exceptions, client ownership, and all
+  Redis/ARQ/scheduler/provider behavior unchanged. `persistence
+  duration_ms` logs retained (now include any lock wait — contention is
+  directly visible).
+- **Tests:** `tests/test_supabase_client_serialization.py` (5 tests:
+  barrier-forced overlap serializes with lock / reaches 2 without it,
+  concurrent ingests serialize with results intact, `to_thread` still in
+  path, loop ticker advances during blocking persist). Regression: 89
+  passed / 1 skipped (live-Redis skip); `compileall` clean.
+- **Production verification required:** redeploy worker; confirm
+  `RemoteProtocolError` stops on large concurrent crawls and `persistence
+  duration_ms` stays flat (rising duration under concurrency = lock
+  contention, the expected signal — split per-domain only if it shows).
+
 
 
 
