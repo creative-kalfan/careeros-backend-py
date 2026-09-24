@@ -1183,6 +1183,61 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   duration_ms` stays flat (rising duration under concurrency = lock
   contention, the expected signal — split per-domain only if it shows).
 
+### 9.23 Crawl4AI generic crawler (primary) + Firecrawl fallback + 429 circuit breaker
+
+- **Why:** production logs showed repeated Firecrawl HTTP 429 (attempts
+  1–4, every crawl) — a paid-API retry storm. Crawl4AI (self-hosted
+  browser, `crawl4ai==0.9.4`, no per-crawl credits) is now the primary
+  generic career-page provider; Firecrawl is the fallback, guarded by a
+  process-local 429 circuit breaker.
+- **Routing (generic career pages only; direct ATS adapters still win):**
+  `crawl_company_job(source="firecrawl")` →
+  `ingest_generic_career_page()` → `crawl_generic_career_page()`
+  (`app/crawlers/generic_fallback.py`): Crawl4AI first, Firecrawl only on
+  Crawl4AI failure, graceful empty when Firecrawl is rate-limited. When
+  `CRAWL4AI_ENABLED=false`, the router goes straight to Firecrawl.
+- **No parallel pipeline:** `Crawl4AIAdapter`
+  (`app/crawlers/adapters/crawl4ai.py`) reuses the shared deterministic
+  parser (`career_page_parse.py`, extracted verbatim from the Firecrawl
+  adapter — no LLM, no deep crawl, careers page + bounded job-detail
+  pages only). Jobs keep `source_platform="firecrawl"` so dedup identity
+  `(source_platform, external_job_id)` and not-seen deactivation scoping
+  are unchanged; the mechanism is recorded in `raw["retrieval"]`
+  (`crawl4ai` vs `firecrawl`). Normalization, validation, and the single
+  `asyncio.to_thread(_persist_offloop)` path are untouched.
+- **429 circuit breaker:** `FirecrawlCircuitBreaker` (process-local, no
+  Redis): a 429 opens a cooldown (`FIRECRAWL_CIRCUIT_COOLDOWN_SECONDS`,
+  default 300s) during which Firecrawl calls are skipped; afterwards one
+  probe decides (success closes, 429 extends). `ingest_firecrawl_jobs()`
+  also consults it (open circuit → graceful zero-result, no ARQ retry
+  storm). Per-request bounded retries inside `FirecrawlClient` are
+  unchanged. ATS providers are never affected.
+- **Browser concurrency:** process-wide `asyncio.Semaphore`
+  (`CRAWL4AI_MAX_CONCURRENCY`, default 2); global ARQ `max_jobs`
+  unchanged. Async-only (`arun` + `wait_for`); no `asyncio.run()`.
+- **Config:** `CRAWL4AI_ENABLED` (default **false** — slim image has no
+  Chromium until the Dockerfile browser layer is deployed; missing
+  browser degrades to Firecrawl, never crashes the worker),
+  `CRAWL4AI_MAX_CONCURRENCY=2`, `CRAWL4AI_TIMEOUT_SECONDS=60`,
+  `FIRECRAWL_CIRCUIT_COOLDOWN_SECONDS=300`.
+- **Observability (structured logs, no secrets):**
+  `crawler provider=crawl4ai|crawl4ai url=... success=... jobs=...
+  duration_ms=...`, `crawler fallback from=crawl4ai to=firecrawl ...`,
+  `crawler provider=firecrawl state=rate_limited cooldown_until=...`.
+- **Tests:** `tests/test_generic_crawl_fallback.py` (9 tests, all mocked:
+  adapter success/failure, fallback order + single persistence, 429
+  classification + skip, breaker open/skip/probe with injected clock,
+  semaphore bound, canonical pipeline contract, loop responsiveness).
+  Also fixed a latent test-isolation poison in
+  `test_crawl_refresh_system._patch_ingestion` (patching
+  `JobIngestionService.__new__` permanently rewires the type's `tp_new`
+  slot even after undo — now patches the module reference instead) and
+  updated the two firecrawl-branch tests for the new generic entry point.
+- **Known limitations:** no deep crawl (single careers page + linked job
+  pages only); JS-heavy pages that defeat the local browser still fall
+  back to Firecrawl; browser needs the Dockerfile Chromium layer before
+  `CRAWL4AI_ENABLED=true` is useful in production.
+
 
 
 

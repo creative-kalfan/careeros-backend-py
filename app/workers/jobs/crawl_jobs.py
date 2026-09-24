@@ -194,10 +194,13 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             result = await ingestion.ingest_ycombinator_jobs()
         elif source == "firecrawl":
             # Slug format: "<company>|<careers_url>" (careers URL is required).
+            # Generic career page: Crawl4AI primary, Firecrawl fallback
+            # (see app.crawlers.generic_fallback). Direct ATS sources above
+            # always keep priority over both generic providers.
             company, _, careers_url = slug.partition("|")
             if not careers_url:
                 raise ValueError("firecrawl crawl requires slug '<company>|<careers_url>'")
-            result = await ingestion.ingest_firecrawl_jobs(
+            result = await ingestion.ingest_generic_career_page(
                 careers_url=careers_url, company=company or None
             )
         else:

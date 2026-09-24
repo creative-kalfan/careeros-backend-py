@@ -230,15 +230,32 @@ class JobIngestionService:
 
         Raises FirecrawlConfigurationError when FIRECRAWL_API_KEY is unset —
         a missing key must never be reported as a successful crawl.
+        When the 429 circuit breaker is open, returns a graceful zero-result
+        instead of hammering a rate-limited provider (no ARQ retry storm).
         """
         from app.crawlers.adapters.firecrawl import FirecrawlAdapter
+        from app.crawlers.firecrawl_client import FirecrawlRateLimitError
+        from app.crawlers.generic_fallback import get_firecrawl_breaker
 
+        breaker = get_firecrawl_breaker()
+        if breaker.should_skip():
+            logger.warning(
+                "crawler provider=firecrawl url=%s skipped=true reason=circuit-open",
+                careers_url,
+            )
+            return {"discovered": 0, "inserted": 0, "updated": 0,
+                    "unchanged": 0, "deduplicated": 0, "skipped": 0}
         adapter = FirecrawlAdapter(
             careers_url=careers_url,
             company=company,
             company_website=company_website,
         )
-        crawled_jobs = await adapter.discover_jobs()
+        try:
+            crawled_jobs = await adapter.discover_jobs()
+        except FirecrawlRateLimitError:
+            breaker.record_rate_limited()
+            raise
+        breaker.record_success()
         normalized_jobs = [
             self._apply_source_quality(
                 self.job_service.normalize_and_classify(j), careers_url=careers_url
@@ -246,6 +263,35 @@ class JobIngestionService:
             for j in crawled_jobs
         ]
         return await self._persist_offloop(normalized_jobs)
+
+    async def ingest_generic_career_page(
+        self,
+        careers_url: str,
+        company: Optional[str] = None,
+        company_website: Optional[str] = None,
+    ) -> dict[str, int]:
+        """Ingest one generic career page: Crawl4AI primary, Firecrawl fallback.
+
+        Same normalize → source-quality → ``_persist_offloop`` contract as
+        every other ``ingest_*`` method — exactly one persistence path.
+        """
+        from app.crawlers.generic_fallback import crawl_generic_career_page
+
+        crawled_jobs, meta = await crawl_generic_career_page(
+            careers_url, company=company, company_website=company_website
+        )
+        normalized_jobs = [
+            self._apply_source_quality(
+                self.job_service.normalize_and_classify(j), careers_url=careers_url
+            )
+            for j in crawled_jobs
+        ]
+        result = await self._persist_offloop(normalized_jobs)
+        result = dict(result)
+        result["provider"] = meta.get("provider") or "none"
+        if meta.get("fallback"):
+            result["fallback"] = meta["fallback"]
+        return result
 
     @staticmethod
     def adzuna_rotation_batch(ordinal: int, batch_size: int = ADZUNA_BATCH_SIZE) -> list[str]:

@@ -86,6 +86,18 @@ class Settings(BaseSettings):
     firecrawl_timeout_seconds: float = Field(default=30.0, alias="FIRECRAWL_TIMEOUT_SECONDS")
     firecrawl_max_retries: int = Field(default=3, alias="FIRECRAWL_MAX_RETRIES")
     firecrawl_max_pages_per_crawl: int = Field(default=15, alias="FIRECRAWL_MAX_PAGES_PER_CRAWL")
+    # Firecrawl 429 circuit breaker: process-local cooldown (seconds) during
+    # which Firecrawl is skipped after a rate-limit. No Redis state.
+    firecrawl_circuit_cooldown_seconds: float = Field(
+        default=300.0, alias="FIRECRAWL_CIRCUIT_COOLDOWN_SECONDS"
+    )
+
+    # Crawl4AI self-hosted generic crawler (primary generic provider when on).
+    # Default OFF: the slim worker image has no Chromium until the Dockerfile
+    # browser layer lands AND CRAWL4AI_ENABLED=true is set in the environment.
+    crawl4ai_enabled: bool = Field(default=False, alias="CRAWL4AI_ENABLED")
+    crawl4ai_max_concurrency: int = Field(default=2, alias="CRAWL4AI_MAX_CONCURRENCY")
+    crawl4ai_timeout_seconds: float = Field(default=60.0, alias="CRAWL4AI_TIMEOUT_SECONDS")
 
     # Observability.
     sentry_dsn: str = Field(default="", alias="SENTRY_DSN")

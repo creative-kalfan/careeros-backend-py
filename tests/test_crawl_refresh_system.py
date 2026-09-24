@@ -193,8 +193,12 @@ def _patch_ingestion(monkeypatch, fake_repo, method, side_effect):
     else:
         mock = AsyncMock(return_value=side_effect)
     setattr(fake_ingestion, method, mock)
+    # Patch the module reference, NOT JobIngestionService.__new__: assigning
+    # __new__ rewires the type's tp_new slot and permanently breaks kwarg
+    # construction process-wide (even after undo), poisoning every later
+    # test that builds a JobIngestionService.
     monkeypatch.setattr(
-        crawl_jobs.JobIngestionService, "__new__", lambda cls, *a, **kw: fake_ingestion
+        crawl_jobs, "JobIngestionService", lambda *a, **kw: fake_ingestion
     )
     monkeypatch.setattr(crawl_jobs, "_record_crawl_status", AsyncMock())
     return crawl_jobs
@@ -239,7 +243,7 @@ async def test_failed_crawl_deactivates_nothing(monkeypatch):
 async def test_firecrawl_reconciliation_scoped_to_careers_url(monkeypatch):
     fake_repo = _FakeRepo()
     crawl_jobs = _patch_ingestion(
-        monkeypatch, fake_repo, "ingest_firecrawl_jobs",
+        monkeypatch, fake_repo, "ingest_generic_career_page",
         {"discovered": 4, "inserted": 1, "updated": 1, "unchanged": 2,
          "deduplicated": 0, "skipped": 0},
     )

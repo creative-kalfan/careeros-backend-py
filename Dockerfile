@@ -18,6 +18,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Crawl4AI browser layer (generic career-page crawler). Chromium system libs
+# for patchright + the downloaded browser binary. Safe when unused:
+# CRAWL4AI_ENABLED defaults to false and the adapter lazy-imports, so a
+# missing browser degrades to the Firecrawl fallback without breaking
+# worker startup. Set CRAWL4AI_ENABLED=true only after verifying this
+# layer built (Chromium present).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+    libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 && \
+    crawl4ai-setup && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY . .
 
 # Single-process entrypoint: Uvicorn as PID 1 (ARQ worker runs in a separate service).

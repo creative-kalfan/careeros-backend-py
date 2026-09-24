@@ -178,7 +178,7 @@ class TestWorkerFirecrawlBranch:
         from app.workers.jobs.crawl_jobs import crawl_company_job
 
         ingestion = MagicMock()
-        ingestion.ingest_firecrawl_jobs = AsyncMock(return_value={"discovered": 2, "inserted": 2})
+        ingestion.ingest_generic_career_page = AsyncMock(return_value={"discovered": 2, "inserted": 2})
         ingestion.job_repository.deactivate_stale_jobs.return_value = 0
 
         class FakeBus:
@@ -195,7 +195,7 @@ class TestWorkerFirecrawlBranch:
             )
 
         assert result["success"] is True
-        ingestion.ingest_firecrawl_jobs.assert_awaited_once_with(
+        ingestion.ingest_generic_career_page.assert_awaited_once_with(
             careers_url="https://acme.com/careers", company="Acme"
         )
 
