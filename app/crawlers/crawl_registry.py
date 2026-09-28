@@ -240,7 +240,10 @@ AGGREGATOR_TARGETS: list[CrawlTarget] = [
                 notes="Slug is the primary search query; adapter rotates India-first queries.",
                 source_type="aggregator"),
     CrawlTarget("jobspy", "data analyst India", "aggregator", 4, tier="P2",
-                notes="JobSpy Naukri/LinkedIn discovery; optional dep (python-jobspy).",
+                notes="JobSpy broad discovery layer (python-jobspy 1.1.82): the "
+                      "worker runs the bounded rotation batch (query families x "
+                      "India locations x freshness buckets) with provider-aware "
+                      "throttling; the slug rides along as one extra query.",
                 source_type="aggregator"),
 ]
 

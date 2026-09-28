@@ -141,6 +141,28 @@ async def crawl_generic_career_page(
         "firecrawl_skipped_by_circuit": False,
     }
 
+    # Structured-source coverage gate: when a direct ATS adapter already
+    # covers this company (registry-grounded, strong evidence), generic
+    # crawling is redundant — skip before spending Crawl4AI/Firecrawl
+    # budget. ATS adapters remain authoritative; the gate only runs when
+    # the company identity is known.
+    if company:
+        try:
+            from app.services.jobs.jobspy_strategy import company_has_structured_source
+
+            if company_has_structured_source(company):
+                meta.update(provider="structured-coverage", jobs=0)
+                logger.info(
+                    "crawler provider=generic url=%s skipped=true "
+                    "reason=structured-coverage company=%s",
+                    careers_url, company,
+                )
+                return [], meta
+        except Exception as exc:
+            logger.warning(
+                "crawler structured-coverage check failed (non-blocking): %s", exc
+            )
+
     if settings.crawl4ai_enabled:
         from app.crawlers.adapters.crawl4ai import Crawl4AIAdapter
 

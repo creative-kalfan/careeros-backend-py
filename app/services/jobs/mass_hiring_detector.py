@@ -47,6 +47,90 @@ _POSSIBLE_PHRASES = (
     "campus hiring",
 )
 
+# Standalone walk-in / immediate-hiring phrases (JobSpy walk-in discovery).
+# Weaker than the explicit drive phrases above: a title hit is strong
+# campaign evidence, but a description hit requires supporting context
+# (campaign language, vacancy count, deadline, or venue/date details) to
+# avoid fabricating walk-in classifications. Ordered longest-first so the
+# most specific phrase wins the signal label.
+_WALKIN_STANDALONE_PHRASES = (
+    "face-to-face interview",
+    "face to face interview",
+    "walk-in interview",
+    "walk in interview",
+    "walkin interview",
+    "walk in interviews",
+    "immediate joiner",
+    "immediate joiners",
+    "mega walk-in",
+    "mega walkin",
+    "mass hiring",
+    "open interview",
+    "open interviews",
+    "walk-in",
+    "walkin",
+    "walk in",
+)
+
+# Venue/date details that corroborate a description-only walk-in mention
+# (evidence of a real hiring event, not an incidental phrase).
+_WALKIN_VENUE_PATTERN = re.compile(
+    r"\b(?:venue|dates?|timings?|reporting\s+time|carry\s+(?:your\s+)?(?:resume|cv)"
+    r"|bring\s+(?:your\s+)?(?:resume|cv)|on\s+\d{1,2}(?:st|nd|rd|th)?\b"
+    r"|between\s+\d|from\s+\d{1,2}\s*(?:am|pm))\b",
+    re.IGNORECASE,
+)
+
+
+# Furniture senses of "walk-in" (closet/wardrobe/cooler) are never hiring
+# evidence — strip them before matching so "Walk-in Closet Installer" is
+# not classified as a hiring event.
+_WALKIN_FURNITURE_PATTERN = re.compile(
+    r"walk-?\s*in\s+(?:closet|wardrobe|cooler|freezer|shower|tub)s?",
+    re.IGNORECASE,
+)
+
+
+def detect_walkin(title: str = "", description: str = "") -> dict[str, Any]:
+    """Evidence-only walk-in detection (no classification ladder here).
+
+    Returns matched phrases with title/description provenance. Incidental
+    vendor/recruiter mentions (see _INCIDENTAL_PATTERNS) are excluded so a
+    posting is only flagged when the title/description contains sufficient
+    real evidence. The confidence ladder lives in detect_mass_hiring.
+    """
+    t_clean = _WALKIN_FURNITURE_PATTERN.sub(" ", (title or "").lower())
+    d_clean = _WALKIN_FURNITURE_PATTERN.sub(" ", (description or "").lower())
+    haystack = f"{t_clean} {d_clean}".strip()
+    if not haystack:
+        return {"is_walkin": False, "signals": []}
+    if any(pat.search(haystack) for pat in _INCIDENTAL_PATTERNS):
+        return {"is_walkin": False, "signals": []}
+    signals: list[str] = []
+    for phrase in _WALKIN_STANDALONE_PHRASES:
+        if phrase in t_clean:
+            signals.append(f"title: walk-in: {phrase}")
+        elif phrase in d_clean:
+            # Bare short tokens ("walk in") need a word-boundary check so
+            # prose like "you will walk into ownership" never matches.
+            if len(phrase) <= len("walk in"):
+                if re.search(rf"\b{re.escape(phrase)}\b", d_clean):
+                    signals.append(f"walk-in: {phrase}")
+            else:
+                signals.append(f"walk-in: {phrase}")
+    # Deduplicate while preserving order (a hyphenated hit also contains
+    # shorter variants); keep the most specific signal per provenance.
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for signal in signals:
+        marker = signal.split("walk-in: ")[-1]
+        key = ("title" if signal.startswith("title:") else "desc") + ":" + marker
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(signal)
+    return {"is_walkin": bool(ordered), "signals": ordered}
+
 _INCIDENTAL_PATTERNS = (
     re.compile(r"\b(?:provide[s]?|offering|offers?|delivers?|specialize[s]?\s+in)\s+[^.\n]*?\b(?:mass|bulk|campus)\s+hiring\b", re.IGNORECASE),
     re.compile(r"\b(?:mass|bulk|campus)\s+hiring\s+(?:solutions?|platform[s]?|tools?|services?|software|products?|firm|consulting)\b", re.IGNORECASE),
@@ -186,20 +270,44 @@ def detect_mass_hiring(
         if phrase in haystack:
             signals_detected.append(phrase)
 
+    # Walk-in evidence (standalone phrases): title hits are strong campaign
+    # evidence; description hits need corroboration (campaign language,
+    # vacancy count, deadline, or venue/date details).
+    walkin = detect_walkin(title or "", description or "")
+    walkin_signals: list[str] = walkin["signals"] if not is_incidental else []
+    title_walkin = [s for s in walkin_signals if s.startswith("title:")]
+    desc_walkin = [s for s in walkin_signals if not s.startswith("title:")]
+    has_walkin_venue = bool(_WALKIN_VENUE_PATTERN.search(haystack))
+
     # Determine confidence:
     # Campaign-specific evidence required for VERIFIED_MASS_HIRING:
-    # - Explicit verified phrase in title
+    # - Explicit verified phrase in title (or standalone walk-in phrase in title)
     # - OR (explicit verified phrase in desc AND (has_campaign_language or vacancy_count or deadline) AND NOT purely incidental)
+    # - OR (standalone walk-in phrase in desc AND corroborating event evidence)
     # - OR massive vacancy count (>= 50 openings)
     if title_has_verified and not is_incidental:
         confidence = "VERIFIED_MASS_HIRING"
+    elif title_walkin and not is_incidental:
+        confidence = "VERIFIED_MASS_HIRING"
+        signals_detected.extend(title_walkin)
     elif desc_phrases_found and not is_incidental and (has_campaign_language or (vacancy_count and vacancy_count >= 30) or deadline):
         confidence = "VERIFIED_MASS_HIRING"
         signals_detected.extend(desc_phrases_found)
+    elif desc_walkin and not is_incidental and (
+        has_campaign_language
+        or (vacancy_count and vacancy_count >= 30)
+        or deadline
+        or has_walkin_venue
+    ):
+        confidence = "VERIFIED_MASS_HIRING"
+        signals_detected.extend(desc_walkin)
+        if has_walkin_venue:
+            signals_detected.append("walk-in venue/date details")
     elif vacancy_count and vacancy_count >= 50 and not is_incidental:
         confidence = "VERIFIED_MASS_HIRING"
-    elif not is_incidental and (any(p in signals_detected for p in _POSSIBLE_PHRASES) or (vacancy_count and vacancy_count >= 15) or desc_phrases_found):
+    elif not is_incidental and (any(p in signals_detected for p in _POSSIBLE_PHRASES) or (vacancy_count and vacancy_count >= 15) or desc_phrases_found or desc_walkin):
         confidence = "POSSIBLE_MASS_HIRING"
+        signals_detected.extend([s for s in desc_walkin if s not in signals_detected])
     else:
         confidence = "NOT_MASS_HIRING"
 
@@ -235,5 +343,7 @@ def detect_mass_hiring(
         "signals_detected": signals_detected,
         "vacancy_count": vacancy_count,
         "deadline": deadline,
+        "walkin_signals": walkin_signals,
+        "walkin_detected": bool(walkin_signals),
         "detected_at": datetime.now(timezone.utc).isoformat(),
     }

@@ -28,12 +28,13 @@ class Settings(BaseSettings):
     redis_url: str = Field(default="redis://localhost:6379", alias="REDIS_URL")
 
     # ARQ worker queue-poll interval (seconds). Each poll issues one
-    # ZRANGEBYSCORE against Upstash, so this single value dominates the
-    # monthly request budget: 86400/poll_delay requests/day when idle.
+    # ZRANGEBYSCORE, so this single value dominates the monthly request
+    # count on metered plans: 86400/poll_delay requests/day when idle.
     # Default 10s keeps one idle worker at ~8.6k req/day (~259k/month,
-    # ~52% of the 500k Upstash budget), leaving headroom for real jobs.
-    # The 0.5s ARQ upstream default costs ~173k req/day (~5.2M/month,
-    # >10x the budget) and must not be restored in production.
+    # safe for request-billed plans), leaving headroom for real jobs.
+    # The 0.5s ARQ upstream default costs ~173k req/day (~5.2M/month)
+    # and must not be restored on metered plans. Non-metered backends
+    # (e.g. Aiven Valkey free tier) may lower it via env for faster pickup.
     arq_poll_delay_seconds: float = Field(default=10.0, alias="ARQ_POLL_DELAY_SECONDS")
 
     # Crawl concurrency-lock TTL (seconds). Must exceed the maximum expected
@@ -75,10 +76,44 @@ class Settings(BaseSettings):
     adzuna_queries_per_crawl: int = Field(default=3, alias="ADZUNA_QUERIES_PER_CRAWL")
     adzuna_results_per_page: int = Field(default=50, alias="ADZUNA_RESULTS_PER_PAGE")
 
-    # JobSpy (optional dep python-jobspy; missing dep = graceful empty crawl).
+    # JobSpy broad discovery layer (python-jobspy==1.1.82; missing dep =
+    # graceful empty crawl). Bounded rotation: each scheduled run executes
+    # only max(query_batch, location_batch) + optional extra searches —
+    # never the full query matrix simultaneously.
     jobspy_enabled: bool = Field(default=True, alias="JOBSPY_ENABLED")
     jobspy_results_wanted: int = Field(default=50, alias="JOBSPY_RESULTS_WANTED")
     jobspy_timeout_seconds: float = Field(default=60.0, alias="JOBSPY_TIMEOUT_SECONDS")
+    # Provider/site allowlist (comma-separated subset of
+    # indeed,naukri,glassdoor,linkedin). Indeed carries broad recurring
+    # searches; Naukri adds India-specific coverage; LinkedIn is
+    # rate-limit sensitive and gets the longer delay below.
+    jobspy_sites: str = Field(default="indeed,naukri,linkedin", alias="JOBSPY_SITES")
+    # Bounded concurrency for JobSpy searches within one scheduled run.
+    jobspy_max_concurrent: int = Field(default=2, alias="JOBSPY_MAX_CONCURRENT")
+    # Minimum delay between consecutive searches per provider (seconds).
+    jobspy_per_provider_delay_seconds: float = Field(
+        default=5.0, alias="JOBSPY_PER_PROVIDER_DELAY_SECONDS"
+    )
+    # Conservative spacing for LinkedIn (rate-limit sensitive).
+    jobspy_linkedin_delay_seconds: float = Field(
+        default=15.0, alias="JOBSPY_LINKEDIN_DELAY_SECONDS"
+    )
+    # Rotation batch sizes (queries x locations pair round-robin).
+    jobspy_query_batch_size: int = Field(default=4, alias="JOBSPY_QUERY_BATCH_SIZE")
+    jobspy_location_batch_size: int = Field(default=2, alias="JOBSPY_LOCATION_BATCH_SIZE")
+    # Freshness buckets (hours_old rotation: very recent / recent / rolling).
+    jobspy_freshness_buckets: str = Field(default="24,72,168", alias="JOBSPY_FRESHNESS_BUCKETS")
+    # Provider cooldown after repeated failures + consecutive-failure
+    # threshold that opens the circuit (429s back off exponentially).
+    jobspy_provider_cooldown_seconds: float = Field(
+        default=600.0, alias="JOBSPY_PROVIDER_COOLDOWN_SECONDS"
+    )
+    jobspy_circuit_threshold: int = Field(default=3, alias="JOBSPY_CIRCUIT_THRESHOLD")
+    # Identical query/location/provider/freshness combos are skipped inside
+    # this window (freshness-aware skipping, hours).
+    jobspy_search_cache_ttl_hours: float = Field(
+        default=24.0, alias="JOBSPY_SEARCH_CACHE_TTL_HOURS"
+    )
 
     # Firecrawl (backend-only credential; empty key = Firecrawl unconfigured).
     firecrawl_api_key: str = Field(default="", alias="FIRECRAWL_API_KEY")

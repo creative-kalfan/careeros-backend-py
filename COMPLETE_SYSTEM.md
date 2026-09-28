@@ -1238,6 +1238,105 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   back to Firecrawl; browser needs the Dockerfile Chromium layer before
   `CRAWL4AI_ENABLED=true` is useful in production.
 
+### 9.24 JobSpy broad discovery layer (primary board coverage, 2026-09-28)
+
+- **Why (audit):** the JobSpy adapter existed but the production path ran a
+  single hard-coded P2 query (`data analyst India`, one location, no
+  freshness bucket, no throttling, no rotation) once per aggregator pass —
+  JobSpy contributed no measurable fresher/internship/walk-in inventory.
+  It is now the controlled broad discovery layer between the direct ATS
+  adapters and Adzuna. Hierarchy: ATS (authoritative) > JobSpy (broad
+  discovery) > Adzuna (additional coverage) > Crawl4AI (generic pages) >
+  Firecrawl (fallback only). Nothing was removed.
+- **Query strategy** (`app/services/jobs/jobspy_strategy.py`, pure +
+  deterministic): 11 bounded query families (fresher_data,
+  software_backend, ai_ml, qa_testing, erp_enterprise, cloud_devops,
+  finance_bfsi, operations_support, core_experienced, internship,
+  walkin_mass) covering fresher/graduate/junior/trainee/associate/entry/
+  campus/intership/walk-in intent across Data, Software/Backend, AI/ML,
+  QA, ERP, Cloud/DevOps, Finance/BFSI and support roles; 16 India-first
+  locations (India + 14 cities + Remote India); freshness buckets
+  24h/72h/168h (one per run, rotated). Queries and locations rotate
+  independently (no role x city cross-product); each run executes at most
+  `max(query_batch, location_batch)` searches (defaults 4 x 2).
+- **Provider matrix** (pinned `python-jobspy==1.1.82`): default rotation
+  `indeed,naukri,linkedin` (Indeed = broad recurring, Naukri =
+  India-specific, LinkedIn = conservative; Glassdoor opt-in via
+  `JOBSPY_SITES`). Per-site kwargs are conservative: hours_old only for
+  indeed/glassdoor/linkedin, country_indeed="India" only for
+  indeed/glassdoor, naukri gets search_term/location only. Sites scrape in
+  isolated groups so a Naukri bot-gate never aborts other providers.
+- **Rate limiting** (`app/services/jobs/jobspy_throttle.py`, process-local
+  like the Firecrawl breaker): `JOBSPY_MAX_CONCURRENT=2` semaphore +
+  per-provider locks, per-provider minimum delays (Indeed 5s, LinkedIn
+  15s), 24h freshness cache skipping identical searches, exponential
+  backoff on 429 (never retried aggressively), per-provider circuit
+  breaker (3 consecutive failures -> 600s cooldown). One provider failure
+  never aborts sibling searches.
+- **Freshness:** hours_old buckets bias intake to recent postings; the
+  `JOB_STALE_AFTER_DAYS` lifecycle stays authoritative (query-based
+  sources remain exempt from not-seen deactivation, as before).
+- **Dedup (unchanged rules):** canonical pipeline verbatim
+  (normalize -> source-quality -> `_drop_invalid` -> `upsert_jobs`).
+  Identity stays `(source_platform, external_job_id)`; the same URL from
+  ATS + JobSpy keeps separate rows and the ATS tier (2) always outranks
+  JobSpy (5) — JobSpy can never overwrite an official row; source
+  escalation preserves the better provenance.
+- **Fresher classification:** no second taxonomy — `experience_level` from
+  the canonical `classify_seniority` (title precedence excludes senior/
+  lead/principal/manager even when "freshers" appears in the body).
+- **Walk-in detection** (`mass_hiring_detector.detect_walkin` +
+  ladder extension): title hits are strong evidence (verified);
+  description hits need corroboration (campaign language, 30+ openings,
+  deadline, or venue/date details); incidental vendor/recruiter mentions
+  and furniture senses ("walk-in closet") are excluded. Persisted in the
+  existing `mass_hiring_details.walkin_signals` JSONB — no new columns.
+- **Emerging-company discovery:** deterministic hiring-signal score from
+  observable batch facts (recent/fresher/internship/India/openings/
+  recurring/source-diversity, -4 when an ATS board already covers the
+  company). Labels: "emerging hiring company" / "under-covered company" /
+  "active hiring company" / "ats-covered company" — never "best startups".
+- **Generic-crawl pressure:** `crawl_generic_career_page()` now skips
+  (meta `provider="structured-coverage"`) when the company has a direct
+  ATS board in the registry — the only condition strong enough to prove
+  redundant crawling. Crawl4AI/Firecrawl and the Firecrawl retry path are
+  otherwise untouched.
+- **Scheduler (no second scheduler):** the existing aggregator pass still
+  enqueues the single `jobspy` registry target; the worker branch now
+  calls `ingest_jobspy_scheduled(extra_query=slug)` which runs the
+  bounded rotation batch (ordinal = day-of-year) with one persistence
+  pass through the existing off-loop `_persist_offloop` boundary. All
+  network work stays in `asyncio.to_thread`; no new sync work on the
+  event loop. ARQ `max_jobs`/concurrency unchanged.
+- **Observability (structured logs, no secrets):** `jobspy run started`,
+  `jobspy provider=... query_family=...`, `jobspy discovered=...`,
+  `jobspy incremental=...`, `jobspy fresher=...`, `jobspy walkin=...`,
+  `jobspy startup_signal=...`, `jobspy rate_limited=true`,
+  `jobspy circuit_open=true`, `jobspy run completed`. Result dict carries
+  `incremental` (= inserted canonical jobs), fresher/internship/walk-in
+  counts, `emerging_company_jobs`, and per-provider outcomes.
+- **Config (all bounded, conservative defaults):** `JOBSPY_ENABLED`,
+  `JOBSPY_SITES`, `JOBSPY_MAX_CONCURRENT=2`,
+  `JOBSPY_PER_PROVIDER_DELAY_SECONDS=5`,
+  `JOBSPY_LINKEDIN_DELAY_SECONDS=15`, `JOBSPY_QUERY_BATCH_SIZE=4`,
+  `JOBSPY_LOCATION_BATCH_SIZE=2`, `JOBSPY_FRESHNESS_BUCKETS=24,72,168`,
+  `JOBSPY_PROVIDER_COOLDOWN_SECONDS=600`, `JOBSPY_CIRCUIT_THRESHOLD=3`,
+  `JOBSPY_TIMEOUT_SECONDS=60`, `JOBSPY_SEARCH_CACHE_TTL_HOURS=24`.
+  Crawl cadence reuses `AGGREGATOR_CRAWL_INTERVAL_HOURS`.
+- **Tests:** `tests/test_jobspy_expansion.py` (29 tests, all mocked:
+  query/location rotation + bounds, fresher/walk-in evidence, signal
+  scoring, throttle delays, circuit open/reset, 429 no-retry, cache skip,
+  scheduler registration + worker invocation, failure isolation,
+  ATS/Adzuna dedup semantics, incremental metrics, disabled behavior,
+  conservative defaults, structured-coverage gate). Updated
+  `test_job_ingestion_2o.py` worker test to the scheduled entry point.
+  Relevant suites green (191 passed); the 2
+  `test_india_target_freshness` failures are pre-existing on the clean
+  tree (verified via `git stash`).
+- **Known limitations:** `python-jobspy` is installed per requirements but
+  Naukri remains bot-gate prone (isolated per design); LinkedIn volume is
+  deliberately throttled; hours_old is not requested from Naukri.
+
 
 
 

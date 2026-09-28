@@ -247,10 +247,11 @@ def test_registry_supports_jobspy_and_company_metadata():
 
 @pytest.mark.asyncio
 async def test_worker_jobspy_branch_idempotent():
+    """The scheduler's jobspy target invokes the bounded rotation batch."""
     from app.workers.jobs import crawl_jobs
 
     ingestion = MagicMock()
-    ingestion.ingest_jobspy_jobs = AsyncMock(return_value={"discovered": 1, "inserted": 1})
+    ingestion.ingest_jobspy_scheduled = AsyncMock(return_value={"discovered": 1, "inserted": 1})
     ingestion.job_repository.deactivate_not_seen_since.return_value = 0
     ingestion.job_repository.deactivate_stale_jobs.return_value = 0
     import app.workers.jobs.crawl_jobs as mod
@@ -262,7 +263,9 @@ async def test_worker_jobspy_branch_idempotent():
     finally:
         mod.JobIngestionService = orig
     assert result["success"] is True
-    ingestion.ingest_jobspy_jobs.assert_awaited_once_with("data analyst India")
+    ingestion.ingest_jobspy_scheduled.assert_awaited_once_with(
+        extra_query="data analyst India"
+    )
 
 
 def test_jobspy_missing_dependency_degrades_to_empty():

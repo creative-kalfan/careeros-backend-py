@@ -375,8 +375,15 @@ class JobIngestionService:
         query: str = "data analyst India",
         location: str = "India",
         results_wanted: Optional[int] = None,
+        hours_old: Optional[int] = None,
+        site_names: Optional[list[str]] = None,
     ) -> dict[str, int]:
-        """Ingest Naukri/LinkedIn coverage via JobSpy into the canonical pipeline."""
+        """Ingest one JobSpy query into the canonical pipeline.
+
+        Single-search path (unchanged contract: returns the upsert counters
+        verbatim). The production scheduler uses ``ingest_jobspy_scheduled``
+        for the bounded rotation batch instead.
+        """
         from app.config import get_settings
         from app.crawlers.adapters.jobspy import JobSpyAdapter
 
@@ -389,6 +396,8 @@ class JobIngestionService:
             location=location,
             results_wanted=results_wanted or getattr(settings, "jobspy_results_wanted", 50),
             timeout_seconds=getattr(settings, "jobspy_timeout_seconds", 60.0),
+            hours_old=hours_old,
+            site_names=site_names,
         )
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [
@@ -396,6 +405,323 @@ class JobIngestionService:
             for j in crawled_jobs
         ]
         return await self._persist_offloop(self._drop_invalid(normalized_jobs))
+
+    @staticmethod
+    def jobspy_rotation_batch(
+        ordinal: int,
+        query_batch_size: Optional[int] = None,
+        location_batch_size: Optional[int] = None,
+    ):
+        """Deterministic bounded JobSpy search batch for one crawl cycle.
+
+        Resolves settings-backed defaults (JOBSPY_QUERY_BATCH_SIZE /
+        JOBSPY_LOCATION_BATCH_SIZE / JOBSPY_SITES / JOBSPY_FRESHNESS_BUCKETS)
+        and delegates to the pure strategy rotation. See
+        ``app.services.jobs.jobspy_strategy.rotation_batch``.
+        """
+        from app.config import get_settings
+        from app.services.jobs.jobspy_strategy import (
+            parse_freshness_buckets,
+            parse_sites,
+            rotation_batch,
+        )
+
+        settings = get_settings()
+        batch_size = (
+            query_batch_size
+            if query_batch_size is not None
+            else int(getattr(settings, "jobspy_query_batch_size", 4))
+        )
+        loc_size = (
+            location_batch_size
+            if location_batch_size is not None
+            else int(getattr(settings, "jobspy_location_batch_size", 2))
+        )
+        return rotation_batch(
+            ordinal,
+            query_batch_size=batch_size,
+            location_batch_size=loc_size,
+            sites=parse_sites(getattr(settings, "jobspy_sites", "")),
+            results_wanted=int(getattr(settings, "jobspy_results_wanted", 50)),
+            freshness_buckets=parse_freshness_buckets(
+                getattr(settings, "jobspy_freshness_buckets", "")
+            ),
+        )
+
+    async def ingest_jobspy_scheduled(
+        self,
+        extra_query: Optional[str] = None,
+        ordinal: Optional[int] = None,
+        throttle=None,
+        breaker=None,
+        cache=None,
+        fetch_fn=None,
+    ) -> dict:
+        """Run one bounded JobSpy discovery batch (the production path).
+
+        Executes the deterministic rotation batch sequentially-bounded
+        (``JOBSPY_MAX_CONCURRENT`` semaphore + per-provider locks so the
+        same provider's searches stay spaced by its minimum delay),
+        normalizes through the canonical pipeline, and persists once via
+        the existing off-loop boundary.
+
+        Reliability: one provider/search failure never aborts the others;
+        429s back off without retry; repeated failures open the provider
+        circuit; identical searches are skipped inside the freshness
+        window. Deduplication reuses the canonical pipeline verbatim —
+        ATS rows stay authoritative (a JobSpy re-discovery of an ATS URL
+        keeps its own ``(source_platform, external_job_id)`` identity and
+        can never overwrite the official row).
+        """
+        from app.config import get_settings
+        from app.crawlers.adapters.jobspy import JobSpyAdapter
+        from app.services.jobs.jobspy_strategy import (
+            JobSpySearch,
+            ats_covered_companies,
+            parse_freshness_buckets,
+            parse_sites,
+            score_companies_from_jobs,
+        )
+        from app.services.jobs.jobspy_throttle import (
+            ProviderOutcomeRecord,
+            SearchCache,
+            get_jobspy_breaker,
+            get_jobspy_cache,
+            get_jobspy_throttle,
+            is_rate_limit_error,
+        )
+
+        settings = get_settings()
+        base_zeros: dict = {
+            "discovered": 0, "inserted": 0, "updated": 0, "unchanged": 0,
+            "deduplicated": 0, "skipped": 0, "valid": 0, "rejected": 0,
+            "incremental": 0, "fresher": 0, "internships": 0, "walkins": 0,
+            "emerging_company_jobs": 0, "unique_companies": 0,
+            "searches_executed": 0, "searches_skipped": 0,
+            "provider_outcomes": [],
+        }
+        if not getattr(settings, "jobspy_enabled", True):
+            logger.info("jobspy run completed enabled=false incremental=0")
+            return dict(base_zeros)
+
+        sites = parse_sites(getattr(settings, "jobspy_sites", ""))
+        buckets = parse_freshness_buckets(
+            getattr(settings, "jobspy_freshness_buckets", "")
+        )
+        if ordinal is None:
+            ordinal = datetime.now(timezone.utc).timetuple().tm_yday
+        batch = self.jobspy_rotation_batch(ordinal)
+        if extra_query and str(extra_query).strip():
+            first_site = (sites or ["indeed"])[0]
+            bucket = buckets[int(ordinal) % len(buckets)]
+            from app.services.jobs.jobspy_strategy import HOURS_OLD_SUPPORTED_SITES
+
+            batch = list(batch) + [
+                JobSpySearch(
+                    query=str(extra_query).strip(),
+                    location="India",
+                    site=first_site,
+                    hours_old=bucket if first_site in HOURS_OLD_SUPPORTED_SITES else None,
+                    results_wanted=int(getattr(settings, "jobspy_results_wanted", 50)),
+                    query_family="ad_hoc",
+                )
+            ]
+        from app.services.jobs.jobspy_strategy import MAX_JOBSPY_SEARCHES_PER_RUN
+
+        batch = list(batch)[: MAX_JOBSPY_SEARCHES_PER_RUN + 1]
+
+        throttle = throttle or get_jobspy_throttle()
+        breaker = breaker or get_jobspy_breaker()
+        cache = cache or get_jobspy_cache()
+        timeout_seconds = float(getattr(settings, "jobspy_timeout_seconds", 60.0))
+        max_concurrent = max(1, min(int(getattr(settings, "jobspy_max_concurrent", 2)), 3))
+
+        logger.info(
+            "jobspy run started searches=%d sites=%s buckets=%s ordinal=%d",
+            len(batch), ",".join(sites), ",".join(str(b) for b in buckets), int(ordinal),
+        )
+        if not batch:
+            logger.info("jobspy run completed incremental=0 reason=no-searches")
+            return dict(base_zeros)
+
+        semaphore = asyncio.Semaphore(max_concurrent)
+        provider_locks: dict[str, asyncio.Lock] = {}
+
+        def _lock_for(site: str) -> asyncio.Lock:
+            key = str(site or "").lower()
+            lock = provider_locks.get(key)
+            if lock is None:
+                lock = asyncio.Lock()
+                provider_locks[key] = lock
+            return lock
+
+        async def _run_search(search: JobSpySearch):
+            record = ProviderOutcomeRecord(
+                provider=search.site,
+                query_family=search.query_family,
+                location=search.location,
+                requested=search.results_wanted,
+            )
+            key = SearchCache.key(search.site, search.query, search.location, search.hours_old)
+            if cache.is_fresh(key):
+                record.outcome = "skipped_cached"
+                logger.info(
+                    "jobspy provider=%s query_family=%s skipped=true reason=freshness-cache",
+                    search.site, search.query_family,
+                )
+                return [], record
+            if breaker.should_skip(search.site):
+                record.outcome = "skipped_circuit"
+                logger.info(
+                    "jobspy circuit_open=true provider=%s query_family=%s",
+                    search.site, search.query_family,
+                )
+                return [], record
+            start = time.monotonic()
+            normalized: list = []
+            try:
+                async with semaphore:
+                    async with _lock_for(search.site):
+                        await throttle.wait(search.site)
+                        adapter = JobSpyAdapter(
+                            query=search.query,
+                            location=search.location,
+                            results_wanted=search.results_wanted,
+                            site_names=[search.site],
+                            timeout_seconds=timeout_seconds,
+                            fetch_fn=fetch_fn,
+                            hours_old=search.hours_old,
+                        )
+                        crawled = await adapter.discover_jobs()
+                        throttle.record(search.site)
+                        error = adapter.last_error
+                        outcome = adapter.last_outcome
+                        if error is not None and is_rate_limit_error(error):
+                            breaker.record_rate_limited(search.site)
+                            record.outcome = "rate_limited"
+                            record.rate_limited = True
+                            logger.info(
+                                "jobspy rate_limited=true provider=%s query_family=%s",
+                                search.site, search.query_family,
+                            )
+                        elif error is not None or outcome == "transient":
+                            breaker.record_failure(search.site)
+                            record.outcome = "transient"
+                        elif outcome == "config":
+                            record.outcome = "config"
+                            logger.info(
+                                "jobspy provider=%s query_family=%s outcome=config "
+                                "reason=missing-dependency",
+                                search.site, search.query_family,
+                            )
+                        else:
+                            breaker.record_success(search.site)
+                            cache.mark(key)
+                        record.discovered = len(crawled) if isinstance(crawled, list) else 0
+                        for crawled_job in crawled or []:
+                            try:
+                                normalized_job = self._apply_source_quality(
+                                    self.job_service.normalize_and_classify(crawled_job)
+                                )
+                            except Exception as exc:
+                                logger.warning("jobspy record skipped: %s", exc)
+                                continue
+                            normalized.append(normalized_job)
+                        kept = self._drop_invalid(normalized)
+                        record.valid = len(kept)
+                        normalized = kept
+            except Exception as exc:
+                # Isolation: a search-level failure (throttle/сache bugs,
+                # coding errors) never aborts the sibling searches.
+                logger.warning(
+                    "jobspy provider=%s query_family=%s failed isolated: %s",
+                    search.site, search.query_family, exc,
+                )
+                try:
+                    breaker.record_failure(search.site)
+                except Exception:
+                    pass
+                record.outcome = "transient"
+                normalized = []
+            record.elapsed_ms = int((time.monotonic() - start) * 1000)
+            logger.info(
+                "jobspy provider=%s query_family=%s location=%s "
+                "discovered=%d valid=%d elapsed_ms=%d outcome=%s",
+                record.provider, record.query_family, record.location,
+                record.discovered, record.valid, record.elapsed_ms, record.outcome,
+            )
+            return normalized, record
+
+        results = await asyncio.gather(*(_run_search(search) for search in batch))
+        all_normalized: list = []
+        outcome_dicts: list[dict] = []
+        executed = 0
+        skipped = 0
+        for normalized, record in results:
+            all_normalized.extend(normalized)
+            outcome_dicts.append(record.__dict__)
+            if record.outcome in ("skipped_cached", "skipped_circuit"):
+                skipped += 1
+            else:
+                executed += 1
+
+        persist_result = await self._persist_offloop(all_normalized)
+        result: dict = dict(persist_result)
+        result["discovered"] = sum(r["discovered"] for r in outcome_dicts)
+        result["valid"] = len(all_normalized)
+        result["rejected"] = max(result["discovered"] - result["valid"], 0)
+        result["incremental"] = int(result.get("inserted", 0))
+
+        fresher = sum(
+            1 for job in all_normalized
+            if str(getattr(job, "experience_level", "") or "").lower() in ("entry", "intern")
+        )
+        internships = sum(
+            1 for job in all_normalized
+            if str(getattr(job, "experience_level", "") or "").lower() == "intern"
+        )
+        walkins = sum(
+            1 for job in all_normalized
+            if bool((getattr(job, "mass_hiring_details", None) or {}).get("walkin_detected"))
+        )
+        try:
+            scored = score_companies_from_jobs(all_normalized, ats_covered_companies())
+        except Exception as exc:
+            logger.warning("jobspy startup_signal scoring failed (isolated): %s", exc)
+            scored = []
+        emerging_labels = {"emerging hiring company", "under-covered company"}
+        emerging_jobs = sum(
+            int(item.get("stats", {}).get("active_openings", 0))
+            for item in scored
+            if item.get("label") in emerging_labels
+        )
+        result["fresher"] = fresher
+        result["internships"] = internships
+        result["walkins"] = walkins
+        result["emerging_company_jobs"] = emerging_jobs
+        result["unique_companies"] = len(scored)
+        result["searches_executed"] = executed
+        result["searches_skipped"] = skipped
+        result["provider_outcomes"] = outcome_dicts
+
+        logger.info(
+            "jobspy discovered=%d incremental=%d fresher=%d walkin=%d "
+            "startup_signal=%d unique_companies=%d",
+            result["discovered"], result["incremental"], fresher, walkins,
+            emerging_jobs, len(scored),
+        )
+        for item in scored[:10]:
+            if item.get("label") in emerging_labels:
+                logger.info(
+                    "jobspy startup_signal=%s company=%s score=%d reasons=%s",
+                    item["label"], item["company"], item["score"],
+                    ",".join(item.get("reasons", [])[:4]),
+                )
+        logger.info(
+            "jobspy run completed incremental=%d executed=%d skipped=%d",
+            result["incremental"], executed, skipped,
+        )
+        return result
 
     async def ingest_all(self) -> dict[str, dict[str, int]]:
         """Ingest jobs from all configured sources.

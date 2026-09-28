@@ -189,7 +189,12 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         elif source == "adzuna":
             result = await ingestion.ingest_adzuna_jobs(slug or DEFAULT_ADZUNA_QUERY)
         elif source == "jobspy":
-            result = await ingestion.ingest_jobspy_jobs(slug or "data analyst India")
+            # Broad discovery layer: bounded rotation batch (query families
+            # x India locations x freshness buckets) with provider-aware
+            # throttling. The registry slug rides along as one extra query.
+            result = await ingestion.ingest_jobspy_scheduled(
+                extra_query=slug or None
+            )
         elif source == "ycombinator":
             result = await ingestion.ingest_ycombinator_jobs()
         elif source == "firecrawl":
