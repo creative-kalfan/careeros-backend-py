@@ -45,6 +45,28 @@ _PROVENANCE_FIELDS = (
     "first_seen_at", "last_crawled_at", "source_history",
 )
 
+# Bulk I/O chunk sizes: bound per-request payload/URL length so no single
+# PostgREST call grows with board size. 200 identities ≈ 4-6KB of query
+# string; 200 full rows ≈ ~1-2MB worst case (large HTML descriptions) —
+# safely under Supabase limits while collapsing ~2N round trips per batch
+# to a handful. Deactivation IDs are tiny (UUIDs), hence the larger chunk.
+_UPSERT_FETCH_CHUNK = 200
+_UPSERT_WRITE_CHUNK = 200
+_DEACTIVATE_ID_CHUNK = 500
+
+# Projected columns for the bulk existence fetch. Strictly the fields the
+# upsert decision reads (identity + _is_same_job content + provenance +
+# lifecycle flags) — a fraction of select("*") payload per row.
+_EXISTING_ROW_COLUMNS = ",".join(
+    dict.fromkeys(
+        (
+            "id", "is_active", "source_history",
+            "external_job_id", "source_platform",
+            *_CONTENT_FIELDS, *_PROVENANCE_FIELDS,
+        )
+    )
+)
+
 # Module-level column-availability cache. Schema is stable for a process
 # lifetime; per-instance None forced a ~1s SELECT on every request because
 # get_job_relevance_service() constructs a new JobRepository each call.
@@ -63,6 +85,12 @@ class JobRepository:
         self._has_last_seen_at: Optional[bool] = None
         self._has_provenance: Optional[bool] = None
         self._has_mass_hiring: Optional[bool] = None
+        # Logical Supabase request count for the most recent write call
+        # (upsert/deactivate). Repositories are per-crawl instances, so this
+        # is thread-confined; surfaced for throughput observability without
+        # changing any result-dict contract.
+        self._db_requests = 0
+        self.last_db_requests = 0
 
     # ------------------------------------------------------------------
     # Column probing
@@ -226,16 +254,162 @@ class JobRepository:
         return {**downgraded, **existing_prov}
 
 
+    def _find_many_by_identity(
+        self, source_platform: str, external_ids: list[str]
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """Bulk existence fetch: {(external_job_id, source_platform): row}.
+
+        One projected SELECT per chunk — the N individual
+        :meth:`_find_by_identity` round trips collapsed. Returns exactly the
+        rows the per-row lookups would (same predicate, same table); chunks
+        keep the ``in_`` query string URL-safe. Lookup failures propagate,
+        matching the per-row behavior (a failed crawl retries via ARQ).
+        """
+        found: dict[tuple[str, str], dict[str, Any]] = {}
+        ids = [i for i in dict.fromkeys(external_ids) if i]
+        for start in range(0, len(ids), _UPSERT_FETCH_CHUNK):
+            chunk = ids[start:start + _UPSERT_FETCH_CHUNK]
+            self._db_requests += 1
+            result = (
+                self._client.table("jobs")
+                .select(_EXISTING_ROW_COLUMNS)
+                .eq("source_platform", source_platform)
+                .in_("external_job_id", chunk)
+                .execute()
+            )
+            rows = result.data or []
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict) and row.get("external_job_id"):
+                    found[(row["external_job_id"], source_platform)] = row
+        return found
+
+    def _classify_row(
+        self,
+        key: tuple[str, str],
+        row: dict[str, Any],
+        existing: Optional[dict[str, Any]],
+        now_iso: str,
+        has_last_seen: bool,
+    ) -> tuple[str, Any]:
+        """Map one (row, existing) pair to a write action.
+
+        Single implementation of the upsert decision semantics shared by the
+        bulk path and the single-row race fallback. Actions:
+
+        - ("insert", row)
+        - ("touch", id) — same content: refresh ``last_seen_at`` only
+        - ("reactivate", id) — same content + fresh re-observation of an
+          inactive row: refresh ``last_seen_at`` and set active
+        - ("update", id, row) — content changed: full-row update
+        - ("noop", None) — same content with nothing to refresh
+        """
+        if existing is None:
+            new_row = self._apply_source_escalation(row, None)
+            if self._probe_has_provenance():
+                new_row.setdefault("first_seen_at", now_iso)
+            return ("insert", new_row)
+        new_row = self._apply_source_escalation(row, existing)
+        row_id = existing.get("id")
+        if self._is_same_job(existing, new_row):
+            # Nothing changed: refresh last_seen, and re-activate a
+            # previously-deactivated row when the re-observed posting is
+            # still fresh. Re-observation is positive evidence the job is
+            # currently listed (e.g. after not-seen churn or a lapsed
+            # crawl); the age staleness check in to_db_row still governs
+            # whether it MAY be active, so old postings stay inactive.
+            if existing.get("is_active") is False and new_row.get("is_active") is True:
+                return ("reactivate", row_id)
+            if has_last_seen:
+                return ("touch", row_id)
+            return ("noop", None)
+        return ("update", row_id, new_row)
+
+    def _upsert_single(
+        self,
+        key: tuple[str, str],
+        row: dict[str, Any],
+        now_iso: str,
+        has_last_seen: bool,
+    ) -> str:
+        """Today's exact per-row write path (insert-race fallback only).
+
+        Live-lookup, insert, 23505 re-lookup, update/touch — identical
+        semantics to the pre-bulk implementation. Used only when a bulk
+        insert chunk reports a duplicate-key race.
+        """
+        existing = self._coerce_row(self._find_by_identity(*key))
+        action, *payload = self._classify_row(key, row, existing, now_iso, has_last_seen)
+        if action == "insert":
+            try:
+                self._db_requests += 1
+                self._client.table("jobs").insert(payload[0]).execute()
+                return "inserted"
+            except APIError as exc:
+                args = str(getattr(exc, "args", ""))
+                code = str(getattr(exc, "code", "") or "")
+                if _DUPLICATE_KEY_CODE not in code and _DUPLICATE_KEY_CODE not in args:
+                    raise
+                # Lost the insert race: another worker created the row.
+                winner = self._coerce_row(self._find_by_identity(*key))
+                if not winner:
+                    return "deduplicated"
+                w_action, *w_payload = self._classify_row(
+                    key, row, winner, now_iso, has_last_seen
+                )
+                return self._execute_single_action(w_action, w_payload, has_last_seen, now_iso)
+        return self._execute_single_action(action, payload, has_last_seen, now_iso)
+
+    def _execute_single_action(
+        self,
+        action: str,
+        payload: list[Any],
+        has_last_seen: bool,
+        now_iso: str,
+    ) -> str:
+        """Execute one classified non-insert action; return the counter name."""
+        if action == "touch":
+            if has_last_seen:
+                self._db_requests += 1
+                self._client.table("jobs").update(
+                    {"last_seen_at": now_iso}
+                ).eq("id", payload[0]).execute()
+            return "unchanged"
+        if action == "reactivate":
+            update: dict[str, Any] = {"is_active": True}
+            if has_last_seen:
+                update["last_seen_at"] = now_iso
+            self._db_requests += 1
+            self._client.table("jobs").update(update).eq("id", payload[0]).execute()
+            return "unchanged"
+        if action == "update":
+            self._db_requests += 1
+            self._client.table("jobs").update(payload[1]).eq(
+                "id", payload[0]
+            ).execute()
+            return "updated"
+        return "unchanged"
+
     def upsert_jobs(self, jobs: list[NormalizedJob]) -> dict[str, int]:
         """Upsert a batch of normalized jobs idempotently.
 
         Counters: discovered, inserted, updated, unchanged, deduplicated, skipped.
+
+        Throughput shape (measured): one projected existence SELECT per
+        platform chunk + one bulk INSERT per new-row chunk + one bulk touch
+        UPDATE + per-row UPDATEs only for content-changed rows (rare on
+        recrawl) — instead of 1 SELECT + 1 INSERT/UPDATE per job. Row
+        decisions (identity, dedup, escalation, touch/reactivate, conflict
+        fallback) are byte-for-byte the pre-bulk semantics via
+        :meth:`_classify_row`.
         """
         inserted = 0
         updated = 0
         unchanged = 0
         deduplicated = 0
         skipped = 0
+        self._db_requests = 0
         seen_keys: set[tuple[str, str]] = set()
 
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -243,6 +417,8 @@ class JobRepository:
 
         has_mass_hiring = self._probe_has_mass_hiring()
 
+        # Phase 1: materialize rows (pure Python, no I/O).
+        pending: list[tuple[tuple[str, str], dict[str, Any]]] = []
         for job in jobs:
             if not job.external_job_id or not job.source_platform:
                 skipped += 1
@@ -260,53 +436,115 @@ class JobRepository:
                     row.pop(f, None)
             if has_last_seen:
                 row["last_seen_at"] = now_iso
+            pending.append((key, row))
 
-            existing = self._coerce_row(self._find_by_identity(*key))
-            row = self._apply_source_escalation(row, existing or None)
+        # Phase 2: one bulk existence fetch per platform (chunked).
+        by_platform: dict[str, list[str]] = {}
+        for key, _row in pending:
+            by_platform.setdefault(key[1], []).append(key[0])
+        existing_map: dict[tuple[str, str], dict[str, Any]] = {}
+        for platform, ids in by_platform.items():
+            existing_map.update(self._find_many_by_identity(platform, ids))
 
-            if not existing:
-                if self._probe_has_provenance():
-                    row.setdefault("first_seen_at", now_iso)
-                try:
-                    self._client.table("jobs").insert(row).execute()
-                    inserted += 1
-                except APIError as exc:
-                    args = str(getattr(exc, "args", ""))
-                    code = str(getattr(exc, "code", "") or "")
-                    if _DUPLICATE_KEY_CODE not in code and _DUPLICATE_KEY_CODE not in args:
-                        raise
-                    # Lost the insert race: another worker created the row.
-                    winner = self._coerce_row(self._find_by_identity(*key))
-                    if not winner:
-                        deduplicated += 1
-                        continue
-                    row = job.to_db_row()
-                    if has_last_seen:
-                        row["last_seen_at"] = now_iso
-                    row = self._apply_source_escalation(row, winner)
-                    self._client.table("jobs").update(row).eq("id", winner["id"]).execute()
+        # Phase 3: classify every row with the single shared decision fn.
+        to_insert: list[dict[str, Any]] = []
+        insert_keys: list[tuple[str, str]] = []
+        insert_rows: list[dict[str, Any]] = []
+        touch_ids: list[str] = []
+        reactivate_ids: list[str] = []
+        full_updates: list[tuple[str, dict[str, Any]]] = []
+        singles: list[tuple[tuple[str, str], dict[str, Any]]] = []
+        for key, row in pending:
+            action, *payload = self._classify_row(
+                key, row, existing_map.get(key), now_iso, has_last_seen
+            )
+            if action == "insert":
+                to_insert.append(payload[0])
+                insert_keys.append(key)
+                insert_rows.append(row)
+            elif action == "touch":
+                if payload[0] is None:
+                    singles.append((key, row))
+                else:
+                    touch_ids.append(payload[0])
+                    unchanged += 1
+            elif action == "reactivate":
+                if payload[0] is None:
+                    singles.append((key, row))
+                else:
+                    reactivate_ids.append(payload[0])
+                    unchanged += 1
+            elif action == "update":
+                if payload[0] is None:
+                    singles.append((key, row))
+                else:
+                    full_updates.append((payload[0], payload[1]))
                     updated += 1
-            elif self._is_same_job(existing, row):
-                # Nothing changed: refresh last_seen, and re-activate a
-                # previously-deactivated row when the re-observed posting is
-                # still fresh. Re-observation is positive evidence the job is
-                # currently listed (e.g. after not-seen churn or a lapsed
-                # crawl); the age staleness check in to_db_row still governs
-                # whether it MAY be active, so old postings stay inactive.
-                update: dict[str, Any] = {}
-                if has_last_seen:
-                    update["last_seen_at"] = now_iso
-                if existing.get("is_active") is False and row.get("is_active") is True:
-                    update["is_active"] = True
-                if update:
-                    self._client.table("jobs").update(update).eq(
-                        "id", existing["id"]
-                    ).execute()
+            else:  # noop: same content, nothing to refresh
                 unchanged += 1
-            else:
-                self._client.table("jobs").update(row).eq("id", existing["id"]).execute()
-                updated += 1
 
+        # Phase 4a: bulk insert new rows (chunked); 23505 races fall back
+        # to the exact per-row path for that chunk only.
+        for start in range(0, len(to_insert), _UPSERT_WRITE_CHUNK):
+            chunk = to_insert[start:start + _UPSERT_WRITE_CHUNK]
+            chunk_keys = insert_keys[start:start + _UPSERT_WRITE_CHUNK]
+            chunk_rows = insert_rows[start:start + _UPSERT_WRITE_CHUNK]
+            try:
+                self._db_requests += 1
+                self._client.table("jobs").insert(chunk).execute()
+                inserted += len(chunk)
+            except APIError as exc:
+                args = str(getattr(exc, "args", ""))
+                code = str(getattr(exc, "code", "") or "")
+                if _DUPLICATE_KEY_CODE not in code and _DUPLICATE_KEY_CODE not in args:
+                    raise
+                for key, row in zip(chunk_keys, chunk_rows):
+                    outcome = self._upsert_single(key, row, now_iso, has_last_seen)
+                    if outcome == "inserted":
+                        inserted += 1
+                    elif outcome == "updated":
+                        updated += 1
+                    elif outcome == "deduplicated":
+                        deduplicated += 1
+                    else:
+                        unchanged += 1
+
+        # Phase 4b: bulk touch (last_seen refresh) + bulk reactivate.
+        if has_last_seen and touch_ids:
+            for start in range(0, len(touch_ids), _DEACTIVATE_ID_CHUNK):
+                chunk = touch_ids[start:start + _DEACTIVATE_ID_CHUNK]
+                self._db_requests += 1
+                self._client.table("jobs").update(
+                    {"last_seen_at": now_iso}
+                ).in_("id", chunk).execute()
+        if reactivate_ids:
+            payload: dict[str, Any] = {"is_active": True}
+            if has_last_seen:
+                payload["last_seen_at"] = now_iso
+            for start in range(0, len(reactivate_ids), _DEACTIVATE_ID_CHUNK):
+                chunk = reactivate_ids[start:start + _DEACTIVATE_ID_CHUNK]
+                self._db_requests += 1
+                self._client.table("jobs").update(payload).in_("id", chunk).execute()
+
+        # Phase 4c: content-changed rows keep the exact per-row full update.
+        for row_id, new_row in full_updates:
+            self._db_requests += 1
+            self._client.table("jobs").update(new_row).eq("id", row_id).execute()
+
+        # Phase 4d: defensive singles (existing row without an id — the old
+        # code would KeyError here; route through the live per-row path).
+        for key, row in singles:
+            outcome = self._upsert_single(key, row, now_iso, has_last_seen)
+            if outcome == "inserted":
+                inserted += 1
+            elif outcome == "updated":
+                updated += 1
+            elif outcome == "deduplicated":
+                deduplicated += 1
+            else:
+                unchanged += 1
+
+        self.last_db_requests = self._db_requests
         return {
             "discovered": len(jobs),
             "inserted": inserted,
@@ -332,6 +570,7 @@ class JobRepository:
         if not self._probe_has_last_seen_at():
             return 0
 
+        self._db_requests = 0
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
         query = (
             self._client.table("jobs")
@@ -342,6 +581,7 @@ class JobRepository:
             query = query.eq("source_platform", source_platform)
 
         try:
+            self._db_requests += 1
             result = query.execute()
         except APIError:
             logger.warning("deactivate_stale_jobs: query failed", exc_info=True)
@@ -358,7 +598,7 @@ class JobRepository:
             except Exception:
                 return None
 
-        count = 0
+        stale_ids: list[str] = []
         for row in result.data or []:
             # Observation freshness wins: a re-observed old posting is still
             # listed, so last_seen_at (not posted_at) decides staleness.
@@ -367,13 +607,38 @@ class JobRepository:
                 continue
             if observed is None:
                 continue  # no usable date: never delete-by-staleness
+            if isinstance(row, dict) and row.get("id"):
+                stale_ids.append(row["id"])
+        count = self._bulk_set_inactive(stale_ids, what="deactivate_stale_jobs")
+        self.last_db_requests = self._db_requests
+        return count
+
+    def _bulk_set_inactive(self, ids: list[str], what: str) -> int:
+        """Set ``is_active=False`` for ids in bulk (chunked ``in_`` UPDATEs).
+
+        Same rows, same values as the former per-row loop. Best-effort
+        parity: a failed chunk falls back to per-row updates so one bad id
+        never forfeits the rest of the chunk's progress.
+        """
+        count = 0
+        for start in range(0, len(ids), _DEACTIVATE_ID_CHUNK):
+            chunk = ids[start:start + _DEACTIVATE_ID_CHUNK]
             try:
-                self._client.table("jobs").update({"is_active": False}).eq(
-                    "id", row["id"]
+                self._db_requests += 1
+                self._client.table("jobs").update({"is_active": False}).in_(
+                    "id", chunk
                 ).execute()
-                count += 1
+                count += len(chunk)
             except APIError:
-                logger.warning("deactivate_stale_jobs: update failed for %s", row.get("id"))
+                for row_id in chunk:
+                    try:
+                        self._db_requests += 1
+                        self._client.table("jobs").update({"is_active": False}).eq(
+                            "id", row_id
+                        ).execute()
+                        count += 1
+                    except APIError:
+                        logger.warning("%s: update failed for %s", what, row_id)
         return count
 
 
@@ -400,6 +665,7 @@ class JobRepository:
         if not self._probe_has_last_seen_at():
             return 0
 
+        self._db_requests = 0
         query = (
             self._client.table("jobs")
             .select("id")
@@ -411,27 +677,23 @@ class JobRepository:
             query = query.eq("careers_url", careers_url)
 
         try:
+            self._db_requests += 1
             result = query.execute()
         except APIError:
             logger.warning("deactivate_not_seen_since: query failed", exc_info=True)
             return 0
 
-        count = 0
-        for row in result.data or []:
-            try:
-                self._client.table("jobs").update({"is_active": False}).eq(
-                    "id", row["id"]
-                ).execute()
-                count += 1
-            except APIError:
-                logger.warning(
-                    "deactivate_not_seen_since: update failed for %s", row.get("id")
-                )
+        ids = [
+            row["id"] for row in (result.data or [])
+            if isinstance(row, dict) and row.get("id")
+        ]
+        count = self._bulk_set_inactive(ids, what="deactivate_not_seen_since")
         if count:
             logger.info(
                 "deactivate_not_seen_since: %d rows deactivated (source=%s since=%s careers_url=%s)",
                 count, source_platform, since_iso, careers_url or "-",
             )
+        self.last_db_requests = self._db_requests
         return count
 
     def count_active(self) -> int:
@@ -942,4 +1204,3 @@ class JobRepository:
                 base_rows.append(r)
 
         return base_rows, db_total
-

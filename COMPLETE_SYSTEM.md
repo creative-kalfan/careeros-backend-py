@@ -1340,3 +1340,66 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
 
 
 
+### 9.25 Production crawl throughput collapse: bulk persistence fix (2026-09-29)
+
+- **Production evidence:** worker + scheduler + Redis healthy, queue delays
+  83s -> 318s+, ARQ cancelling jobs at exactly 300s; timeouts observed inside
+  `ingest_ashby_jobs -> _persist_offloop -> asyncio.to_thread` and inside the
+  deactivation path; one scheduler provider-pass misfire (~8.5s). No Supabase
+  disconnect and no Firecrawl 429 storm in this excerpt.
+- **Measured root cause (no guessing):** `upsert_jobs()` issued exactly
+  1 SELECT + 1 INSERT/UPDATE per job (verified: 100 jobs = 200 HTTP calls);
+  deactivation issued 1 SELECT + N per-row UPDATEs. Each crawl held the single
+  process-global Supabase serialization lock for the whole batch, so N crawl
+  jobs -> N executor threads -> 1 lock -> serialized minutes-long holds
+  (model: 200-job board x 0.4s RTT x 2 = ~160s per hold; 10 queued crawls ->
+  last waiter >> 300s). ARQ max_tries=2 retries then re-enqueued timed-out
+  work, amplifying the backlog. Deactivation ran under the same lock (second
+  timeout site). Normalization is ~1.3ms/job on-loop (not the 300s cause;
+  contributes only loop jitter behind the 8.5s misfire).
+- **Fix (same pipeline, same semantics):** bulk upsert in
+  `JobRepository.upsert_jobs` — one projected existence SELECT per platform
+  chunk (200 ids) + one bulk INSERT per new-row chunk (200) + one bulk touch
+  UPDATE + per-row UPDATEs only for content-changed rows (rare on recrawl);
+  single shared decision fn `_classify_row` (insert/touch/reactivate/update/
+  noop) used by both bulk and 23505-race fallback; bulk deactivation via
+  chunked `in_` UPDATEs (500 ids) with per-row fallback preserving
+  best-effort partial progress. Lock KEPT (transport safety); holds are now a
+  handful of requests. No timeout / concurrency / scheduler / provider changes.
+- **Semantics preserved (tested):** identity, in-batch dedup, escalation up
+  (history appended) and never down, touch/reactivate/noop split, first_seen /
+  last_seen handling, mass_hiring/provenance columns, 23505 race fallback,
+  best-effort deactivation counts, exact result-dict shape.
+- **Instrumentation (structured, payload-free):** lock wait/hold/max/waiting
+  counters (`lock_stats_snapshot`); persistence log now carries
+  inserted/updated/unchanged/deduplicated/skipped + db_requests + lock_wait_ms
+  + lock_hold_ms + lock_waiting; crawl logs carry provider_ms
+  (discover+normalize), active_crawls gauge, deactivation db_requests;
+  explicit ARQ-cancelled path records status=cancelled and re-raises (never
+  a false success). Per-call DB request counts via
+  `JobRepository.last_db_requests` (result dicts unchanged).
+- **Throughput model (measured, RTT=0.4s reference):** before: 500-job board
+  ~= 1000 HTTP x 0.4s ~= ~400s single-hold -> guaranteed timeout under any
+  queueing. After: 500 new jobs ~= 3 fetch + 3 insert ~= ~6 x 0.4s ~= ~3s;
+  500-job recrawl (unchanged) ~= 3 + 1 ~= ~2s; deactivation of 500 stale ~=
+  1 + 1 ~= ~1s. 10 concurrent crawls now serialize seconds, not hours.
+- **Tests:** `tests/test_crawl_throughput.py` (16 tests over an in-memory
+  PostgREST fake: equivalence matrix, request-count collapse 200->2,
+  race/escalation/reactivate/no-last_seen paths, deactivation incl. chunk-
+  failure fallback, lock telemetry, phase timing, cancellation, log fields).
+  Updated 6 tests that pinned the per-row surface to the bulk surface
+  (test_job_repository, test_ingestion_reliability, test_source_escalation,
+  test_india_target_freshness, test_crawl_refresh_system,
+  test_job_production_verification) with identical intent. Full suite:
+  1180 passed; remaining failures pre-existing/unrelated (visual pixel
+  diffs, role_relevance fixture, 2 freshness date tests failing on clean
+  tree, 1 redis test failing only when a real REDIS_URL leaks into the env).
+- **Repo hygiene note:** `job_repository.py` blob is CRLF with a dangling
+  EOF CR (pre-existing); the dangling CR disabled git CRLF conversion and
+  tripped `git diff --check` on any edit — removed as part of this change
+  (one-line EOF fix; content otherwise untouched).
+- **Known follow-ups (not this change):** read-path `ThreadPoolExecutor`
+  in `get_priority_candidates`/`get_candidate_universe` drives the shared
+  sync client from 4-5 threads OUTSIDE `call_serialized` (same transport
+  hazard the lock guards); local shells exporting a real REDIS_URL break
+  `test_settings_exposes_redis_url_contract` (env-order dependence).

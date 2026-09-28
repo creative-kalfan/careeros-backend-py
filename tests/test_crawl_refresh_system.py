@@ -83,6 +83,14 @@ class _Query:
         self._applied.append(("lt", field, value))
         return self
 
+    def in_(self, field, values):
+        self._applied.append(("in_", field, list(values)))
+        return self
+
+    def insert(self, _rows):
+        self._applied.append(("insert", None, None))
+        return self
+
     def execute(self):
         result = MagicMock()
         result.data = [{"id": "job-1"}, {"id": "job-2"}]

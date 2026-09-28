@@ -122,23 +122,40 @@ class JobIngestionService:
         self.job_service = job_service or JobService()
 
     async def _persist_offloop(self, normalized_jobs: list) -> dict[str, int]:
-        """Run the synchronous N+1 Supabase upsert off the event loop.
+        """Run the synchronous Supabase upsert off the event loop.
 
-        ``upsert_jobs`` issues sequential blocking HTTP calls (one SELECT +
-        one INSERT/UPDATE per row). Awaiting it directly stalls ARQ polling,
-        Redis I/O, and APScheduler on the shared worker loop; ``to_thread``
-        preserves exact ordering/semantics while the loop stays responsive.
+        ``upsert_jobs`` issues blocking HTTP calls (one bulk existence fetch
+        per platform chunk + bulk writes). Awaiting it directly stalls ARQ
+        polling, Redis I/O, and APScheduler on the shared worker loop;
+        ``to_thread`` preserves exact ordering/semantics while the loop
+        stays responsive. The global client lock is still held inside the
+        thread (transport safety), but each hold is now a handful of
+        requests instead of ~2N.
         """
-        from app.db.supabase import call_serialized
+        from app.db.supabase import call_serialized, lock_stats_snapshot
 
+        lock_before = lock_stats_snapshot()
         start = time.monotonic()
         result = await asyncio.to_thread(
             call_serialized, self.job_repository.upsert_jobs, normalized_jobs
         )
+        total_ms = int((time.monotonic() - start) * 1000)
+        lock_after = lock_stats_snapshot()
         logger.info(
-            "persistence duration_ms=%d phase=upsert discovered=%d",
-            int((time.monotonic() - start) * 1000),
+            "persistence duration_ms=%d phase=upsert discovered=%d "
+            "inserted=%d updated=%d unchanged=%d deduplicated=%d skipped=%d "
+            "db_requests=%d lock_wait_ms=%d lock_hold_ms=%d lock_waiting=%d",
+            total_ms,
             len(normalized_jobs),
+            result.get("inserted", 0),
+            result.get("updated", 0),
+            result.get("unchanged", 0),
+            result.get("deduplicated", 0),
+            result.get("skipped", 0),
+            getattr(self.job_repository, "last_db_requests", -1),
+            int(lock_after["wait_ms_total"] - lock_before["wait_ms_total"]),
+            int(lock_after["hold_ms_total"] - lock_before["hold_ms_total"]),
+            int(lock_after["waiting_now"]),
         )
         return result
 

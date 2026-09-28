@@ -22,6 +22,17 @@ DEFAULT_ADZUNA_QUERY = "software engineer"
 CRAWL_STATUS_PREFIX = "crawl_status"
 CRAWL_STATUS_TTL_SECONDS = 7 * 24 * 3600
 
+# Active crawl-job gauge (single event loop: plain int is sufficient).
+# Surfaced in start/complete/fail logs so queue depth vs worker capacity is
+# observable without a new table or metric pipeline.
+_ACTIVE_CRAWLS = 0
+
+
+def active_crawl_count() -> int:
+    """Return the number of crawl jobs currently executing on this worker."""
+    return _ACTIVE_CRAWLS
+
+
 # Provider families whose discovery return is a COMPLETE inventory of that
 # source (an ATS board, the YC board, or one company's careers page). For
 # these, "not seen in this crawl" is strong evidence the posting disappeared,
@@ -164,6 +175,7 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
           in-process event bus. Handler failures are isolated by the bus and
           never fail the crawl.
     """
+    global _ACTIVE_CRAWLS
     job_id: str = ctx.get("job_id", "unknown")
     job_logger = JobLogger(job_id=job_id, job_type="crawl_company", source=source, slug=slug)
     job_start = time.monotonic()
@@ -171,11 +183,17 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
     # last seen BEFORE this instant were not observed by this crawl.
     crawl_started_at = datetime.now(timezone.utc).isoformat()
 
+    _ACTIVE_CRAWLS += 1
     job_logger.started()
+    logger.info(
+        "crawl active_crawls=%d source=%s slug=%s", _ACTIVE_CRAWLS, source, slug
+    )
 
     ingestion = JobIngestionService()
+    provider_ms = 0
 
     try:
+        provider_start = time.monotonic()
         if source == "ashby":
             result = await ingestion.ingest_ashby_jobs(slug)
         elif source == "greenhouse":
@@ -210,7 +228,39 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             )
         else:
             raise ValueError(f"Unknown source: {source}")
+        provider_ms = int((time.monotonic() - provider_start) * 1000)
+        logger.info(
+            "crawl provider_ms=%d phase=discover_normalize source=%s slug=%s "
+            "discovered=%d",
+            provider_ms, source, slug, result.get("discovered", 0),
+        )
+    except asyncio.CancelledError:
+        # ARQ cancellation (e.g. the 300s job timeout): record the timeout
+        # state for diagnosis, then re-raise so ARQ marks the job cancelled
+        # and applies its retry policy. Never swallow: swallowing turns a
+        # cancelled job into a false success.
+        _ACTIVE_CRAWLS = max(0, _ACTIVE_CRAWLS - 1)
+        duration_ms = int((time.monotonic() - job_start) * 1000)
+        logger.warning(
+            "crawl cancelled=true active_crawls=%d source=%s slug=%s "
+            "duration_ms=%d provider_ms=%d",
+            _ACTIVE_CRAWLS, source, slug, duration_ms, provider_ms,
+        )
+        await _record_crawl_status(
+            source,
+            slug,
+            {
+                "source": source,
+                "slug": slug,
+                "status": "cancelled",
+                "started_at": crawl_started_at,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": duration_ms,
+            },
+        )
+        raise
     except Exception as exc:
+        _ACTIVE_CRAWLS = max(0, _ACTIVE_CRAWLS - 1)
         duration_ms = int((time.monotonic() - job_start) * 1000)
         job_logger.failed(duration_ms=duration_ms, error_type=exc.__class__.__name__)
         # Crawl FAILED: record failure, keep previous jobs active, deactivate NOTHING.
@@ -256,9 +306,12 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             max_age_days,
         )
         logger.info(
-            "persistence duration_ms=%d phase=deactivation source=%s",
+            "persistence duration_ms=%d phase=deactivation source=%s "
+            "deactivated=%d db_requests=%d",
             int((time.monotonic() - persist_start) * 1000),
             source,
+            deactivated_not_seen + deactivated,
+            getattr(ingestion.job_repository, "last_db_requests", -1),
         )
     except Exception as exc:
         logger.warning(
@@ -292,6 +345,7 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
     except Exception as exc:
         logger.warning("JobIngested publish failed (non-blocking): %s", exc)
 
+    _ACTIVE_CRAWLS = max(0, _ACTIVE_CRAWLS - 1)
     duration_ms = int((time.monotonic() - job_start) * 1000)
     job_logger.completed(
         duration_ms=duration_ms,
@@ -302,6 +356,8 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         deduplicated=result.get("deduplicated", 0),
         skipped=result.get("skipped", 0),
         deactivated=deactivated + deactivated_not_seen,
+        provider_ms=provider_ms,
+        active_crawls=_ACTIVE_CRAWLS,
     )
 
     # Observability: persist the last crawl run summary (successful crawl).

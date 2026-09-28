@@ -183,7 +183,7 @@ def test_upsert_deduplication_and_rediscovery():
         "company": "Corp",
         "is_active": True,
     }
-    mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+    mock_client.table.return_value.select.return_value.eq.return_value.in_.return_value.execute.return_value.data = [
         existing_row
     ]
     mock_client.table.return_value.update.return_value.eq.return_value.execute.return_value.data = []

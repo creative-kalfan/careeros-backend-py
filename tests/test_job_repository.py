@@ -54,9 +54,10 @@ async def test_upsert_jobs_existing_job(job_repo, mock_client):
         source_platform="test",
     )
 
-    # Mock the existing check to return an existing job
-    mock_client.table().select().eq().eq().execute.return_value = MagicMock(
-        data=[{"id": "existing-id"}]
+    # Mock the bulk existence check to return an existing job
+    mock_client.table().select().eq().in_.return_value.execute.return_value = MagicMock(
+        data=[{"id": "existing-id", "external_job_id": "test-123",
+               "source_platform": "test"}]
     )
 
     # Mock the update

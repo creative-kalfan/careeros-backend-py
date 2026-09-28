@@ -58,6 +58,8 @@ class TestUpsertRaceFallback:
         client.insert.return_value.execute.side_effect = DUPLICATE_KEY_ERROR
 
         with patch.object(
+            JobRepository, "_find_many_by_identity", return_value={}
+        ), patch.object(
             JobRepository, "_find_by_identity", side_effect=[[], [winner]]
         ) as find_mock:
             result = repo.upsert_jobs([_make_job()])
@@ -76,7 +78,9 @@ class TestUpsertRaceFallback:
         repo._has_last_seen_at = False
         client.insert.return_value.execute.side_effect = DUPLICATE_KEY_ERROR
 
-        with patch.object(JobRepository, "_find_by_identity", side_effect=[[], []]):
+        with patch.object(
+            JobRepository, "_find_many_by_identity", return_value={}
+        ), patch.object(JobRepository, "_find_by_identity", side_effect=[[], []]):
             result = repo.upsert_jobs([_make_job()])
 
         assert result["deduplicated"] == 1
@@ -90,7 +94,9 @@ class TestUpsertRaceFallback:
             {"message": "connection reset", "code": "0"}
         )
 
-        with patch.object(JobRepository, "_find_by_identity", return_value=[]), pytest.raises(APIError):
+        with patch.object(
+            JobRepository, "_find_many_by_identity", return_value={}
+        ), patch.object(JobRepository, "_find_by_identity", return_value=[]), pytest.raises(APIError):
             repo.upsert_jobs([_make_job()])
 
 

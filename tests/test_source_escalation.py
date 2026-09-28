@@ -65,7 +65,11 @@ class TestSourceEscalation:
             "source_tier": 5,
             "source_provider": "adzuna",
         }
-        with patch.object(JobRepository, "_find_by_identity", return_value=existing):
+        with patch.object(
+            JobRepository,
+            "_find_many_by_identity",
+            return_value={("ext-1", "firecrawl"): existing},
+        ):
             result = repo.upsert_jobs([_normalized(1, "firecrawl", "https://acme.com/jobs/1")])
 
         assert result["updated"] == 1
@@ -89,7 +93,11 @@ class TestSourceEscalation:
             "source_tier": 1,
             "source_provider": "firecrawl",
         }
-        with patch.object(JobRepository, "_find_by_identity", return_value=existing):
+        with patch.object(
+            JobRepository,
+            "_find_many_by_identity",
+            return_value={("ext-1", "adzuna"): existing},
+        ):
             repo.upsert_jobs([_normalized(5, "adzuna")])
         row = client.update.call_args.args[0]
         assert row["source_tier"] == 1  # kept the better tier

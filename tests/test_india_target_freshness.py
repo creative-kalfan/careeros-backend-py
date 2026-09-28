@@ -106,7 +106,11 @@ class TestReobservationUpsert:
         repo._has_provenance = False
         seen = _job("Data Analyst", "Bengaluru, India", 20, "e9", seen_days_ago=0)
         seen.posted_date = posted
-        with patch.object(JobRepository, "_find_by_identity", return_value=existing):
+        with patch.object(
+            JobRepository,
+            "_find_many_by_identity",
+            return_value={("e9", "adzuna"): existing},
+        ):
             out = repo.upsert_jobs([seen])
         assert out["unchanged"] == 1 and out["inserted"] == 0
         update_arg = client.update.call_args.args[0]
