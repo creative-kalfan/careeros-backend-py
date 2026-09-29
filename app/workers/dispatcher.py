@@ -21,7 +21,7 @@ async def _get_redis() -> ArqRedis:
     # Reuse the process-long-lived ARQ pool. Creating a new pool per enqueue
     # costs an extra PING plus a TLS handshake against the managed backend and churns
     # connections under scheduler bursts (14 back-to-back enqueues). The pool
-    # is owned by app.workers.settings and lives for the process lifetime —
+    # is owned of app.workers.settings and lives for the process lifetime —
     # callers must NOT aclose() it.
     return await get_redis_pool()
 
@@ -29,7 +29,7 @@ async def _get_redis() -> ArqRedis:
 async def enqueue(
     job_name: str,
     *args: Any,
-    defer_until: Optional[Any] = None,
+    _defer_until: Optional[Any] = None,
     timeout: Optional[int] = None,
     _defer: Optional[int] = None,
 ) -> Optional[str]:
@@ -38,9 +38,9 @@ async def enqueue(
     Args:
         job_name: Registered job name (see ``app.workers.registry``).
         *args: Positional payload arguments forwarded to the job callable.
-        defer_until: Schedule the job to run after a given UNIX timestamp.
+        _defer_until: Schedule the job to run after a given UNIX timestamp.
         timeout: Override the default timeout for this enqueue (seconds).
-        _defer: Defer execution by N seconds (ARQ ``defer`` parameter).
+        _defer: Defer execution by N seconds (passed to ARQ as ``_defer_by``).
 
     Returns:
         The ARQ ``job_id`` string, or ``None`` if enqueue failed.
@@ -51,10 +51,10 @@ async def enqueue(
     get_job_definition(job_name)  # validate job_name exists
     redis = await _get_redis()
     job_kwargs: dict[str, Any] = {}
-    if defer_until is not None:
-        job_kwargs["defer_until"] = defer_until
+    if _defer_until is not None:
+        job_kwargs["_defer_until"] = _defer_until
     if _defer is not None:
-        job_kwargs["_defer"] = _defer
+        job_kwargs["_defer_by"] = _defer
     if timeout is not None:
         job_kwargs["timeout"] = timeout
 
@@ -98,7 +98,7 @@ async def enqueue_crawl_company(
 
     job_kwargs: dict[str, Any] = {}
     if _defer is not None and _defer > 0:
-        job_kwargs["_defer"] = _defer
+        job_kwargs["_defer_by"] = _defer
 
     job = await redis.enqueue_job("crawl_company_job", source, slug, **job_kwargs)
     if job is None:
