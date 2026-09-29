@@ -1421,3 +1421,19 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - Bulk unchanged recrawl of 1000 jobs executes in 2 DB requests instead of 1001 HTTP requests.
   - Test suite: 64 unit and integration tests passing in `tests/test_crawl_throughput.py`, `tests/test_crawl_refresh_system.py`, `tests/test_crawl_persistence_offloop.py`, `tests/test_supabase_client_serialization.py`, `tests/test_scheduled_crawl_runner.py`, `tests/test_worker_scheduler_lifecycle.py`, and `tests/test_job_repository.py`.
   - Regression suite: 67 passed in `test_job_ingestion_2o.py`, `test_jobspy_expansion.py`, `test_generic_crawl_fallback.py`, and `test_ingestion_reliability.py`.
+### 9.27 Production DB Schema Mismatch Resolution: Removal of Phantom `jobs.salary` Column from Bulk Identity Projection (2026-09-29)
+
+- **Production failure:** Crawl jobs failed during persistence with `postgrest.exceptions.APIError: {'message': 'column jobs.salary does not exist', 'code': '42703'}` across multiple providers (e.g. YCombinator, Firecrawl, Razorpay).
+- **Root cause:** In commit `71251a9`, `_find_many_by_identity` introduced an explicit projection `_EXISTING_ROW_COLUMNS` composed of `_CONTENT_FIELDS` and `_PROVENANCE_FIELDS`. `_CONTENT_FIELDS` inadvertently contained `"salary"`. However, the PostgreSQL `jobs` table never had a `salary` column in any migration (baseline `000` through `022`). The canonical compensation columns on `jobs` are `salary_min NUMERIC` and `salary_max NUMERIC` (migration `020`), which match `NormalizedJob._DB_COLUMNS`. While `to_db_row()` filtered out `salary` on writes, `_find_many_by_identity()` requested it on reads via PostgREST, causing PostgreSQL 42703.
+- **Chosen fix:** Removed `"salary"` from `_CONTENT_FIELDS` in `JobRepository` (`app/repositories/job_repository.py`).
+- **Why fix matches canonical schema:**
+  1. `jobs.salary` never existed in the database (verified on live Supabase: `actual_cols` has `salary_min`, `salary_max`, but no `salary`).
+  2. `NormalizedJob.to_db_row()` explicitly defines `_DB_COLUMNS` containing only `salary_min` and `salary_max`.
+  3. `_is_same_job()` content comparison and `_normalize_val()` already compare `salary_min` and `salary_max`.
+  4. Deduplication identity is strictly `(source_platform, external_job_id)`.
+  5. Every column in `_EXISTING_ROW_COLUMNS` now strictly exists in the live `jobs` table (32 of 32 columns verified).
+- **Regression tests:**
+  - `tests/test_crawl_throughput.py::test_identity_lookup_projection_uses_only_valid_schema_columns` verifies that all columns in `_EXISTING_ROW_COLUMNS` exist in `_VALID_JOBS_COLUMNS` and that `salary` is omitted.
+  - `tests/test_crawl_throughput.py::test_schema_mismatch_simulation_raises_42703_for_salary` simulates PostgREST 42703 on nonexistent column selection.
+  - `tests/test_crawl_throughput.py::test_upsert_jobs_handles_salary_fields_and_schema_correctly` verifies full lifecycle (new job insert with salary_min/max, unchanged recrawl touch, salary string formatting change without range change, and salary range updates).
+  - `tests/test_job_repository.py::test_find_many_by_identity_projection_excludes_salary` verifies the exact PostgREST `.select()` call.

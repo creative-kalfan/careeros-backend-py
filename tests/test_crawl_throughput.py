@@ -45,6 +45,12 @@ def _job(ext_id: str, platform: str = "ashby", title: str = "Engineer",
     )
 
 
+_VALID_JOBS_COLUMNS = set(NormalizedJob._DB_COLUMNS.default) | {
+    "id", "created_at", "updated_at", "last_seen_at", "first_seen_at",
+    "last_crawled_at", "source_history",
+}
+
+
 class _FakeQuery:
     """Chainable in-memory PostgREST table with real filter/write semantics."""
 
@@ -59,6 +65,11 @@ class _FakeQuery:
 
     # -- builder --
     def select(self, *a: Any, **k: Any) -> "_FakeQuery":
+        if a and isinstance(a[0], str) and a[0].strip() and a[0].strip() != "*":
+            for col in a[0].split(","):
+                c = col.strip()
+                if c and c not in _VALID_JOBS_COLUMNS:
+                    raise APIError({"message": f"column jobs.{c} does not exist", "code": "42703"})
         return self
 
     def eq(self, field: str, value: Any) -> "_FakeQuery":
@@ -677,3 +688,92 @@ async def test_scheduled_crawl_runner_staggers_enqueues():
         assert enqueued[i][2] is not None
         assert enqueued[i][2] > 0
         assert enqueued[i][2] > (enqueued[i-1][2] or 0)
+
+def test_identity_lookup_projection_uses_only_valid_schema_columns():
+    """Every column in _EXISTING_ROW_COLUMNS must exist in the canonical schema.
+
+    Regression test for PostgREST 42703: jobs.salary does not exist in the
+    canonical schema or PostgreSQL jobs table.
+    """
+    from app.repositories.job_repository import _EXISTING_ROW_COLUMNS, _CONTENT_FIELDS
+
+    assert "salary" not in _CONTENT_FIELDS
+    assert "salary" not in _EXISTING_ROW_COLUMNS.split(",")
+    for col in _EXISTING_ROW_COLUMNS.split(","):
+        assert col.strip() in _VALID_JOBS_COLUMNS, f"Nonexistent column in identity lookup: {col}"
+
+    client = _FakeClient()
+    repo = _repo(client)
+    found = repo._find_many_by_identity("ashby", ["ext-1", "ext-2"])
+    assert found == {}
+
+
+def test_schema_mismatch_simulation_raises_42703_for_salary():
+    """Simulate the production failure: querying jobs.salary must raise 42703."""
+    client = _FakeClient()
+    with pytest.raises(APIError) as exc_info:
+        client.table("jobs").select("id,title,salary").execute()
+    assert getattr(exc_info.value, "code", None) == "42703" or "42703" in str(exc_info.value)
+    assert "jobs.salary" in str(exc_info.value)
+
+
+def test_upsert_jobs_handles_salary_fields_and_schema_correctly():
+    """Verify salary handling: model salary/salary_min/salary_max vs actual DB schema.
+
+    - New job with salary metadata is inserted with salary_min/max in DB (no salary column).
+    - Unchanged job is recognized as unchanged (touch only).
+    - Changed salary range (salary_max) triggers full update.
+    - Pure formatting change on model-only salary string does not trigger false UPDATE.
+    """
+    client = _FakeClient()
+    repo = _repo(client)
+    fixed_posted = "2026-09-01T00:00:00+00:00"
+
+    job = _job(
+        "sal-1",
+        title="Backend Dev",
+        posted_date=fixed_posted,
+        salary="$100k - $120k",
+        salary_currency="USD",
+        salary_min=100000.0,
+        salary_max=120000.0,
+    )
+
+    # 1. New job insert
+    res1 = repo.upsert_jobs([job])
+    assert res1["inserted"] == 1
+    stored = client.store[("ashby", "sal-1")]
+    assert stored["salary_min"] == 100000.0
+    assert stored["salary_max"] == 120000.0
+    assert "salary" not in stored
+
+    # 2. Unchanged job recrawl -> touch only
+    res2 = repo.upsert_jobs([job])
+    assert res2["unchanged"] == 1 and res2["updated"] == 0
+
+    # 3. Model-only salary string change without range change -> still unchanged
+    job_str_change = _job(
+        "sal-1",
+        title="Backend Dev",
+        posted_date=fixed_posted,
+        salary="100,000 - 120,000 USD",
+        salary_currency="USD",
+        salary_min=100000.0,
+        salary_max=120000.0,
+    )
+    res3 = repo.upsert_jobs([job_str_change])
+    assert res3["unchanged"] == 1 and res3["updated"] == 0
+
+    # 4. Actual range change (salary_max) -> full update
+    job_range_change = _job(
+        "sal-1",
+        title="Backend Dev",
+        posted_date=fixed_posted,
+        salary="$100k - $140k",
+        salary_currency="USD",
+        salary_min=100000.0,
+        salary_max=140000.0,
+    )
+    res4 = repo.upsert_jobs([job_range_change])
+    assert res4["updated"] == 1
+    assert client.store[("ashby", "sal-1")]["salary_max"] == 140000.0

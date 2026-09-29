@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # Fields compared to decide whether an existing row actually changed.
 _CONTENT_FIELDS = (
     "title", "company", "location", "description", "url", "posted_at",
-    "role_category", "application_deadline", "employment_type", "salary",
+    "role_category", "application_deadline", "employment_type",
     "salary_min", "salary_max", "skills", "experience_level", "remote",
     "mass_hiring", "mass_hiring_status", "mass_hiring_details",
 )

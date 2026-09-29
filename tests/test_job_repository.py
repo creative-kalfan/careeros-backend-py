@@ -123,3 +123,24 @@ async def test_get_job(job_repo, mock_client):
 
     assert job is not None
     assert job["title"] == "Test Job"
+
+def test_find_many_by_identity_projection_excludes_salary(job_repo, mock_client):
+    """Verify that _find_many_by_identity projects valid schema columns and strictly excludes salary."""
+    from app.repositories.job_repository import _EXISTING_ROW_COLUMNS, _CONTENT_FIELDS
+
+    assert "salary" not in _CONTENT_FIELDS
+    assert "salary" not in _EXISTING_ROW_COLUMNS.split(",")
+    assert "salary_min" in _CONTENT_FIELDS
+    assert "salary_max" in _CONTENT_FIELDS
+
+    mock_client.table().select().eq().in_.return_value.execute.return_value = MagicMock(data=[])
+
+    job_repo._find_many_by_identity("adzuna", ["ext-1"])
+
+    # Verify select was called with _EXISTING_ROW_COLUMNS
+    select_call_args = mock_client.table().select.call_args
+    assert select_call_args is not None
+    projected = select_call_args[0][0]
+    assert "salary" not in projected.split(",")
+    assert "salary_min" in projected.split(",")
+    assert "salary_max" in projected.split(",")
