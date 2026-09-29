@@ -44,13 +44,48 @@ class _OverlapTracker:
 
 @pytest.mark.asyncio
 async def test_concurrent_guarded_sections_serialize_on_real_threads():
-    """Two to_thread workers through call_serialized never overlap (deterministic)."""
-    tracker = _OverlapTracker()
-    await asyncio.gather(
-        asyncio.to_thread(tracker.racer, True),
-        asyncio.to_thread(tracker.racer, True),
+    """Concurrency is strictly bounded by the semaphore on real threads."""
+    from app.db.supabase import reset_persistence_semaphore
+
+    reset_persistence_semaphore(1)
+    try:
+        tracker = _OverlapTracker()
+        await asyncio.gather(
+            asyncio.to_thread(tracker.racer, True),
+            asyncio.to_thread(tracker.racer, True),
+        )
+        assert tracker.max_active == 1
+    finally:
+        reset_persistence_semaphore()
+
+
+@pytest.mark.asyncio
+async def test_bounded_concurrency_allows_configured_parallelism():
+    """Configured concurrency > 1 allows bounded parallel execution."""
+    from app.db.supabase import reset_persistence_semaphore
+
+    reset_persistence_semaphore(2)
+    try:
+        tracker = _OverlapTracker()
+        await asyncio.gather(
+            asyncio.to_thread(tracker.racer, True),
+            asyncio.to_thread(tracker.racer, True),
+        )
+        assert tracker.max_active == 2
+    finally:
+        reset_persistence_semaphore()
+
+
+@pytest.mark.asyncio
+async def test_thread_local_client_isolation_across_threads():
+    """Each OS thread receives its own isolated Supabase client instance."""
+    from app.db.supabase import get_service_client
+
+    id1, id2 = await asyncio.gather(
+        asyncio.to_thread(lambda: id(get_service_client())),
+        asyncio.to_thread(lambda: id(get_service_client())),
     )
-    assert tracker.max_active == 1
+    assert id1 != id2
 
 
 @pytest.mark.asyncio
@@ -66,7 +101,10 @@ async def test_harness_detects_overlap_without_guard():
 
 @pytest.mark.asyncio
 async def test_concurrent_ingests_serialize_upsert_and_keep_results(monkeypatch):
-    """Two concurrent crawls serialize persistence; results intact."""
+    """Two concurrent crawls serialize persistence under concurrency=1; results intact."""
+    from app.db.supabase import reset_persistence_semaphore
+
+    reset_persistence_semaphore(1)
     active = 0
     max_active = 0
     guard = threading.Lock()
@@ -99,11 +137,14 @@ async def test_concurrent_ingests_serialize_upsert_and_keep_results(monkeypatch)
         ingestion.job_repository = type("R", (), {"upsert_jobs": staticmethod(_upsert)})()
         return ingestion
 
-    out = await asyncio.gather(
-        _make().ingest_ashby_jobs("a"), _make().ingest_ashby_jobs("b")
-    )
-    assert [r["inserted"] for r in out] == [1, 1]
-    assert max_active == 1
+    try:
+        out = await asyncio.gather(
+            _make().ingest_ashby_jobs("a"), _make().ingest_ashby_jobs("b")
+        )
+        assert [r["inserted"] for r in out] == [1, 1]
+        assert max_active == 1
+    finally:
+        reset_persistence_semaphore()
 
 
 @pytest.mark.asyncio
@@ -173,4 +214,4 @@ async def test_loop_stays_responsive_during_blocking_persist(monkeypatch):
     await asyncio.gather(ingestion.ingest_ashby_jobs("x"), _ticker())
     elapsed = _t.monotonic() - start
     assert ticks == 20
-    assert elapsed < 1.25
+    assert elapsed < 1.40

@@ -1403,3 +1403,21 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   sync client from 4-5 threads OUTSIDE `call_serialized` (same transport
   hazard the lock guards); local shells exporting a real REDIS_URL break
   `test_settings_exposes_redis_url_contract` (env-order dependence).
+
+### 9.26 Production Crawl Pipeline Stabilization: Thread-Local Isolation, Normalization & Scoped Deactivation (2026-09-29)
+
+- **Production root cause analysis:**
+  1. *Timestamp format divergence causing N+1 updates on recrawl:* Crawlers emit ISO timestamps ending in `Z` (e.g., `2026-09-10T16:54:37.622Z`), while PostgreSQL/Supabase returns `+00:00` offset (e.g., `2026-09-10T16:54:37.622+00:00`). Because `_is_same_job` compared string values without normalization, 100% of crawled jobs with timestamps were classified as content changes requiring full per-row SQL UPDATEs (`full_updates`). A 200–500 job board generated 200–500 sequential HTTP requests holding the lock for 60–150 seconds.
+  2. *Unscoped deactivation thrashing:* `deactivate_not_seen_since` and `deactivate_stale_jobs` only filtered on `source_platform="ashby"` or `"greenhouse"` without scoping to the specific company board. Each Ashby crawl (e.g., `openai`) deactivated all jobs from all other 32 Ashby companies (2,366 live inactive jobs; 6,210 on Greenhouse). Subsequent crawls were forced to reactivate all those jobs, creating constant database churn.
+  3. *Process-global lock serialization bottleneck:* Single process-global lock (`_SYNC_CLIENT_LOCK`) forced all 10 ARQ worker threads into a single queue. With 60–150s hold times per board, the 3rd+ worker in queue exceeded ARQ's 300s timeout, was cancelled inside `_persist_offloop` (e.g. `openai`), and re-enqueued via ARQ `max_tries=2`, driving queue delays to 318s+.
+  4. *Unpaced scheduler enqueue bursts:* `run_provider_pass("ats")` dumped 43 targets simultaneously into Redis, causing instant worker saturation.
+- **Implemented Fixes:**
+  1. *Thread-local client isolation:* Replaced global `@lru_cache` Supabase client in `app/db/supabase.py` with `threading.local()` isolated clients (`get_service_client()`), eliminating cross-thread HTTP/2 connection state machine collisions (`httpx.RemoteProtocolError`).
+  2. *Bounded persistence concurrency:* Replaced single-lane mutex with `threading.BoundedSemaphore(persistence_max_concurrency)` (default 2), allowing safe concurrent persistence threads. Configurable via `PERSISTENCE_MAX_CONCURRENCY`.
+  3. *Normalized field comparison in `_is_same_job`:* Added `_normalize_val` handling ISO 8601 datetimes (`Z` vs `+00:00`), sorted `skills` lists, numeric salaries, and booleans. Unchanged recrawls now collapse 100% to bulk touch updates (2 DB requests total: 1 SELECT + 1 bulk touch UPDATE).
+  4. *Scoped stale job deactivation:* Added `company` and `careers_url` scoping to `deactivate_not_seen_since` and `deactivate_stale_jobs` in `JobRepository`, and plumbed `_resolve_company_scope(source, slug)` in `crawl_jobs.py` for all single-board ATS sources (`ashby`, `greenhouse`, `lever`, `smartrecruiters`) and `firecrawl`. Single-company crawls no longer deactivate other boards.
+  5. *Staggered scheduler dispatch:* Added `crawl_stagger_seconds` (default 2.0s) and `_defer` parameter to `dispatcher.py` and `scheduled_crawl_runner.py` (`run_provider_pass`) to space enqueues across time and prevent instant worker lock contention.
+- **Verification & Throughput:**
+  - Bulk unchanged recrawl of 1000 jobs executes in 2 DB requests instead of 1001 HTTP requests.
+  - Test suite: 64 unit and integration tests passing in `tests/test_crawl_throughput.py`, `tests/test_crawl_refresh_system.py`, `tests/test_crawl_persistence_offloop.py`, `tests/test_supabase_client_serialization.py`, `tests/test_scheduled_crawl_runner.py`, `tests/test_worker_scheduler_lifecycle.py`, and `tests/test_job_repository.py`.
+  - Regression suite: 67 passed in `test_job_ingestion_2o.py`, `test_jobspy_expansion.py`, `test_generic_crawl_fallback.py`, and `test_ingestion_reliability.py`.

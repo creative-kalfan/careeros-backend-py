@@ -80,7 +80,7 @@ class JobRepository:
     """Data-access layer for the Supabase ``jobs`` table."""
 
     def __init__(self, client: Optional[Client] = None) -> None:
-        self._client = client or get_service_client()
+        self._custom_client = client
         # Column availability flags (instance-level; warm from module cache).
         self._has_last_seen_at: Optional[bool] = None
         self._has_provenance: Optional[bool] = None
@@ -91,6 +91,16 @@ class JobRepository:
         # changing any result-dict contract.
         self._db_requests = 0
         self.last_db_requests = 0
+
+    @property
+    def _client(self) -> Client:
+        if self._custom_client is not None:
+            return self._custom_client
+        return get_service_client()
+
+    @_client.setter
+    def _client(self, value: Optional[Client]) -> None:
+        self._custom_client = value
 
     # ------------------------------------------------------------------
     # Column probing
@@ -193,10 +203,40 @@ class JobRepository:
         return rows[0] if rows else None
 
     @staticmethod
-    def _is_same_job(existing: dict[str, Any], row: dict[str, Any]) -> bool:
+    def _normalize_val(field: str, val: Any) -> Any:
+        """Normalize values for robust equality comparison."""
+        if val is None or val == "":
+            return None
+        if field in ("posted_at", "application_deadline", "first_seen_at", "last_seen_at", "last_crawled_at"):
+            if isinstance(val, str):
+                try:
+                    dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt
+                except Exception:
+                    return val
+            return val
+        if field == "skills":
+            if isinstance(val, list):
+                return sorted(str(s).strip().lower() for s in val if s)
+            return val
+        if field in ("salary_min", "salary_max") and val is not None:
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return val
+        if field in ("remote", "source_verified") and val is not None:
+            return bool(val)
+        return val
+
+    @classmethod
+    def _is_same_job(cls, existing: dict[str, Any], row: dict[str, Any]) -> bool:
         """True when the existing row content matches the new row content."""
         for field in _CONTENT_FIELDS:
-            if existing.get(field) != row.get(field):
+            ex_val = cls._normalize_val(field, existing.get(field))
+            row_val = cls._normalize_val(field, row.get(field))
+            if ex_val != row_val:
                 return False
         return True
 
@@ -559,13 +599,17 @@ class JobRepository:
     # ------------------------------------------------------------------
 
     def deactivate_stale_jobs(
-        self, source_platform: Optional[str] = None, max_age_days: int = 30
+        self,
+        source_platform: Optional[str] = None,
+        max_age_days: int = 30,
+        company: Optional[str] = None,
+        careers_url: Optional[str] = None,
     ) -> int:
         """Deactivate active jobs from a source that are no longer fresh.
 
         NO LONGER SEEN -> INACTIVE (never deleted). Scoped to
-        ``source_platform`` when provided so one source can never deactivate
-        another source's jobs. Returns the number of deactivated rows.
+        ``source_platform`` and optionally ``company``/``careers_url`` so one
+        company can never deactivate or scan another company's jobs.
         """
         if not self._probe_has_last_seen_at():
             return 0
@@ -579,6 +623,10 @@ class JobRepository:
         )
         if source_platform:
             query = query.eq("source_platform", source_platform)
+        if company:
+            query = query.ilike("company", company)
+        if careers_url:
+            query = query.eq("careers_url", careers_url)
 
         try:
             self._db_requests += 1
@@ -647,6 +695,7 @@ class JobRepository:
         source_platform: str,
         since_iso: str,
         careers_url: Optional[str] = None,
+        company: Optional[str] = None,
     ) -> int:
         """Deactivate active jobs from a source NOT observed since ``since_iso``.
 
@@ -654,6 +703,10 @@ class JobRepository:
         active row whose ``last_seen_at`` predates the crawl start was not seen
         during the crawl and is therefore considered closed at the source.
         Rows are deactivated (never deleted).
+
+        When ``company`` is provided (e.g. for single-board ATS crawls), the
+        deactivation is strictly scoped to that company so crawls of one company
+        never deactivate other companies on the same platform.
 
         When ``careers_url`` is provided (Firecrawl per-company crawls), the
         deactivation is additionally scoped to that careers URL so one
@@ -675,6 +728,8 @@ class JobRepository:
         )
         if careers_url:
             query = query.eq("careers_url", careers_url)
+        if company:
+            query = query.ilike("company", company)
 
         try:
             self._db_requests += 1
@@ -690,8 +745,8 @@ class JobRepository:
         count = self._bulk_set_inactive(ids, what="deactivate_not_seen_since")
         if count:
             logger.info(
-                "deactivate_not_seen_since: %d rows deactivated (source=%s since=%s careers_url=%s)",
-                count, source_platform, since_iso, careers_url or "-",
+                "deactivate_not_seen_since: %d rows deactivated (source=%s company=%s since=%s careers_url=%s)",
+                count, source_platform, company or "-", since_iso, careers_url or "-",
             )
         self.last_db_requests = self._db_requests
         return count

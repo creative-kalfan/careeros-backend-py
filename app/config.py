@@ -158,6 +158,10 @@ class Settings(BaseSettings):
         alias="TAILORING_MAX_OPPORTUNITIES",
     )
 
+    # Persistence concurrency & crawl pacing
+    persistence_max_concurrency: int = Field(default=2, alias="PERSISTENCE_MAX_CONCURRENCY")
+    crawl_stagger_seconds: float = Field(default=2.0, alias="CRAWL_STAGGER_SECONDS")
+
 
 @lru_cache
 def get_settings() -> Settings:

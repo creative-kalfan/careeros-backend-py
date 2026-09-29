@@ -132,7 +132,9 @@ def test_redis_connectivity_optional():
 
 def test_live_redis_connectivity_when_available():
     """Only connects if REDIS_URL is reachable; skipped otherwise."""
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    from app.workers.settings import normalize_redis_dsn
+
+    redis_url = normalize_redis_dsn(os.getenv("REDIS_URL", "redis://localhost:6379"))
     try:
         import redis.asyncio as aioredis
 
@@ -169,6 +171,38 @@ def test_redis_settings_supports_tls_and_credentials():
     assert rs.host == "redis-prod"
     assert rs.port == 6380
     assert rs.database == 3
+
+
+def test_normalize_redis_dsn_maps_aiven_valkey_schemes():
+    """Aiven Console URIs (valkey[s]://) map to redis-py schemes; rest pass through."""
+    from app.workers.settings import normalize_redis_dsn
+
+    assert (
+        normalize_redis_dsn("valkeys://default:pw@valkey-host:19348/0")
+        == "rediss://default:pw@valkey-host:19348/0"
+    )
+    assert normalize_redis_dsn("valkey://localhost:6379") == "redis://localhost:6379"
+    assert normalize_redis_dsn("rediss://u:p@h:6380/3") == "rediss://u:p@h:6380/3"
+    assert normalize_redis_dsn("redis://localhost:6379") == "redis://localhost:6379"
+
+
+def test_worker_settings_accepts_aiven_valkey_uri(monkeypatch):
+    """Worker boots from a verbatim Aiven Service URI (TLS + auth)."""
+    monkeypatch.setenv("REDIS_URL", "valkeys://default:secret@valkey-host:19348/0")
+    import importlib
+
+    from app.workers import settings as worker_settings_module
+
+    importlib.reload(worker_settings_module)
+    try:
+        rs = worker_settings_module.redis_settings
+        assert rs.host == "valkey-host"
+        assert rs.port == 19348
+        assert rs.ssl is True
+        assert rs.username == "default"
+        assert rs.password == "secret"
+    finally:
+        importlib.reload(worker_settings_module)
 
 
 def test_redis_settings_default_no_tls_no_creds():

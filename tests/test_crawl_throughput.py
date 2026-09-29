@@ -34,9 +34,9 @@ DUPLICATE_KEY_ERROR = APIError(
 
 
 def _job(ext_id: str, platform: str = "ashby", title: str = "Engineer",
-         posted_days_ago: Optional[int] = 3, **extra: Any) -> NormalizedJob:
-    posted = None
-    if posted_days_ago is not None:
+         posted_days_ago: Optional[int] = 3, posted_date: Optional[str] = None, **extra: Any) -> NormalizedJob:
+    posted = posted_date
+    if posted is None and posted_days_ago is not None:
         posted = (datetime.now(timezone.utc) - timedelta(days=posted_days_ago)).isoformat()
     return NormalizedJob(
         title=title, company="Co", external_job_id=ext_id,
@@ -51,6 +51,7 @@ class _FakeQuery:
     def __init__(self, table: "_FakeTable"):
         self._table = table
         self._eq: list[tuple[str, Any]] = []
+        self._ilike: list[tuple[str, str]] = []
         self._in: list[tuple[str, list]] = []
         self._lt: list[tuple[str, str]] = []
         self._insert_rows: Any = None
@@ -62,6 +63,10 @@ class _FakeQuery:
 
     def eq(self, field: str, value: Any) -> "_FakeQuery":
         self._eq.append((field, value))
+        return self
+
+    def ilike(self, field: str, value: str) -> "_FakeQuery":
+        self._ilike.append((field, value))
         return self
 
     def in_(self, field: str, values: list) -> "_FakeQuery":
@@ -87,6 +92,10 @@ class _FakeQuery:
     def _matches(self, row: dict) -> bool:
         for field, value in self._eq:
             if row.get(field) != value:
+                return False
+        for field, value in self._ilike:
+            current = row.get(field)
+            if current is None or str(current).lower() != str(value).lower():
                 return False
         for field, values in self._in:
             if row.get(field) not in values:
@@ -525,3 +534,146 @@ async def test_persist_offloop_logs_throughput_fields(caplog):
     for field in ("phase=upsert", "inserted=", "db_requests=", "lock_wait_ms=",
                   "lock_hold_ms=", "lock_waiting="):
         assert field in text, field
+
+
+# ---------------------------------------------------------------------------
+# Benchmarks: Datetime normalization & Bounded Database Requests
+# ---------------------------------------------------------------------------
+
+
+def test_bulk_unchanged_with_iso_z_vs_offset_normalizes_to_touch():
+    """ISO Z vs +00:00 difference must normalize to touch, never triggering N+1 updates."""
+    client = _FakeClient()
+    jobs = []
+    seed_rows = []
+    for i in range(10):
+        # API returns 'Z' format
+        job = _job(f"z-{i}", posted_days_ago=None, posted_date="2026-09-10T16:54:37.622Z")
+        jobs.append(job)
+        row = job.to_db_row()
+        # DB returned '+00:00' format
+        row.update({
+            "id": f"row-{i}",
+            "posted_at": "2026-09-10T16:54:37.622+00:00",
+            "last_seen_at": "2026-09-08T00:00:00+00:00",
+            "is_active": True,
+        })
+        seed_rows.append(row)
+    _seed(client, seed_rows)
+
+    repo = _repo(client)
+    result = repo.upsert_jobs(jobs)
+    # Must be 10 unchanged (touch), NOT 10 updated
+    assert result["unchanged"] == 10
+    assert result["updated"] == 0
+    assert result["inserted"] == 0
+    # Must be exactly 2 requests (1 bulk SELECT + 1 bulk touch UPDATE), not 11 (1 + 10)
+    assert client.executes == 2
+    assert repo.last_db_requests == 2
+
+
+@pytest.mark.parametrize(
+    "size,expected_fetch,expected_write",
+    [
+        (10, 1, 1),
+        (100, 1, 1),
+        (500, 3, 3),
+        (1000, 5, 5),
+    ],
+)
+def test_board_size_db_requests_bounded_new_jobs(size, expected_fetch, expected_write):
+    """Proves DB request count scales as O(ceil(N / chunk)), never O(N)."""
+    client = _FakeClient()
+    repo = _repo(client)
+    jobs = [_job(f"job-{i}") for i in range(size)]
+    result = repo.upsert_jobs(jobs)
+    assert result["inserted"] == size
+    assert client.executes == expected_fetch + expected_write
+    assert repo.last_db_requests == expected_fetch + expected_write
+
+
+@pytest.mark.parametrize(
+    "size,expected_fetch,expected_touch",
+    [
+        (10, 1, 1),
+        (100, 1, 1),
+        (500, 3, 1),
+        (1000, 5, 2),
+    ],
+)
+def test_board_size_db_requests_bounded_recrawl(size, expected_fetch, expected_touch):
+    """Recrawls of unchanged boards scale with O(ceil(N / 500)) for bulk touch."""
+    client = _FakeClient()
+    jobs = [_job(f"recrawl-{i}") for i in range(size)]
+    seed_rows = []
+    for i, j in enumerate(jobs):
+        row = j.to_db_row()
+        row.update({
+            "id": f"row-{i}",
+            "last_seen_at": "2026-09-01T00:00:00+00:00",
+            "is_active": True,
+        })
+        seed_rows.append(row)
+    _seed(client, seed_rows)
+
+    repo = _repo(client)
+    result = repo.upsert_jobs(jobs)
+    assert result["unchanged"] == size
+    assert result["updated"] == 0
+    assert client.executes == expected_fetch + expected_touch
+
+
+def test_deactivate_not_seen_since_scoped_to_company():
+    """Deactivation scoped to company does not deactivate other companies on same platform."""
+    client = _FakeClient()
+    repo = _repo(client)
+
+    # Seed 2 active jobs for OpenAI and 2 active jobs for Notion on Ashby
+    openai_1 = {"id": "o1", "source_platform": "ashby", "external_job_id": "o1",
+                "company": "OpenAI", "is_active": True, "last_seen_at": "2026-09-20T00:00:00+00:00"}
+    openai_2 = {"id": "o2", "source_platform": "ashby", "external_job_id": "o2",
+                "company": "OpenAI", "is_active": True, "last_seen_at": "2026-09-29T12:00:00+00:00"}
+    notion_1 = {"id": "n1", "source_platform": "ashby", "external_job_id": "n1",
+                "company": "Notion", "is_active": True, "last_seen_at": "2026-09-20T00:00:00+00:00"}
+    notion_2 = {"id": "n2", "source_platform": "ashby", "external_job_id": "n2",
+                "company": "Notion", "is_active": True, "last_seen_at": "2026-09-20T00:00:00+00:00"}
+    _seed(client, [openai_1, openai_2, notion_1, notion_2])
+
+    # Crawl of OpenAI runs at 2026-09-29T00:00:00
+    deactivated = repo.deactivate_not_seen_since(
+        source_platform="ashby",
+        since_iso="2026-09-29T00:00:00+00:00",
+        company="OpenAI",
+    )
+    # Only o1 should be deactivated (it was seen at 2026-09-20 < 2026-09-29).
+    # Notion jobs (n1, n2) MUST NOT be deactivated!
+    assert deactivated == 1
+    assert client.store[("ashby", "o1")]["is_active"] is False
+    assert client.store[("ashby", "o2")]["is_active"] is True
+    assert client.store[("ashby", "n1")]["is_active"] is True
+    assert client.store[("ashby", "n2")]["is_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_scheduled_crawl_runner_staggers_enqueues():
+    """Provider pass staggers enqueued jobs with _defer to prevent queue storms."""
+    from app.services.jobs.scheduled_crawl_runner import ScheduledCrawlRunner
+
+    runner = ScheduledCrawlRunner()
+    enqueued: list[tuple[str, str, Optional[int]]] = []
+
+    async def _mock_enqueue(source: str, slug: str, _defer: Optional[int] = None) -> None:
+        enqueued.append((source, slug, _defer))
+
+    runner._enqueue_crawl = _mock_enqueue
+    # Run firecrawl pass (multiple targets)
+    await runner.run_provider_pass("firecrawl")
+
+    assert len(enqueued) > 1
+    # First target has no defer (or 0)
+    assert enqueued[0][2] is None
+    # Subsequent targets have positive increasing defer delays
+    for i in range(1, len(enqueued)):
+        assert enqueued[i][2] is not None
+        assert enqueued[i][2] > 0
+        assert enqueued[i][2] > (enqueued[i-1][2] or 0)

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 async def _get_redis() -> ArqRedis:
     # Reuse the process-long-lived ARQ pool. Creating a new pool per enqueue
-    # costs an extra PING plus a TLS handshake against Upstash and churns
+    # costs an extra PING plus a TLS handshake against the managed backend and churns
     # connections under scheduler bursts (14 back-to-back enqueues). The pool
     # is owned by app.workers.settings and lives for the process lifetime —
     # callers must NOT aclose() it.
@@ -77,7 +77,9 @@ async def enqueue_resume_parse(resume_id: str, user_id: str, storage_path: str) 
     )
 
 
-async def enqueue_crawl_company(source: str, slug: str) -> Optional[str]:
+async def enqueue_crawl_company(
+    source: str, slug: str, _defer: Optional[int] = None
+) -> Optional[str]:
     """Enqueue a job-crawling job, with a simple Redis concurrency lock.
 
     Returns the ARQ job_id if enqueued, or None if a crawl for the same
@@ -94,7 +96,11 @@ async def enqueue_crawl_company(source: str, slug: str) -> Optional[str]:
         logger.info("Crawl skipped: already in progress source=%s slug=%s lock=%s", source, slug, lock_key)
         return None
 
-    job = await redis.enqueue_job("crawl_company_job", source, slug)
+    job_kwargs: dict[str, Any] = {}
+    if _defer is not None and _defer > 0:
+        job_kwargs["_defer"] = _defer
+
+    job = await redis.enqueue_job("crawl_company_job", source, slug, **job_kwargs)
     if job is None:
         logger.error("Failed to enqueue crawl_company_job source=%s slug=%s", source, slug)
         return None

@@ -15,15 +15,46 @@ from supabase import Client, ClientOptions, create_client
 
 from app.config import get_settings
 
-# Serializes synchronous use of the process-global service client across OS
-# threads. The client multiplexes requests over shared HTTP/2 connections
-# whose state machine is not safe for concurrent multi-threaded use, and
-# postgrest does not retry transport errors (RemoteProtocolError). Executor
-# threads (asyncio.to_thread crawl persistence) must funnel through
-# call_serialized; asyncio primitives must NOT be used here (no running loop
-# in worker threads). ponytail: process-wide for crawl persistence; split
-# per-table/domain only if lock contention ever shows in duration_ms logs.
-_SYNC_CLIENT_LOCK = threading.Lock()
+# Thread-local storage for service-role clients.
+# Each OS thread gets its own isolated Client instance with its own HTTP/2
+# connection pool, completely preventing cross-thread connection state
+# corruption and httpx.RemoteProtocolError.
+_THREAD_LOCAL = threading.local()
+
+# Bounded persistence concurrency (semaphore).
+# Replaces the single process-global mutex with a bounded semaphore
+# (PERSISTENCE_MAX_CONCURRENCY, default 2). Each thread uses its own
+# thread-local Supabase client so HTTP/2 transport state is never shared,
+# while the semaphore bounds total database connection usage against Supabase.
+_PERSISTENCE_SEMAPHORE: Optional[threading.BoundedSemaphore] = None
+_SEMAPHORE_GUARD = threading.Lock()
+
+
+def get_persistence_semaphore() -> threading.BoundedSemaphore:
+    """Return the bounded persistence semaphore (initialized once)."""
+    global _PERSISTENCE_SEMAPHORE
+    if _PERSISTENCE_SEMAPHORE is None:
+        with _SEMAPHORE_GUARD:
+            if _PERSISTENCE_SEMAPHORE is None:
+                try:
+                    concurrency = max(1, get_settings().persistence_max_concurrency)
+                except Exception:
+                    concurrency = 2
+                _PERSISTENCE_SEMAPHORE = threading.BoundedSemaphore(concurrency)
+    return _PERSISTENCE_SEMAPHORE
+
+
+def reset_persistence_semaphore(concurrency: Optional[int] = None) -> None:
+    """Reset the persistence semaphore (for tests)."""
+    global _PERSISTENCE_SEMAPHORE
+    with _SEMAPHORE_GUARD:
+        if concurrency is None:
+            try:
+                concurrency = max(1, get_settings().persistence_max_concurrency)
+            except Exception:
+                concurrency = 2
+        _PERSISTENCE_SEMAPHORE = threading.BoundedSemaphore(concurrency)
+
 
 # Lightweight lock-contention telemetry (production throughput diagnosis).
 # Updated under _STATS_GUARD; reads via lock_stats_snapshot(). Overhead is a
@@ -37,16 +68,17 @@ _LOCK_STATS: dict[str, float] = {
     "wait_ms_max": 0.0,
     "hold_ms_max": 0.0,
     "waiting_now": 0.0,  # threads currently queued (gauge)
-    "holding_now": 0.0,  # 0 or 1 (gauge)
+    "holding_now": 0.0,  # threads currently executing (gauge)
 }
 
 
 def call_serialized(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
-    """Run a sync Supabase-client call with cross-thread mutual exclusion."""
+    """Run a sync Supabase-client call with bounded cross-thread concurrency."""
+    sem = get_persistence_semaphore()
     with _STATS_GUARD:
         _LOCK_STATS["waiting_now"] += 1
     queued_at = time.monotonic()
-    with _SYNC_CLIENT_LOCK:
+    with sem:
         wait_ms = (time.monotonic() - queued_at) * 1000.0
         with _STATS_GUARD:
             _LOCK_STATS["waiting_now"] -= 1
@@ -84,11 +116,19 @@ def reset_lock_stats() -> None:
             _LOCK_STATS[key] = 0.0
 
 
-@lru_cache
 def get_service_client() -> Client:
-    """Return a service-role Supabase client (bypasses RLS)."""
-    settings = get_settings()
-    return create_client(settings.supabase_url, settings.supabase_service_role_key)
+    """Return a thread-local service-role Supabase client (bypasses RLS).
+
+    Each thread maintains its own isolated Client instance with its own HTTP/2
+    connection pool, completely eliminating cross-thread connection state
+    corruption and httpx.RemoteProtocolError.
+    """
+    client = getattr(_THREAD_LOCAL, "service_client", None)
+    if client is None:
+        settings = get_settings()
+        client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        _THREAD_LOCAL.service_client = client
+    return client
 
 
 def get_authenticated_client(jwt: str) -> Client:

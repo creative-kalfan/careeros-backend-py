@@ -1,4 +1,4 @@
-"""Deterministic Upstash request-budget model for the ARQ worker.
+"""Deterministic Redis request-budget model for the ARQ worker.
 
 Pure functions only — no Redis connections, no I/O. Used by tests and by
 operators to answer "how many Redis requests does one idle worker burn?"

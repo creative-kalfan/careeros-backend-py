@@ -60,16 +60,16 @@ class ScheduledCrawlRunner:
         self._enqueue_fn = enqueue_fn
         self._scheduler: Optional[AsyncIOScheduler] = None
 
-    async def _enqueue_crawl(self, source: str, slug: str) -> None:
+    async def _enqueue_crawl(self, source: str, slug: str, _defer: Optional[int] = None) -> None:
         """Enqueue a single crawl job via the ARQ dispatcher (Redis-locked)."""
         if self._enqueue_fn is not None:
             await self._enqueue_fn(source, slug)
             return
         from app.workers.dispatcher import enqueue_crawl_company
 
-        job_id = await enqueue_crawl_company(source, slug)
+        job_id = await enqueue_crawl_company(source, slug, _defer=_defer)
         if job_id is None:
-            raise RuntimeError(f"dispatcher returned no job id for {source}:{slug}")
+            logger.info("dispatcher skipped or returned no job id for %s:%s", source, slug)
 
     async def run_once(self) -> dict[str, str]:
         """Enqueue one crawl job per enabled target; failures are isolated."""
@@ -135,11 +135,21 @@ class ScheduledCrawlRunner:
         targets = [(t.source, t.slug) for t in selected]
         logger.info("Scheduled crawl pass (%s): enqueueing %d targets (P0=%d, rotated=%d)",
                     provider, len(targets), len(p0), len(targets) - len(p0))
+        from app.config import get_settings
+
+        stagger_s = get_settings().crawl_stagger_seconds
         results: dict[str, str] = {}
-        for source, slug in targets:
+        for i, (source, slug) in enumerate(targets):
             key = f"{source}:{slug}"
+            defer_s = int(i * stagger_s) if (stagger_s > 0 and i > 0) else None
             try:
-                await self._enqueue_crawl(source, slug)
+                try:
+                    if defer_s:
+                        await self._enqueue_crawl(source, slug, _defer=defer_s)
+                    else:
+                        await self._enqueue_crawl(source, slug)
+                except TypeError:
+                    await self._enqueue_crawl(source, slug)
                 results[key] = "enqueued"
             except Exception as exc:
                 logger.warning(

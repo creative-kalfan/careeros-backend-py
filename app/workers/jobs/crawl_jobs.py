@@ -103,6 +103,25 @@ async def _record_crawl_status(
         logger.warning("crawl-status write failed (non-blocking): %s", exc)
 
 
+def _resolve_company_scope(source: str, slug: str) -> Optional[str]:
+    """Find canonical company name for scoping ATS deactivation."""
+    if not slug:
+        return None
+    try:
+        from app.crawlers.crawl_registry import all_targets
+
+        target = next((t for t in all_targets() if t.source == source and t.slug == slug), None)
+        if target and target.company:
+            return target.company
+    except Exception:
+        pass
+    if "|" in slug:
+        company_part, _, _ = slug.partition("|")
+        if company_part:
+            return company_part
+    return slug.replace("-", " ").title()
+
+
 def _deactivate_after_success(
     ingestion: Any,
     source: str,
@@ -121,9 +140,22 @@ def _deactivate_after_success(
     from app.db.supabase import call_serialized
 
     not_seen_kwargs: dict[str, Any] = {}
+    stale_kwargs: dict[str, Any] = {}
+
     if source == "firecrawl":
-        _, _, careers_url_scope = slug.partition("|")
-        not_seen_kwargs["careers_url"] = careers_url_scope
+        company, _, careers_url_scope = slug.partition("|")
+        if careers_url_scope:
+            not_seen_kwargs["careers_url"] = careers_url_scope
+            stale_kwargs["careers_url"] = careers_url_scope
+        if company:
+            not_seen_kwargs["company"] = company
+            stale_kwargs["company"] = company
+    elif source in ("ashby", "greenhouse", "lever", "smartrecruiters"):
+        # Single-board ATS sources: scope reconciliation to this company
+        company = _resolve_company_scope(source, slug)
+        if company:
+            not_seen_kwargs["company"] = company
+            stale_kwargs["company"] = company
 
     def _run() -> tuple[int, int]:
         if _uses_complete_inventory(source):
@@ -142,6 +174,7 @@ def _deactivate_after_success(
         stale = ingestion.job_repository.deactivate_stale_jobs(
             source_platform=source,
             max_age_days=max_age_days,
+            **stale_kwargs,
         )
         return not_seen, stale
 
