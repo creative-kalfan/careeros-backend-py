@@ -624,7 +624,7 @@ class JobRepository:
         if source_platform:
             query = query.eq("source_platform", source_platform)
         if company:
-            query = query.ilike("company", company)
+            query = query.eq("company", company)
         if careers_url:
             query = query.eq("careers_url", careers_url)
 
@@ -729,7 +729,7 @@ class JobRepository:
         if careers_url:
             query = query.eq("careers_url", careers_url)
         if company:
-            query = query.ilike("company", company)
+            query = query.eq("company", company)
 
         try:
             self._db_requests += 1

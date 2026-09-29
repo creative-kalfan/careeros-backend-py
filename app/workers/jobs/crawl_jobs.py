@@ -157,7 +157,8 @@ def _deactivate_after_success(
             not_seen_kwargs["company"] = company
             stale_kwargs["company"] = company
 
-    def _run() -> tuple[int, int]:
+    def _run() -> tuple[int, int, int, int]:
+        not_seen_start = time.monotonic()
         if _uses_complete_inventory(source):
             not_seen = ingestion.job_repository.deactivate_not_seen_since(
                 source_platform=source,
@@ -171,12 +172,16 @@ def _deactivate_after_success(
                 source,
             )
             not_seen = 0
+        not_seen_ms = int((time.monotonic() - not_seen_start) * 1000)
+
+        stale_start = time.monotonic()
         stale = ingestion.job_repository.deactivate_stale_jobs(
             source_platform=source,
             max_age_days=max_age_days,
             **stale_kwargs,
         )
-        return not_seen, stale
+        stale_ms = int((time.monotonic() - stale_start) * 1000)
+        return not_seen, stale, not_seen_ms, stale_ms
 
     return call_serialized(_run)
 
@@ -325,12 +330,14 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
     # Best-effort: never fails the crawl.
     deactivated_not_seen = 0
     deactivated = 0
+    deactivate_not_seen_ms = 0
+    deactivate_stale_ms = 0
     try:
         from app.config import get_settings
 
         max_age_days = get_settings().job_stale_after_days
         persist_start = time.monotonic()
-        deactivated_not_seen, deactivated = await asyncio.to_thread(
+        deactivated_not_seen, deactivated, deactivate_not_seen_ms, deactivate_stale_ms = await asyncio.to_thread(
             _deactivate_after_success,
             ingestion,
             source,
@@ -338,12 +345,20 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             crawl_started_at,
             max_age_days,
         )
+        deactivation_total_ms = int((time.monotonic() - persist_start) * 1000)
         logger.info(
-            "persistence duration_ms=%d phase=deactivation source=%s "
-            "deactivated=%d db_requests=%d",
-            int((time.monotonic() - persist_start) * 1000),
+            "production_timing crawl_source=%s crawl_slug=%s provider_ms=%d upsert_ms=%d "
+            "persistence_wait_ms=%d persistence_hold_ms=%d deactivate_not_seen_ms=%d "
+            "deactivate_stale_ms=%d deactivation_total_ms=%d db_requests=%d",
             source,
-            deactivated_not_seen + deactivated,
+            slug,
+            provider_ms,
+            result.get("upsert_ms", 0),
+            result.get("persistence_wait_ms", 0),
+            result.get("persistence_hold_ms", 0),
+            deactivate_not_seen_ms,
+            deactivate_stale_ms,
+            deactivation_total_ms,
             getattr(ingestion.job_repository, "last_db_requests", -1),
         )
     except Exception as exc:

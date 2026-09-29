@@ -157,6 +157,9 @@ class JobIngestionService:
             int(lock_after["hold_ms_total"] - lock_before["hold_ms_total"]),
             int(lock_after["waiting_now"]),
         )
+        result["persistence_wait_ms"] = int(lock_after["wait_ms_total"] - lock_before["wait_ms_total"])
+        result["persistence_hold_ms"] = int(lock_after["hold_ms_total"] - lock_before["hold_ms_total"])
+        result["upsert_ms"] = total_ms
         return result
 
     async def ingest_ashby_jobs(self, slug: str) -> dict[str, int]:

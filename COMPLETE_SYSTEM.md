@@ -1437,3 +1437,12 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - `tests/test_crawl_throughput.py::test_schema_mismatch_simulation_raises_42703_for_salary` simulates PostgREST 42703 on nonexistent column selection.
   - `tests/test_crawl_throughput.py::test_upsert_jobs_handles_salary_fields_and_schema_correctly` verifies full lifecycle (new job insert with salary_min/max, unchanged recrawl touch, salary string formatting change without range change, and salary range updates).
   - `tests/test_job_repository.py::test_find_many_by_identity_projection_excludes_salary` verifies the exact PostgREST `.select()` call.
+### 9.28 Production Crawl Throughput: Deactivation Bottleneck Investigation (2026-09-29)
+
+- **Problem:** Production worker queues collapsed, with jobs (e.g. ElevenLabs, OpenAI) delaying up to 300s and hitting ARQ timeouts during the `_deactivate_after_success` phase.
+- **Measured Bottleneck:** The PostgREST queries for scoped deactivation (`deactivate_not_seen_since` and `deactivate_stale_jobs`) fetched ALL active jobs for a source platform (e.g., hundreds of thousands for firecrawl) into memory before applying `company ILIKE` or `careers_url =` filters, because no supporting indexes existed and `ILIKE` bypassed standard indexes.
+- **Root Cause Fix:** 
+  1. Added `023_deactivation_throughput_indexes.sql` to create partial indexes (`idx_jobs_active_source_company_last_seen`, `idx_jobs_active_source_careers_url_last_seen`) strictly for `is_active = true`.
+  2. Changed `.ilike("company", company)` to `.eq("company", company)` in both deactivation functions to leverage the standard b-tree index. (Single-board ATS target names in the registry precisely match.)
+- **Structured Timing:** Added granular telemetry (`production_timing`) to `crawl_jobs.py` and `job_ingestion_service.py` reporting sub-phase timings: `provider_ms`, `upsert_ms`, `persistence_wait_ms`, `persistence_hold_ms`, `deactivate_not_seen_ms`, `deactivate_stale_ms`, and `deactivation_total_ms`.
+
