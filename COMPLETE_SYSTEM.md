@@ -1535,3 +1535,49 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - *Memory Safety:* 5 concurrent crawls with 500 jobs peak at 72.7 MB RSS, leaving > 430 MB of safety headroom on Render's 512 MB ceiling.
   - *Cancellation Stress Test:* Verified 3 consecutive cancellation cycles cleanly cancel 12 tasks with 0 zombie threads and no semaphore permit leaks.
   - *Regression Test Suite:* 95 tests passed across all 12 regression test suites in 8.58s.
+
+### 9.31 Production Persistence Slot Forensics: measured double-gate bottleneck (diagnosis only, no concurrency change)
+
+- **Production evidence:** `active_crawls=6 threads=8 rss_mb=322.1 persistence_waiters=3 persistence_holders=1`,
+  `PersistenceTimeoutError` after 75s, repeated `Stale deactivation skipped` after 45s, queue delays 288–333s,
+  crawls completing in 8–103s once they receive execution capacity.
+- **Measured root cause (no guessing):** the architecture is `async slots=2 → thread → call_serialized(sync=2) → DB`
+  with TWO independent semaphores sharing one legacy gauge. `persistence_holders` historically counted sync holders
+  only; `persistence_waiters` mixed async + sync waiters. Hence `holders=1 / waiters=3` could not distinguish
+  (a) async holder, (b) executor thread executing DB, (c) sync-gate holder, (d) HTTP in flight, (e) upsert vs
+  deactivation. Both gates raised the identical message `waiting for persistence semaphore`, so timeouts were
+  unattributable. The async slot is held for `sync-wait + DB` (verified: `async_hold = to_thread ≈ db_thread + overhead`),
+  so a slow sync holder stalls an async holder; with 6 crawls × (upsert + deactivation) competing for 2 slots,
+  the 5th/6th waiter exceeds 75s/45s. Deactivation compounds it: not-seen + stale run sequentially under one slot.
+- **Local numbers (in-memory PostgREST fake, conc=2):**
+  - Fast path 5 concurrent mixed sizes (50/250/500/1000/250, 8ms/exec): all complete, no timeout;
+    `async_wait avg ≈78ms, async_hold avg ≈81ms, sync_wait ≈0ms`, `wait+hold` reconciles within 1ms,
+    `db_thread ≤ to_thread ≤ async_hold`, HTTP estimate matches executes × latency.
+  - Slow contention 3×500 jobs @60ms/exec (6 exec ≈360ms HTTP each): first two `async_wait ≈30ms`,
+    third `async_wait ≈391ms + async_hold ≈391ms = total ≈782ms` — queueing proven at the async gate.
+  - Occupied-sync demo (both sync permits held, async slots free): `async_wait ≈0ms` yet `sync_block ≈500ms`
+    then `PersistenceTimeoutError (gate=sync)` while STILL holding the async slot — the second gate stalls the
+    first gate's holder. Timeout tags are now `(gate=async)` / `(gate=sync)` (substring-compatible).
+- **Slot coverage (§7):** verified the slot covers only the sync persistence op — `job.raw=None` nullify and
+  normalization happen BEFORE `async_persistence_slot` in `_persist_offloop`; deactivation holds the slot only for
+  `_deactivate_after_success` (not-seen + stale DB work, no discovery/Redis/event-bus inside).
+- **`returning="minimal"` (§8):** verified on every jobs write path in `JobRepository`
+  (`_upsert_single`, `_execute_single_action`, bulk `upsert_jobs`, `_bulk_set_inactive`); the forensics fake asserts it.
+- **Migration 023 (§9):** `sql/migrations/023_deactivation_throughput_indexes.sql` present
+  (`idx_jobs_active_source_company_last_seen`, `idx_jobs_active_source_careers_url_last_seen`,
+  partial `WHERE is_active=true`); deactivation predicates (`eq(is_active)`, `eq(source_platform)`,
+  `eq(company/careers_url)`, `lt(last_seen_at)`) match the index prefix. Live-prod application still requires
+  a Supabase index-existence check (not run from this harness).
+- **Forensics instrumentation (flag-gated, payload-free, conc/timeouts unchanged):**
+  `PERSISTENCE_TELEMETRY_VERBOSE` (default off) in `app/config.py`; split `_ASYNC_SLOT_STATS` vs `_LOCK_STATS`,
+  `async_slot_stats_snapshot()`, `persistence_gate_snapshot()` (`async_waiting/holding`, `sync_waiting/holding`,
+  legacy combined fields preserved); per-op `async_wait_ms/async_hold_ms/to_thread_ms/db_thread_ms/thread`,
+  `op/source/job_count/db_requests`, split waiters/holders on `persistence`, `production_timing`, cancelled/failed logs.
+- **Benchmarks:** A (holders≤2, no thread-per-waiter) ✓; B (wait+hold reconciles ≤1ms fast path) ✓;
+  C (second-gate stall quantified: 0ms async-wait + 500ms sync-block) ✓; D (5 fast crawls, no timeout) ✓;
+  E (slow gate still raises tagged bounded timeout) ✓; F (cancel → no zombies, gauges drain, permits reusable) ✓;
+  G (5×500 RSS delta <150MB, peak <400MB; threads ≤ before+4) ✓.
+  Tests: `tests/test_persistence_slot_forensics.py` (9 passed) + targeted suites
+  (`test_cancellation_cooperative_lifecycle`, `test_crawl_throughput`, `test_supabase_client_serialization`,
+  `test_crawl_persistence_offloop`, `test_timeout_regression`, `test_job_repository`, `test_crawl_refresh_system`,
+  `test_scheduled_crawl_runner`) green. No persistence-concurrency or timeout change made (telemetry/diagnosis only).

@@ -335,13 +335,20 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         )
 
         current_phase = "deactivation"
+        deact_async_wait_ms = 0
+        deact_async_hold_ms = 0
+        deact_to_thread_ms = 0
         try:
             from app.config import get_settings
             from app.db.supabase import async_persistence_slot
 
             max_age_days = get_settings().job_stale_after_days
             deact_start = time.monotonic()
+            deact_async_acquire_start = time.monotonic()
             async with async_persistence_slot(cancel_event=cancel_event, timeout_seconds=45.0):
+                deact_async_wait_ms = int((time.monotonic() - deact_async_acquire_start) * 1000)
+                deact_hold_start = time.monotonic()
+                deact_thread_start = time.monotonic()
                 deactivated_not_seen, deactivated, deactivate_not_seen_ms, deactivate_stale_ms = await asyncio.to_thread(
                     _deactivate_after_success,
                     ingestion,
@@ -352,19 +359,23 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                     cancel_event=cancel_event,
                     timeout_seconds=45.0,
                 )
+                deact_to_thread_ms = int((time.monotonic() - deact_thread_start) * 1000)
+                deact_async_hold_ms = int((time.monotonic() - deact_hold_start) * 1000)
             deactivation_total_ms = int((time.monotonic() - deact_start) * 1000)
         except Exception as exc:
             logger.warning(
                 "Stale deactivation skipped (non-blocking): source=%s error=%s", source, exc
             )
 
-        from app.db.supabase import lock_stats_snapshot
-        snap = lock_stats_snapshot()
+        from app.db.supabase import persistence_gate_snapshot
+        gate = persistence_gate_snapshot()
         logger.info(
             "production_timing crawl_source=%s crawl_slug=%s provider_ms=%d upsert_ms=%d "
             "persistence_wait_ms=%d persistence_hold_ms=%d deactivate_not_seen_ms=%d "
             "deactivate_stale_ms=%d deactivation_total_ms=%d db_requests=%d "
-            "persistence_waiters=%d persistence_holders=%d",
+            "persistence_waiters=%d persistence_holders=%d "
+            "async_wait_ms=%d async_hold_ms=%d deact_async_wait_ms=%d deact_async_hold_ms=%d "
+            "deact_to_thread_ms=%d async_waiting=%d async_holding=%d sync_waiting=%d sync_holding=%d",
             source,
             slug,
             provider_ms,
@@ -375,8 +386,17 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             deactivate_stale_ms,
             deactivation_total_ms,
             getattr(ingestion.job_repository, "last_db_requests", -1),
-            int(snap.get("waiting_now", 0)),
-            int(snap.get("holding_now", 0)),
+            int(gate.get("persistence_waiters", 0)),
+            int(gate.get("persistence_holders", 0)),
+            int(result.get("async_wait_ms", 0)),
+            int(result.get("async_hold_ms", 0)),
+            deact_async_wait_ms,
+            deact_async_hold_ms,
+            deact_to_thread_ms,
+            int(gate.get("async_waiting_now", 0)),
+            int(gate.get("async_holding_now", 0)),
+            int(gate.get("sync_waiting_now", 0)),
+            int(gate.get("sync_holding_now", 0)),
         )
 
         # Event Bus integration: one JobIngested per successful ingestion run.
@@ -458,12 +478,13 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
     except asyncio.CancelledError:
         cancel_event.set()
         duration_ms = int((time.monotonic() - job_start) * 1000)
-        from app.db.supabase import lock_stats_snapshot
-        snap = lock_stats_snapshot()
+        from app.db.supabase import persistence_gate_snapshot
+        gate = persistence_gate_snapshot()
         logger.warning(
             "crawl cancelled=true phase=%s active_crawls=%d source=%s slug=%s "
             "duration_ms=%d provider_ms=%d threads=%d rss_mb=%.1f "
-            "persistence_waiters=%d persistence_holders=%d",
+            "persistence_waiters=%d persistence_holders=%d "
+            "async_waiting=%d async_holding=%d sync_waiting=%d sync_holding=%d",
             current_phase,
             _ACTIVE_CRAWLS,
             source,
@@ -472,8 +493,12 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             provider_ms,
             threading.active_count(),
             _get_process_rss_mb(),
-            int(snap.get("waiting_now", 0)),
-            int(snap.get("holding_now", 0)),
+            int(gate.get("persistence_waiters", 0)),
+            int(gate.get("persistence_holders", 0)),
+            int(gate.get("async_waiting_now", 0)),
+            int(gate.get("async_holding_now", 0)),
+            int(gate.get("sync_waiting_now", 0)),
+            int(gate.get("sync_holding_now", 0)),
         )
         await _record_crawl_status(
             source,
@@ -493,12 +518,13 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         cancel_event.set()
         duration_ms = int((time.monotonic() - job_start) * 1000)
         job_logger.failed(duration_ms=duration_ms, error_type=exc.__class__.__name__)
-        from app.db.supabase import lock_stats_snapshot
-        snap = lock_stats_snapshot()
+        from app.db.supabase import persistence_gate_snapshot
+        gate = persistence_gate_snapshot()
         logger.error(
             "crawl failed phase=%s active_crawls=%d source=%s slug=%s "
             "duration_ms=%d error=%s: %s threads=%d rss_mb=%.1f "
-            "persistence_waiters=%d persistence_holders=%d",
+            "persistence_waiters=%d persistence_holders=%d "
+            "async_waiting=%d async_holding=%d sync_waiting=%d sync_holding=%d",
             current_phase,
             _ACTIVE_CRAWLS,
             source,
@@ -508,8 +534,12 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             exc,
             threading.active_count(),
             _get_process_rss_mb(),
-            int(snap.get("waiting_now", 0)),
-            int(snap.get("holding_now", 0)),
+            int(gate.get("persistence_waiters", 0)),
+            int(gate.get("persistence_holders", 0)),
+            int(gate.get("async_waiting_now", 0)),
+            int(gate.get("async_holding_now", 0)),
+            int(gate.get("sync_waiting_now", 0)),
+            int(gate.get("sync_holding_now", 0)),
         )
         await _record_crawl_status(
             source,

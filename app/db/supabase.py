@@ -109,13 +109,21 @@ async def async_persistence_slot(
     Prevents ThreadPoolExecutor worker threads from being spawned or kept busy
     merely polling for the persistence semaphore. Bounded by timeout_seconds and
     cancellation-aware.
+
+    Forensics note: this gate tracks its own ``_ASYNC_SLOT_STATS`` counters
+    (async waiters/holders, wait/hold timing), fully independent from the
+    sync ``_LOCK_STATS`` used by :func:`call_serialized`. Use
+    :func:`persistence_gate_snapshot` to observe both gates without
+    conflating them. Timeout errors carry ``(gate=async)`` so they are
+    distinguishable from the sync gate while remaining substring-compatible
+    with the legacy message.
     """
     if cancel_event is not None and cancel_event.is_set():
         raise PersistenceCancelledError("Persistence work cancelled before acquiring semaphore")
 
     sem = get_async_persistence_semaphore()
-    with _STATS_GUARD:
-        _LOCK_STATS["waiting_now"] += 1
+    with _ASYNC_STATS_GUARD:
+        _ASYNC_SLOT_STATS["waiting_now"] += 1
     queued_at = time.monotonic()
 
     acquired = False
@@ -126,7 +134,7 @@ async def async_persistence_slot(
             now = time.monotonic()
             if timeout_seconds is not None and (now - queued_at) >= timeout_seconds:
                 raise PersistenceTimeoutError(
-                    f"Timed out after {timeout_seconds:.1f}s waiting for persistence semaphore"
+                    f"Timed out after {timeout_seconds:.1f}s waiting for persistence semaphore (gate=async)"
                 )
             step_timeout = 0.25
             if timeout_seconds is not None:
@@ -141,21 +149,42 @@ async def async_persistence_slot(
             cancel_event.set()
         raise
     finally:
-        with _STATS_GUARD:
-            _LOCK_STATS["waiting_now"] -= 1
+        with _ASYNC_STATS_GUARD:
+            _ASYNC_SLOT_STATS["waiting_now"] -= 1
 
+    wait_ms = (time.monotonic() - queued_at) * 1000.0
+    with _ASYNC_STATS_GUARD:
+        _ASYNC_SLOT_STATS["holding_now"] += 1
+    held_at = time.monotonic()
     try:
         if cancel_event is not None and cancel_event.is_set():
             raise PersistenceCancelledError("Persistence work cancelled after acquiring semaphore")
         yield
     finally:
         sem.release()
+        hold_ms = (time.monotonic() - held_at) * 1000.0
+        with _ASYNC_STATS_GUARD:
+            _ASYNC_SLOT_STATS["holding_now"] -= 1
+            _ASYNC_SLOT_STATS["sections"] += 1
+            _ASYNC_SLOT_STATS["wait_ms_total"] += wait_ms
+            _ASYNC_SLOT_STATS["hold_ms_total"] += hold_ms
+            if wait_ms > _ASYNC_SLOT_STATS["wait_ms_max"]:
+                _ASYNC_SLOT_STATS["wait_ms_max"] = wait_ms
+            if hold_ms > _ASYNC_SLOT_STATS["hold_ms_max"]:
+                _ASYNC_SLOT_STATS["hold_ms_max"] = hold_ms
 
 
 # Lightweight lock-contention telemetry (production throughput diagnosis).
 # Updated under _STATS_GUARD; reads via lock_stats_snapshot(). Overhead is a
 # few monotonic() calls + integer ops per serialized section — negligible
 # next to a Supabase round trip. Never logs payloads, only durations/counts.
+#
+# Forensics split (slot forensics): the async gate (async_persistence_slot)
+# and the sync gate (call_serialized) are INDEPENDENT semaphores with the
+# same configured concurrency. They must not share one gauge:
+#  - _LOCK_STATS tracks the sync gate only (executor threads in call_serialized).
+#  - _ASYNC_SLOT_STATS tracks the async gate only (coroutines in async_persistence_slot).
+# Use persistence_gate_snapshot() to observe both without conflation.
 _STATS_GUARD = threading.Lock()
 _LOCK_STATS: dict[str, float] = {
     "sections": 0.0,  # total call_serialized executions
@@ -165,6 +194,17 @@ _LOCK_STATS: dict[str, float] = {
     "hold_ms_max": 0.0,
     "waiting_now": 0.0,  # threads currently queued (gauge)
     "holding_now": 0.0,  # threads currently executing (gauge)
+}
+
+_ASYNC_STATS_GUARD = threading.Lock()
+_ASYNC_SLOT_STATS: dict[str, float] = {
+    "sections": 0.0,  # total async slot acquisitions
+    "wait_ms_total": 0.0,  # time coroutines queued for the async gate
+    "hold_ms_total": 0.0,  # time holding the async slot (sync-wait + DB)
+    "wait_ms_max": 0.0,
+    "hold_ms_max": 0.0,
+    "waiting_now": 0.0,  # coroutines currently queued (gauge)
+    "holding_now": 0.0,  # coroutines currently holding a slot (gauge)
 }
 
 
@@ -203,7 +243,7 @@ def call_serialized(
             now = time.monotonic()
             if timeout_seconds is not None and (now - queued_at) >= timeout_seconds:
                 raise PersistenceTimeoutError(
-                    f"Timed out after {timeout_seconds:.1f}s waiting for persistence semaphore"
+                    f"Timed out after {timeout_seconds:.1f}s waiting for persistence semaphore (gate=sync)"
                 )
             acquired = sem.acquire(timeout=0.25)
     finally:
@@ -243,10 +283,65 @@ def lock_stats_snapshot() -> dict[str, float]:
 
 
 def reset_lock_stats() -> None:
-    """Zero the lock-contention counters (tests only)."""
+    """Zero the lock-contention counters (tests only).
+
+    Resets both the sync gate and the async slot gate so legacy callers
+    that only know about the sync gauge still observe a clean slate.
+    """
     with _STATS_GUARD:
         for key in _LOCK_STATS:
             _LOCK_STATS[key] = 0.0
+    with _ASYNC_STATS_GUARD:
+        for key in _ASYNC_SLOT_STATS:
+            _ASYNC_SLOT_STATS[key] = 0.0
+
+
+def async_slot_stats_snapshot() -> dict[str, float]:
+    """Return a copy of the async persistence-slot counters."""
+    with _ASYNC_STATS_GUARD:
+        snap = dict(_ASYNC_SLOT_STATS)
+    sections = snap["sections"] or 1.0
+    snap["wait_ms_avg"] = snap["wait_ms_total"] / sections
+    snap["hold_ms_avg"] = snap["hold_ms_total"] / sections
+    return snap
+
+
+def reset_async_slot_stats() -> None:
+    """Zero the async slot counters (tests only)."""
+    with _ASYNC_STATS_GUARD:
+        for key in _ASYNC_SLOT_STATS:
+            _ASYNC_SLOT_STATS[key] = 0.0
+
+
+def reset_persistence_telemetry() -> None:
+    """Zero both sync and async persistence telemetry (forensics tests)."""
+    reset_lock_stats()
+    reset_async_slot_stats()
+
+
+def persistence_gate_snapshot() -> dict[str, float]:
+    """Combined async + sync gate view without conflation.
+
+    Keys:
+      async_waiting_now / async_holding_now — coroutines at the async gate.
+      sync_waiting_now / sync_holding_now — executor threads at the sync gate.
+      persistence_waiters — legacy combined waiters (async + sync).
+      persistence_holders — legacy sync holders (what production logs
+        historically reported as ``persistence_holders``).
+    """
+    with _ASYNC_STATS_GUARD:
+        async_snap = dict(_ASYNC_SLOT_STATS)
+    with _STATS_GUARD:
+        sync_snap = dict(_LOCK_STATS)
+    return {
+        "async_waiting_now": float(async_snap.get("waiting_now", 0.0)),
+        "async_holding_now": float(async_snap.get("holding_now", 0.0)),
+        "sync_waiting_now": float(sync_snap.get("waiting_now", 0.0)),
+        "sync_holding_now": float(sync_snap.get("holding_now", 0.0)),
+        "persistence_waiters": float(async_snap.get("waiting_now", 0.0))
+        + float(sync_snap.get("waiting_now", 0.0)),
+        "persistence_holders": float(sync_snap.get("holding_now", 0.0)),
+    }
 
 
 # Hard timeout for individual PostgREST HTTP operations (connect 5s, read 15s, write 15s, pool 5s).

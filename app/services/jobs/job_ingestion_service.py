@@ -138,31 +138,53 @@ class JobIngestionService:
         thread (transport safety), but each hold is now a handful of
         requests instead of ~2N.
         """
-        from app.db.supabase import async_persistence_slot, call_serialized, lock_stats_snapshot
+        from app.db.supabase import (
+            async_persistence_slot,
+            async_slot_stats_snapshot,
+            call_serialized,
+            lock_stats_snapshot,
+            persistence_gate_snapshot,
+        )
 
-        # Free raw payload memory before persistence to prevent memory bloat
+        # Free raw payload memory before persistence to prevent memory bloat.
+        # This happens BEFORE acquiring the async slot so the slot covers
+        # only the synchronous persistence operation (forensics §7).
         for job in normalized_jobs:
             if getattr(job, "raw", None) is not None:
                 job.raw = None
 
         local_cancel = cancel_event or threading.Event()
         lock_before = lock_stats_snapshot()
+        async_before = async_slot_stats_snapshot()
         start = time.monotonic()
 
+        thread_box: dict[str, object] = {"name": "", "db_ms": 0}
+
         def _execute_upsert():
+            thread_box["name"] = threading.current_thread().name
+            thread_start = time.monotonic()
             try:
-                return self.job_repository.upsert_jobs(normalized_jobs, cancel_event=local_cancel)
-            except TypeError:
-                return self.job_repository.upsert_jobs(normalized_jobs)
+                try:
+                    return self.job_repository.upsert_jobs(normalized_jobs, cancel_event=local_cancel)
+                except TypeError:
+                    return self.job_repository.upsert_jobs(normalized_jobs)
+            finally:
+                thread_box["db_ms"] = int((time.monotonic() - thread_start) * 1000)
 
         try:
+            async_acquire_start = time.monotonic()
             async with async_persistence_slot(cancel_event=local_cancel, timeout_seconds=timeout_seconds):
+                async_wait_ms = int((time.monotonic() - async_acquire_start) * 1000)
+                async_hold_start = time.monotonic()
+                to_thread_start = time.monotonic()
                 result = await asyncio.to_thread(
                     call_serialized,
                     _execute_upsert,
                     cancel_event=local_cancel,
                     timeout_seconds=timeout_seconds,
                 )
+                to_thread_ms = int((time.monotonic() - to_thread_start) * 1000)
+                async_hold_ms = int((time.monotonic() - async_hold_start) * 1000)
         except asyncio.CancelledError:
             local_cancel.set()
             raise
@@ -172,11 +194,23 @@ class JobIngestionService:
 
         total_ms = int((time.monotonic() - start) * 1000)
         lock_after = lock_stats_snapshot()
+        async_after = async_slot_stats_snapshot()
+        gate = persistence_gate_snapshot()
+        try:
+            platforms = sorted({str(getattr(j, "source_platform", "") or "") for j in normalized_jobs if getattr(j, "source_platform", "")})
+            op_source = "+".join(platforms[:3]) or "unknown"
+        except Exception:
+            op_source = "unknown"
+        sync_wait_delta = int(lock_after["wait_ms_total"] - lock_before["wait_ms_total"])
+        sync_hold_delta = int(lock_after["hold_ms_total"] - lock_before["hold_ms_total"])
         logger.info(
-            "persistence duration_ms=%d phase=upsert discovered=%d "
+            "persistence duration_ms=%d phase=upsert op=upsert source=%s discovered=%d "
             "inserted=%d updated=%d unchanged=%d deduplicated=%d skipped=%d "
-            "db_requests=%d lock_wait_ms=%d lock_hold_ms=%d lock_waiting=%d",
+            "db_requests=%d lock_wait_ms=%d lock_hold_ms=%d lock_waiting=%d "
+            "async_wait_ms=%d async_hold_ms=%d async_waiting=%d async_holding=%d "
+            "sync_waiting=%d sync_holding=%d to_thread_ms=%d db_thread_ms=%d thread=%s",
             total_ms,
+            op_source,
             len(normalized_jobs),
             result.get("inserted", 0),
             result.get("updated", 0),
@@ -184,12 +218,25 @@ class JobIngestionService:
             result.get("deduplicated", 0),
             result.get("skipped", 0),
             getattr(self.job_repository, "last_db_requests", -1),
-            int(lock_after["wait_ms_total"] - lock_before["wait_ms_total"]),
-            int(lock_after["hold_ms_total"] - lock_before["hold_ms_total"]),
+            sync_wait_delta,
+            sync_hold_delta,
             int(lock_after["waiting_now"]),
+            async_wait_ms,
+            async_hold_ms,
+            int(gate.get("async_waiting_now", 0)),
+            int(gate.get("async_holding_now", 0)),
+            int(gate.get("sync_waiting_now", 0)),
+            int(gate.get("sync_holding_now", 0)),
+            to_thread_ms,
+            int(thread_box.get("db_ms", 0)),
+            str(thread_box.get("name", "")),
         )
-        result["persistence_wait_ms"] = int(lock_after["wait_ms_total"] - lock_before["wait_ms_total"])
-        result["persistence_hold_ms"] = int(lock_after["hold_ms_total"] - lock_before["hold_ms_total"])
+        result["persistence_wait_ms"] = sync_wait_delta
+        result["persistence_hold_ms"] = sync_hold_delta
+        result["async_wait_ms"] = async_wait_ms
+        result["async_hold_ms"] = async_hold_ms
+        result["to_thread_ms"] = to_thread_ms
+        result["db_thread_ms"] = int(thread_box.get("db_ms", 0))
         result["upsert_ms"] = total_ms
         return result
 
