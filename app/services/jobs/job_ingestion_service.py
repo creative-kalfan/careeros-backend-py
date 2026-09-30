@@ -141,9 +141,9 @@ class JobIngestionService:
         from app.db.supabase import (
             async_persistence_slot,
             async_slot_stats_snapshot,
-            call_serialized,
             lock_stats_snapshot,
             persistence_gate_snapshot,
+            run_gated_persistence,
         )
 
         # Free raw payload memory before persistence to prevent memory bloat.
@@ -177,8 +177,11 @@ class JobIngestionService:
                 async_wait_ms = int((time.monotonic() - async_acquire_start) * 1000)
                 async_hold_start = time.monotonic()
                 to_thread_start = time.monotonic()
+                # Single-gate: the async slot above is the capacity boundary.
+                # run_gated_persistence executes the DB work in the executor
+                # thread WITHOUT re-acquiring the sync capacity semaphore.
                 result = await asyncio.to_thread(
-                    call_serialized,
+                    run_gated_persistence,
                     _execute_upsert,
                     cancel_event=local_cancel,
                     timeout_seconds=timeout_seconds,

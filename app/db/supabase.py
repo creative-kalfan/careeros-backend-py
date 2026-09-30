@@ -200,7 +200,7 @@ _ASYNC_STATS_GUARD = threading.Lock()
 _ASYNC_SLOT_STATS: dict[str, float] = {
     "sections": 0.0,  # total async slot acquisitions
     "wait_ms_total": 0.0,  # time coroutines queued for the async gate
-    "hold_ms_total": 0.0,  # time holding the async slot (sync-wait + DB)
+    "hold_ms_total": 0.0,  # time holding the async slot (DB work; single-gate: no inner sync-wait)
     "wait_ms_max": 0.0,
     "hold_ms_max": 0.0,
     "waiting_now": 0.0,  # coroutines currently queued (gauge)
@@ -268,6 +268,56 @@ def call_serialized(
             _LOCK_STATS["hold_ms_total"] += hold_ms
             if wait_ms > _LOCK_STATS["wait_ms_max"]:
                 _LOCK_STATS["wait_ms_max"] = wait_ms
+            if hold_ms > _LOCK_STATS["hold_ms_max"]:
+                _LOCK_STATS["hold_ms_max"] = hold_ms
+
+
+def run_gated_persistence(
+    fn: Callable[..., Any],
+    /,
+    *args: Any,
+    cancel_event: Optional[threading.Event] = None,
+    timeout_seconds: Optional[float] = None,
+    **kwargs: Any,
+) -> Any:
+    """Run a sync persistence operation already holding an async slot.
+
+    Ownership rule (single-gate correction): callers that execute inside
+    ``async_persistence_slot`` MUST use this path instead of
+    :func:`call_serialized`. The async slot is the capacity boundary
+    (``persistence_max_concurrency``); re-acquiring the sync persistence
+    semaphore here would double-gate and recreate head-of-line blocking.
+
+    Thread-safety: the caller runs in an ``asyncio.to_thread`` executor
+    thread with a thread-local Supabase client (see ``get_service_client``),
+    so no shared-transport state is touched. Capacity is still bounded
+    because at most ``persistence_max_concurrency`` coroutines hold async
+    slots concurrently.
+
+    Telemetry: records ``wait_ms=0`` (no second capacity wait) and the real
+    DB ``hold_ms`` under the shared holding gauge, so ``sync_holding_now``
+    continues to mean "threads executing DB" while ``sync_waiting_now``
+    stays zero for gated paths. Cancellation is checked before/after
+    execution; ``timeout_seconds`` is accepted for signature parity but
+    performs no second capacity wait (the async slot already enforced it).
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        raise PersistenceCancelledError("Persistence work cancelled before execution (gated)")
+    wait_ms = 0.0
+    with _STATS_GUARD:
+        _LOCK_STATS["holding_now"] += 1
+    held_at = time.monotonic()
+    try:
+        if cancel_event is not None and cancel_event.is_set():
+            raise PersistenceCancelledError("Persistence work cancelled after acquiring slot (gated)")
+        return fn(*args, **kwargs)
+    finally:
+        hold_ms = (time.monotonic() - held_at) * 1000.0
+        with _STATS_GUARD:
+            _LOCK_STATS["holding_now"] -= 1
+            _LOCK_STATS["sections"] += 1
+            _LOCK_STATS["wait_ms_total"] += wait_ms
+            _LOCK_STATS["hold_ms_total"] += hold_ms
             if hold_ms > _LOCK_STATS["hold_ms_max"]:
                 _LOCK_STATS["hold_ms_max"] = hold_ms
 

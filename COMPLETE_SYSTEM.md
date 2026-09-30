@@ -1581,3 +1581,42 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   (`test_cancellation_cooperative_lifecycle`, `test_crawl_throughput`, `test_supabase_client_serialization`,
   `test_crawl_persistence_offloop`, `test_timeout_regression`, `test_job_repository`, `test_crawl_refresh_system`,
   `test_scheduled_crawl_runner`) green. No persistence-concurrency or timeout change made (telemetry/diagnosis only).
+
+### 9.32 Production Persistence Double-Gate Elimination: single-gate correction
+
+- **Call-site matrix (verified before editing):**
+  | Call site | async slot? | sync gate? | Production? | Protection required |
+  |---|---|---|---|---|
+  | `JobIngestionService._persist_offloop` | yes (75s) | `call_serialized` (75s) | YES (all 8 ingest paths) | async slot only → bypass sync capacity |
+  | `crawl_jobs` deactivation (`async slot` + `_deactivate_after_success`) | yes (45s) | `call_serialized` (45s) | YES | async slot only → bypass sync capacity |
+  | `_deactivate_after_success` direct/legacy callers | no | `call_serialized` | no (tests/scripts) | keep `call_serialized` |
+  | scripts/tests/docs using `call_serialized` bare | no | `call_serialized` | no | keep `call_serialized` |
+- **Correction (smallest, ownership-explicit):** new `run_gated_persistence()` in `app/db/supabase.py` —
+  for callers already holding `async_persistence_slot`. It performs NO second capacity wait (`wait_ms=0`),
+  checks cooperative cancellation pre/post, executes the DB work in the calling executor thread on the
+  thread-local Supabase client, and records DB `hold_ms` under the shared holding gauge (so `sync_holding_now`
+  keeps meaning "threads in DB", `sync_waiting_now` means "queued for sync capacity" — zero for gated paths).
+  `call_serialized` is untouched for all non-gated callers. `_persist_offloop` now does
+  `async slot → to_thread(run_gated_persistence)`; `_deactivate_after_success(..., already_gated=True)` does the
+  same for the production deactivation caller (default `False` preserves legacy protection). Result:
+  `async slot(2) → thread → repository → Supabase`, one capacity boundary.
+- **Unchanged:** concurrency=2, 75s/45s/300s timeouts, HTTP 5/15/15/5, cooperative cancellation, thread-local
+  clients, `returning="minimal"`, migration 023 file, scheduler/ingestion design, `PERSISTENCE_TELEMETRY_VERBOSE`
+  default-off, split telemetry + `production_timing` fields (now reporting `sync wait=0` for gated ops).
+- **Before/after (fake PostgREST, conc=2):**
+  BEFORE (§9.31): fast 5×mixed completes; occupied-sync demo `async_wait≈0ms + sync_block≈500ms (gate=sync)`
+  while holding the async slot; third-waiter total = async-wait + sync-wait + DB.
+  AFTER: Workload1 5×mixed (50/250/500/1000/250 @8ms) wall=281ms, `sync wait_total=0`;
+  5×100 @50ms wall=344ms, `sync wait=0`; 3×100 @200ms wall=828ms (third `async_wait≈405ms + hold≈407ms`), `sync wait=0`;
+  7×50 wall=110ms, `sync wait=0`, `max_async_holding=2`, gauges drain, RSS deltas 0–5MB, threads 3–4.
+- **Tests:** new `tests/test_persistence_single_gate.py` (7: A zero sync-wait under 5 concurrent gated ops;
+  B waiter at async boundary only; C exactly-2 DB + third waits async; D tagged timeout, contracts intact, no leak;
+  E deactivation single-gated + non-blocking intact; F cancel at wait/pre-thread/during-DB, no leak;
+  G legacy `call_serialized` still serializes + gated path never touches sync waiters). Updated
+  `test_supabase_client_serialization::test_upsert_still_uses_to_thread` for the single-gate surface.
+  Full set (70: single-gate + forensics + cancellation + throughput + serialization + offloop + timeout) green;
+  plus `test_job_repository`, `test_crawl_refresh_system`, `test_scheduled_crawl_runner` green.
+- **Migration 023:** file present with both partial indexes; deactivation predicates match the index prefix
+  (verified statically). Live-production index-existence check was NOT available from this environment
+  (no Supabase credentials in shell); no production data touched. Recommend a read-only
+  `pg_indexes` check from an environment with service-role access before closing §6.

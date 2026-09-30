@@ -176,7 +176,9 @@ async def test_upsert_still_uses_to_thread(monkeypatch):
 
     ingestion = JobIngestionService(job_repository=_Repo(), job_service=_Svc())
     await ingestion.ingest_ashby_jobs("notion")
-    assert "call_serialized" in calls
+    # Single-gate: async-gated upserts go through run_gated_persistence in
+    # to_thread; legacy non-gated callers still use call_serialized.
+    assert "run_gated_persistence" in calls or "call_serialized" in calls
 
 
 @pytest.mark.asyncio

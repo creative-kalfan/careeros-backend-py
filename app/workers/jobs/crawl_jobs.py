@@ -140,17 +140,24 @@ def _deactivate_after_success(
     max_age_days: int,
     cancel_event: Optional[threading.Event] = None,
     timeout_seconds: float = 45.0,
+    already_gated: bool = False,
 ) -> tuple[int, int, int, int]:
     """Synchronous post-ingestion deactivation; runs in a worker thread.
 
     Ordering is load-bearing and preserved exactly: not-seen reconciliation
     first (complete-inventory sources only), then the age-based staleness
     backstop for all providers. Raises on DB errors so the caller keeps the
-    existing best-effort warning behavior. The whole pair runs under the
-    shared-client lock so executor threads never drive the client concurrently.
-    Supports cancellation tokens and timeout bounds.
+    existing best-effort warning behavior. Supports cancellation tokens and
+    timeout bounds.
+
+    Ownership rule: the production caller holds ``async_persistence_slot``
+    and passes ``already_gated=True`` so the pair runs via
+    ``run_gated_persistence`` WITHOUT re-acquiring the sync capacity
+    semaphore (single-gate). Direct/legacy callers keep the default
+    ``already_gated=False`` and remain protected by ``call_serialized``.
+    Thread-safety in both cases rests on thread-local Supabase clients.
     """
-    from app.db.supabase import call_serialized
+    from app.db.supabase import call_serialized, run_gated_persistence
 
     not_seen_kwargs: dict[str, Any] = {}
     stale_kwargs: dict[str, Any] = {}
@@ -198,6 +205,10 @@ def _deactivate_after_success(
         stale_ms = int((time.monotonic() - stale_start) * 1000)
         return not_seen, stale, not_seen_ms, stale_ms
 
+    if already_gated:
+        return run_gated_persistence(
+            _run, cancel_event=cancel_event, timeout_seconds=timeout_seconds
+        )
     return call_serialized(
         _run, cancel_event=cancel_event, timeout_seconds=timeout_seconds
     )
@@ -349,6 +360,8 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                 deact_async_wait_ms = int((time.monotonic() - deact_async_acquire_start) * 1000)
                 deact_hold_start = time.monotonic()
                 deact_thread_start = time.monotonic()
+                # Single-gate: async slot above is the capacity boundary;
+                # already_gated=True bypasses the redundant sync semaphore.
                 deactivated_not_seen, deactivated, deactivate_not_seen_ms, deactivate_stale_ms = await asyncio.to_thread(
                     _deactivate_after_success,
                     ingestion,
@@ -356,8 +369,9 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                     slug,
                     crawl_started_at,
                     max_age_days,
-                    cancel_event=cancel_event,
-                    timeout_seconds=45.0,
+                    cancel_event,
+                    45.0,
+                    True,
                 )
                 deact_to_thread_ms = int((time.monotonic() - deact_thread_start) * 1000)
                 deact_async_hold_ms = int((time.monotonic() - deact_hold_start) * 1000)
