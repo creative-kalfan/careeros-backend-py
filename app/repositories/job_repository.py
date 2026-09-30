@@ -129,9 +129,8 @@ class JobRepository:
             cached = _PROBE_CACHE_RPC_BATCH.get(key)
             if cached is None:
                 try:
-                    # Probe with an empty array
-                    self._client.rpc("upsert_jobs_batch", {"jobs_json": []}).execute()
-                    cached = True
+                    res = self._client.rpc("upsert_jobs_batch", {"jobs_json": []}).execute()
+                    cached = isinstance(getattr(res, "data", None), dict)
                 except Exception:
                     cached = False
                 _PROBE_CACHE_RPC_BATCH[key] = cached
@@ -376,6 +375,8 @@ class JobRepository:
                 new_row.setdefault("first_seen_at", now_iso)
             return ("insert", new_row)
         new_row = self._apply_source_escalation(row, existing)
+        if existing.get("posted_at") is not None:
+            new_row["posted_at"] = existing["posted_at"]
         row_id = existing.get("id")
         if self._is_same_job(existing, new_row):
             # Nothing changed: refresh last_seen, and re-activate a
@@ -508,9 +509,7 @@ class JobRepository:
                 history = self._client.table("crawl_run_history").select("content_hash").eq("source_platform", source).eq("company_slug", slug).order("crawled_at", desc=True).limit(1).execute()
                 if history.data and isinstance(history.data, list) and history.data[0].get("content_hash") == content_hash:
                     logger.info(f"Crawl hash unchanged for {source}:{slug}, bypassing full upsert.")
-                    # Hash unchanged, touch active jobs only
-                    self._db_requests += 1
-                    self._client.table("jobs").update({"last_seen_at": now_iso}, returning="minimal").eq("is_active", True).eq("source_platform", source).eq("company", slug).execute() # Wait, slug isn't always company. Actually, the bulk deactivation matches company or slug based on how they're mapped. Let's just touch by source_platform. Wait, we can't touch all by source if it's a multi-tenant ATS! Let's touch using the RPC or just let it update by source + company_slug logic if we had it. Or we can just touch the IDs of jobs in the current list! Yes, we have the IDs in the list.
+                    # Hash unchanged, touch active jobs only by external_job_id in chunks
                     ids = [j.external_job_id for j in jobs if j.external_job_id]
                     if ids:
                         # Chunked update
@@ -519,6 +518,7 @@ class JobRepository:
                             self._db_requests += 1
                             self._client.table("jobs").update({"last_seen_at": now_iso}, returning="minimal").eq("source_platform", source).in_("external_job_id", chunk).execute()
                     
+                    self.last_path = "unchanged"
                     self.last_db_requests = self._db_requests
                     return {
                         "discovered": len(jobs),
@@ -527,7 +527,6 @@ class JobRepository:
                         "unchanged": len(ids),
                         "deduplicated": 0,
                         "skipped": len(jobs) - len(ids),
-                        "path": "unchanged"
                     }
             except Exception as e:
                 logger.warning(f"Failed to check crawl history for {source}:{slug}: {e}")
@@ -593,6 +592,7 @@ class JobRepository:
                 except Exception as e:
                     logger.warning(f"Failed to record crawl history for {source}:{slug}: {e}")
                     
+            self.last_path = "rpc"
             self.last_db_requests = self._db_requests
             return {
                 "discovered": len(jobs),
@@ -601,7 +601,6 @@ class JobRepository:
                 "unchanged": unchanged,
                 "deduplicated": deduplicated,
                 "skipped": skipped,
-                "path": "rpc"
             }
 
         # Legacy bulk Python path
@@ -737,6 +736,7 @@ class JobRepository:
             except Exception as e:
                 pass
 
+        self.last_path = "legacy"
         self.last_db_requests = self._db_requests
         return {
             "discovered": len(jobs),
@@ -745,7 +745,6 @@ class JobRepository:
             "unchanged": unchanged,
             "deduplicated": deduplicated,
             "skipped": skipped,
-            "path": "legacy"
         }
 
     # ------------------------------------------------------------------
@@ -778,9 +777,9 @@ class JobRepository:
                     "p_careers_url": careers_url,
                     "p_max_age_days": max_age_days
                 }).execute()
-                count = res.data or 0
-                self.last_db_requests = self._db_requests
-                return count
+                if isinstance(getattr(res, "data", None), int):
+                    self.last_db_requests = self._db_requests
+                    return res.data
             except Exception as e:
                 logger.warning(f"deactivate_stale_jobs_batch RPC failed, falling back to legacy: {e}")
                 

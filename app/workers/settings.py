@@ -130,10 +130,6 @@ class WorkerSettings:
     job_timeout = 300
     keep_result = 5
     max_jobs = max(1, _settings.persistence_max_concurrency)
-    # Queue-poll interval: env-driven (ARQ_POLL_DELAY_SECONDS, default 10s).
-    # Idle cost is ~86400/poll_delay ZRANGEBYSCORE/day: 0.5s = ~172.8k/day
-    # (~5.2M/month — too hot for metered/request-billed Redis plans);
-    # 30s = safe for free tier limits without impacting background job latency significantly.
-    poll_delay = 30.0 if _settings.arq_poll_delay_seconds == 10.0 else _settings.arq_poll_delay_seconds
+    poll_delay = _settings.arq_poll_delay_seconds
     health_check_interval = 3600
     retry_jobs = True
