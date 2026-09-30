@@ -15,13 +15,14 @@ provenance is preserved in ``source_history``.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from postgrest.exceptions import APIError
 from supabase import Client
 
-from app.db.supabase import get_service_client
+from app.db.supabase import PersistenceCancelledError, get_service_client
 from app.models.job import NormalizedJob
 
 logger = logging.getLogger(__name__)
@@ -295,7 +296,10 @@ class JobRepository:
 
 
     def _find_many_by_identity(
-        self, source_platform: str, external_ids: list[str]
+        self,
+        source_platform: str,
+        external_ids: list[str],
+        cancel_event: Optional[threading.Event] = None,
     ) -> dict[tuple[str, str], dict[str, Any]]:
         """Bulk existence fetch: {(external_job_id, source_platform): row}.
 
@@ -308,6 +312,8 @@ class JobRepository:
         found: dict[tuple[str, str], dict[str, Any]] = {}
         ids = [i for i in dict.fromkeys(external_ids) if i]
         for start in range(0, len(ids), _UPSERT_FETCH_CHUNK):
+            if cancel_event is not None and cancel_event.is_set():
+                raise PersistenceCancelledError("Existence fetch cancelled")
             chunk = ids[start:start + _UPSERT_FETCH_CHUNK]
             self._db_requests += 1
             result = (
@@ -431,8 +437,12 @@ class JobRepository:
             return "updated"
         return "unchanged"
 
-    def upsert_jobs(self, jobs: list[NormalizedJob]) -> dict[str, int]:
-        """Upsert a batch of normalized jobs idempotently.
+    def upsert_jobs(
+        self,
+        jobs: list[NormalizedJob],
+        cancel_event: Optional[threading.Event] = None,
+    ) -> dict[str, int]:
+        """Upsert a batch of normalized jobs idempotently with cancellation support.
 
         Counters: discovered, inserted, updated, unchanged, deduplicated, skipped.
 
@@ -444,6 +454,9 @@ class JobRepository:
         fallback) are byte-for-byte the pre-bulk semantics via
         :meth:`_classify_row`.
         """
+        if cancel_event is not None and cancel_event.is_set():
+            raise PersistenceCancelledError("Upsert cancelled before execution")
+
         inserted = 0
         updated = 0
         unchanged = 0
@@ -484,7 +497,9 @@ class JobRepository:
             by_platform.setdefault(key[1], []).append(key[0])
         existing_map: dict[tuple[str, str], dict[str, Any]] = {}
         for platform, ids in by_platform.items():
-            existing_map.update(self._find_many_by_identity(platform, ids))
+            if cancel_event is not None and cancel_event.is_set():
+                raise PersistenceCancelledError("Upsert cancelled during existence fetch")
+            existing_map.update(self._find_many_by_identity(platform, ids, cancel_event=cancel_event))
 
         # Phase 3: classify every row with the single shared decision fn.
         to_insert: list[dict[str, Any]] = []
@@ -526,6 +541,8 @@ class JobRepository:
         # Phase 4a: bulk insert new rows (chunked); 23505 races fall back
         # to the exact per-row path for that chunk only.
         for start in range(0, len(to_insert), _UPSERT_WRITE_CHUNK):
+            if cancel_event is not None and cancel_event.is_set():
+                raise PersistenceCancelledError("Upsert cancelled before insert chunk")
             chunk = to_insert[start:start + _UPSERT_WRITE_CHUNK]
             chunk_keys = insert_keys[start:start + _UPSERT_WRITE_CHUNK]
             chunk_rows = insert_rows[start:start + _UPSERT_WRITE_CHUNK]
@@ -539,6 +556,8 @@ class JobRepository:
                 if _DUPLICATE_KEY_CODE not in code and _DUPLICATE_KEY_CODE not in args:
                     raise
                 for key, row in zip(chunk_keys, chunk_rows):
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise PersistenceCancelledError("Upsert cancelled during race resolution")
                     outcome = self._upsert_single(key, row, now_iso, has_last_seen)
                     if outcome == "inserted":
                         inserted += 1
@@ -552,6 +571,8 @@ class JobRepository:
         # Phase 4b: bulk touch (last_seen refresh) + bulk reactivate.
         if has_last_seen and touch_ids:
             for start in range(0, len(touch_ids), _DEACTIVATE_ID_CHUNK):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise PersistenceCancelledError("Upsert cancelled before touch chunk")
                 chunk = touch_ids[start:start + _DEACTIVATE_ID_CHUNK]
                 self._db_requests += 1
                 self._client.table("jobs").update(
@@ -562,18 +583,24 @@ class JobRepository:
             if has_last_seen:
                 payload["last_seen_at"] = now_iso
             for start in range(0, len(reactivate_ids), _DEACTIVATE_ID_CHUNK):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise PersistenceCancelledError("Upsert cancelled before reactivate chunk")
                 chunk = reactivate_ids[start:start + _DEACTIVATE_ID_CHUNK]
                 self._db_requests += 1
                 self._client.table("jobs").update(payload).in_("id", chunk).execute()
 
         # Phase 4c: content-changed rows keep the exact per-row full update.
         for row_id, new_row in full_updates:
+            if cancel_event is not None and cancel_event.is_set():
+                raise PersistenceCancelledError("Upsert cancelled before update row")
             self._db_requests += 1
             self._client.table("jobs").update(new_row).eq("id", row_id).execute()
 
         # Phase 4d: defensive singles (existing row without an id — the old
         # code would KeyError here; route through the live per-row path).
         for key, row in singles:
+            if cancel_event is not None and cancel_event.is_set():
+                raise PersistenceCancelledError("Upsert cancelled before singles row")
             outcome = self._upsert_single(key, row, now_iso, has_last_seen)
             if outcome == "inserted":
                 inserted += 1
@@ -604,6 +631,7 @@ class JobRepository:
         max_age_days: int = 30,
         company: Optional[str] = None,
         careers_url: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> int:
         """Deactivate active jobs from a source that are no longer fresh.
 
@@ -611,6 +639,9 @@ class JobRepository:
         ``source_platform`` and optionally ``company``/``careers_url`` so one
         company can never deactivate or scan another company's jobs.
         """
+        if cancel_event is not None and cancel_event.is_set():
+            raise PersistenceCancelledError("deactivate_stale_jobs cancelled before execution")
+
         if not self._probe_has_last_seen_at():
             return 0
 
@@ -657,11 +688,13 @@ class JobRepository:
                 continue  # no usable date: never delete-by-staleness
             if isinstance(row, dict) and row.get("id"):
                 stale_ids.append(row["id"])
-        count = self._bulk_set_inactive(stale_ids, what="deactivate_stale_jobs")
+        count = self._bulk_set_inactive(stale_ids, what="deactivate_stale_jobs", cancel_event=cancel_event)
         self.last_db_requests = self._db_requests
         return count
 
-    def _bulk_set_inactive(self, ids: list[str], what: str) -> int:
+    def _bulk_set_inactive(
+        self, ids: list[str], what: str, cancel_event: Optional[threading.Event] = None
+    ) -> int:
         """Set ``is_active=False`` for ids in bulk (chunked ``in_`` UPDATEs).
 
         Same rows, same values as the former per-row loop. Best-effort
@@ -670,6 +703,8 @@ class JobRepository:
         """
         count = 0
         for start in range(0, len(ids), _DEACTIVATE_ID_CHUNK):
+            if cancel_event is not None and cancel_event.is_set():
+                raise PersistenceCancelledError(f"{what} cancelled during bulk update")
             chunk = ids[start:start + _DEACTIVATE_ID_CHUNK]
             try:
                 self._db_requests += 1
@@ -679,6 +714,8 @@ class JobRepository:
                 count += len(chunk)
             except APIError:
                 for row_id in chunk:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise PersistenceCancelledError(f"{what} cancelled during fallback update")
                     try:
                         self._db_requests += 1
                         self._client.table("jobs").update({"is_active": False}).eq(
@@ -696,6 +733,7 @@ class JobRepository:
         since_iso: str,
         careers_url: Optional[str] = None,
         company: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> int:
         """Deactivate active jobs from a source NOT observed since ``since_iso``.
 
@@ -715,6 +753,9 @@ class JobRepository:
 
         Returns the number of deactivated rows.
         """
+        if cancel_event is not None and cancel_event.is_set():
+            raise PersistenceCancelledError("deactivate_not_seen_since cancelled before execution")
+
         if not self._probe_has_last_seen_at():
             return 0
 
@@ -742,7 +783,7 @@ class JobRepository:
             row["id"] for row in (result.data or [])
             if isinstance(row, dict) and row.get("id")
         ]
-        count = self._bulk_set_inactive(ids, what="deactivate_not_seen_since")
+        count = self._bulk_set_inactive(ids, what="deactivate_not_seen_since", cancel_event=cancel_event)
         if count:
             logger.info(
                 "deactivate_not_seen_since: %d rows deactivated (source=%s company=%s since=%s careers_url=%s)",

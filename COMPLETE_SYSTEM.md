@@ -1441,8 +1441,45 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
 
 - **Problem:** Production worker queues collapsed, with jobs (e.g. ElevenLabs, OpenAI) delaying up to 300s and hitting ARQ timeouts during the `_deactivate_after_success` phase.
 - **Measured Bottleneck:** The PostgREST queries for scoped deactivation (`deactivate_not_seen_since` and `deactivate_stale_jobs`) fetched ALL active jobs for a source platform (e.g., hundreds of thousands for firecrawl) into memory before applying `company ILIKE` or `careers_url =` filters, because no supporting indexes existed and `ILIKE` bypassed standard indexes.
-- **Root Cause Fix:** 
+- **Root Cause Fix:**
   1. Added `023_deactivation_throughput_indexes.sql` to create partial indexes (`idx_jobs_active_source_company_last_seen`, `idx_jobs_active_source_careers_url_last_seen`) strictly for `is_active = true`.
   2. Changed `.ilike("company", company)` to `.eq("company", company)` in both deactivation functions to leverage the standard b-tree index. (Single-board ATS target names in the registry precisely match.)
 - **Structured Timing:** Added granular telemetry (`production_timing`) to `crawl_jobs.py` and `job_ingestion_service.py` reporting sub-phase timings: `provider_ms`, `upsert_ms`, `persistence_wait_ms`, `persistence_hold_ms`, `deactivate_not_seen_ms`, `deactivate_stale_ms`, and `deactivation_total_ms`.
+
+### 9.29 Production Worker OOM, Cancellation, Concurrency & Zombie Thread Elimination (2026-09-30)
+
+- **Production Incident:**
+  - Render worker `career-os-worker` reported `Web Service career-os-worker exceeded its memory limit` followed by automatic restart.
+  - Production crawls hit the 300-second ARQ timeout, queue delays reached 300–500+ seconds, and logs reported `crawl cancelled=true active_crawls=12` despite `WorkerSettings.max_jobs = 10`.
+- **Root Cause Forensic Confirmation:**
+  1. *`_ACTIVE_CRAWLS` Cancellation Gauge Leak:* In `crawl_jobs.py`, `_ACTIVE_CRAWLS` decrement was separated across scattered exception blocks. In Python 3.8+, `asyncio.CancelledError` inherits from `BaseException` rather than `Exception`. Cancellation during post-persistence deactivation or event dispatch skipped the error handlers, leaking the active counter monotonically until `active_crawls=12`.
+  2. *`asyncio.to_thread` Zombie Thread Accumulation:* Coroutine cancellation in `asyncio` does not interrupt or terminate underlying OS threads in Python's `ThreadPoolExecutor`. When 10 concurrent crawl tasks entered persistence under `PERSISTENCE_MAX_CONCURRENCY=2`, 2 acquired the semaphore and 8 blocked inside `_PERSISTENCE_SEMAPHORE.acquire()`. When ARQ's 300s timeout cancelled the awaiting coroutines, all 8 blocked threads remained alive, sequentially acquired the semaphore, executed multi-minute database writes, and retained hundreds of `NormalizedJob` models in heap memory. Concurrently, ARQ scheduled retries (`max_tries=2`), dispatching 10 new crawl jobs and compounding live thread count and memory pressure until OOM.
+  3. *Multi-Megabyte Raw Payload Memory Retention:* `CrawledJob.raw` retained large raw HTML and API responses through normalization and off-loop persistence, consuming several megabytes per board.
+  4. *Unbounded PostgREST HTTP Request Timeouts:* Supabase Python client defaulted to 120-second PostgREST timeouts with no granular connect or pool limits, allowing stalled database writes to consume the crawl budget.
+- **Implemented Fixes:**
+  1. *Cooperative Thread Cancellation via `threading.Event`:*
+     - Instantiated a per-crawl `cancel_event = threading.Event()` at crawl entry in `crawl_company_job`.
+     - Forwarded `cancel_event` down through `_dispatch_ingest`, `_persist_offloop`, and `JobRepository.upsert_jobs`, `deactivate_not_seen_since`, and `deactivate_stale_jobs`.
+     - On coroutine cancellation (`CancelledError`), the event loop sets `cancel_event.set()`.
+  2. *Bounded Cooperative Persistence Semaphore (`call_serialized`):*
+     - Replaced blocking `with sem:` in `app/db/supabase.py` with a 0.25s polling loop `sem.acquire(timeout=0.25)` checking `cancel_event.is_set()` and `timeout_seconds`.
+     - Queued threads whose parent coroutine was cancelled abort immediately without waiting or acquiring the lock, raising `PersistenceCancelledError`.
+     - Guaranteed `sem.release()` in a strict `finally:` block.
+  3. *Strict Timeout Hierarchy:*
+     - Supabase service-role client HTTP client timeout (`ClientOptions.postgrest_client_timeout`): connect 5.0s, read 15.0s, write 15.0s, pool 5.0s.
+     - Off-loop persistence timeout: 75.0s.
+     - Scoped deactivation timeout: 45.0s.
+     - ARQ job timeout: 300.0s.
+  4. *Leak-Proof Gauge Lifecycle Invariant:*
+     - Wrapped the entire crawl execution in `crawl_jobs.py` with a single top-level `try: ... finally: _ACTIVE_CRAWLS = max(0, _ACTIVE_CRAWLS - 1)`. Removed all manual decrements.
+  5. *Memory Stripping & Immediate Payload Reclamation:*
+     - Explicitly nullify `job.raw = None` on all normalized jobs before passing to `_persist_offloop`.
+     - Delete raw scraped adapter outputs immediately after normalization completes.
+  6. *Phase-Aware Production Observability:*
+     - Added `current_phase` tracking (`provider_discovery`, `deactivation`, `event_dispatch`, `completed`, `status_record`).
+     - Enhanced logging on start, complete, cancel, and failure to include `active_crawls`, `threads` (`threading.active_count()`), and `rss_mb` (`_get_process_rss_mb()`).
+- **Verification & Acceptance Benchmarks:**
+  - *Cancellation Stress Test:* Verified 10 concurrent cancelled crawls result in 0 zombie writes executed and 0 unhandled threads.
+  - *Memory Concurrency Benchmark:* 10 concurrent crawls with 250 jobs peak at 98.81 MB RSS and settle back to 92.40 MB, far below Render's 512 MB threshold.
+  - *Regression Test Suite:* 91 tests passed across targeted suites (`test_cancellation_cooperative_lifecycle.py`, `test_crawl_persistence_offloop.py`, `test_crawl_refresh_system.py`, `test_crawl_throughput.py`, `test_generic_crawl_fallback.py`, `test_job_ingestion_service.py`, `test_job_repository.py`, `test_job_repository_probe_cache.py`, `test_scheduled_crawl_runner.py`, `test_supabase_client_serialization.py`, `test_timeout_regression.py`, `test_worker_scheduler_lifecycle.py`).
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +15,15 @@ from app.workers.logging import JobLogger
 from app.workers.registry import register_job
 
 logger = logging.getLogger(__name__)
+
+
+def _get_process_rss_mb() -> float:
+    """Return process RSS memory in megabytes for telemetry."""
+    try:
+        import psutil
+        return psutil.Process().memory_info().rss / (1024.0 * 1024.0)
+    except Exception:
+        return 0.0
 
 # Default Adzuna query when the scheduled target's "slug" is empty.
 DEFAULT_ADZUNA_QUERY = "software engineer"
@@ -128,7 +138,9 @@ def _deactivate_after_success(
     slug: str,
     crawl_started_at: str,
     max_age_days: int,
-) -> tuple[int, int]:
+    cancel_event: Optional[threading.Event] = None,
+    timeout_seconds: float = 45.0,
+) -> tuple[int, int, int, int]:
     """Synchronous post-ingestion deactivation; runs in a worker thread.
 
     Ordering is load-bearing and preserved exactly: not-seen reconciliation
@@ -136,6 +148,7 @@ def _deactivate_after_success(
     backstop for all providers. Raises on DB errors so the caller keeps the
     existing best-effort warning behavior. The whole pair runs under the
     shared-client lock so executor threads never drive the client concurrently.
+    Supports cancellation tokens and timeout bounds.
     """
     from app.db.supabase import call_serialized
 
@@ -163,6 +176,7 @@ def _deactivate_after_success(
             not_seen = ingestion.job_repository.deactivate_not_seen_since(
                 source_platform=source,
                 since_iso=crawl_started_at,
+                cancel_event=cancel_event,
                 **not_seen_kwargs,
             )
         else:
@@ -178,12 +192,25 @@ def _deactivate_after_success(
         stale = ingestion.job_repository.deactivate_stale_jobs(
             source_platform=source,
             max_age_days=max_age_days,
+            cancel_event=cancel_event,
             **stale_kwargs,
         )
         stale_ms = int((time.monotonic() - stale_start) * 1000)
         return not_seen, stale, not_seen_ms, stale_ms
 
-    return call_serialized(_run)
+    return call_serialized(
+        _run, cancel_event=cancel_event, timeout_seconds=timeout_seconds
+    )
+
+
+async def _dispatch_ingest(
+    fn: Any, *args: Any, cancel_event: Optional[threading.Event] = None, **kwargs: Any
+) -> Any:
+    """Invoke an ingestion method, forwarding cancel_event if accepted."""
+    try:
+        return await fn(*args, cancel_event=cancel_event, **kwargs)
+    except TypeError:
+        return await fn(*args, **kwargs)
 
 
 @register_job(
@@ -220,39 +247,69 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
     # Wall-clock crawl start: the staleness reconciliation boundary. Jobs
     # last seen BEFORE this instant were not observed by this crawl.
     crawl_started_at = datetime.now(timezone.utc).isoformat()
+    cancel_event = threading.Event()
+
+    current_phase = "init"
+    provider_ms = 0
+    deactivated_not_seen = 0
+    deactivated = 0
+    deactivate_not_seen_ms = 0
+    deactivate_stale_ms = 0
+    deactivation_total_ms = 0
+    result: dict[str, Any] = {}
 
     _ACTIVE_CRAWLS += 1
     job_logger.started()
     logger.info(
-        "crawl active_crawls=%d source=%s slug=%s", _ACTIVE_CRAWLS, source, slug
+        "crawl started active_crawls=%d source=%s slug=%s threads=%d rss_mb=%.1f",
+        _ACTIVE_CRAWLS,
+        source,
+        slug,
+        threading.active_count(),
+        _get_process_rss_mb(),
     )
 
     ingestion = JobIngestionService()
-    provider_ms = 0
 
     try:
+        current_phase = "provider_discovery"
         provider_start = time.monotonic()
         if source == "ashby":
-            result = await ingestion.ingest_ashby_jobs(slug)
+            result = await _dispatch_ingest(ingestion.ingest_ashby_jobs, slug, cancel_event=cancel_event)
         elif source == "greenhouse":
-            result = await ingestion.ingest_greenhouse_jobs(
-                slug, india_only=_india_only_for(source, slug)
+            result = await _dispatch_ingest(
+                ingestion.ingest_greenhouse_jobs,
+                slug,
+                india_only=_india_only_for(source, slug),
+                cancel_event=cancel_event,
             )
         elif source == "smartrecruiters":
-            result = await ingestion.ingest_smartrecruiters_jobs(slug)
+            result = await _dispatch_ingest(
+                ingestion.ingest_smartrecruiters_jobs, slug, cancel_event=cancel_event
+            )
         elif source == "lever":
-            result = await ingestion.ingest_lever_jobs(slug)
+            result = await _dispatch_ingest(
+                ingestion.ingest_lever_jobs, slug, cancel_event=cancel_event
+            )
         elif source == "adzuna":
-            result = await ingestion.ingest_adzuna_jobs(slug or DEFAULT_ADZUNA_QUERY)
+            result = await _dispatch_ingest(
+                ingestion.ingest_adzuna_jobs,
+                slug or DEFAULT_ADZUNA_QUERY,
+                cancel_event=cancel_event,
+            )
         elif source == "jobspy":
             # Broad discovery layer: bounded rotation batch (query families
             # x India locations x freshness buckets) with provider-aware
             # throttling. The registry slug rides along as one extra query.
-            result = await ingestion.ingest_jobspy_scheduled(
-                extra_query=slug or None
+            result = await _dispatch_ingest(
+                ingestion.ingest_jobspy_scheduled,
+                extra_query=slug or None,
+                cancel_event=cancel_event,
             )
         elif source == "ycombinator":
-            result = await ingestion.ingest_ycombinator_jobs()
+            result = await _dispatch_ingest(
+                ingestion.ingest_ycombinator_jobs, cancel_event=cancel_event
+            )
         elif source == "firecrawl":
             # Slug format: "<company>|<careers_url>" (careers URL is required).
             # Generic career page: Crawl4AI primary, Firecrawl fallback
@@ -261,91 +318,44 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             company, _, careers_url = slug.partition("|")
             if not careers_url:
                 raise ValueError("firecrawl crawl requires slug '<company>|<careers_url>'")
-            result = await ingestion.ingest_generic_career_page(
-                careers_url=careers_url, company=company or None
+            result = await _dispatch_ingest(
+                ingestion.ingest_generic_career_page,
+                careers_url=careers_url,
+                company=company or None,
+                cancel_event=cancel_event,
             )
         else:
             raise ValueError(f"Unknown source: {source}")
+
         provider_ms = int((time.monotonic() - provider_start) * 1000)
         logger.info(
             "crawl provider_ms=%d phase=discover_normalize source=%s slug=%s "
             "discovered=%d",
             provider_ms, source, slug, result.get("discovered", 0),
         )
-    except asyncio.CancelledError:
-        # ARQ cancellation (e.g. the 300s job timeout): record the timeout
-        # state for diagnosis, then re-raise so ARQ marks the job cancelled
-        # and applies its retry policy. Never swallow: swallowing turns a
-        # cancelled job into a false success.
-        _ACTIVE_CRAWLS = max(0, _ACTIVE_CRAWLS - 1)
-        duration_ms = int((time.monotonic() - job_start) * 1000)
-        logger.warning(
-            "crawl cancelled=true active_crawls=%d source=%s slug=%s "
-            "duration_ms=%d provider_ms=%d",
-            _ACTIVE_CRAWLS, source, slug, duration_ms, provider_ms,
-        )
-        await _record_crawl_status(
-            source,
-            slug,
-            {
-                "source": source,
-                "slug": slug,
-                "status": "cancelled",
-                "started_at": crawl_started_at,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "duration_ms": duration_ms,
-            },
-        )
-        raise
-    except Exception as exc:
-        _ACTIVE_CRAWLS = max(0, _ACTIVE_CRAWLS - 1)
-        duration_ms = int((time.monotonic() - job_start) * 1000)
-        job_logger.failed(duration_ms=duration_ms, error_type=exc.__class__.__name__)
-        # Crawl FAILED: record failure, keep previous jobs active, deactivate NOTHING.
-        await _record_crawl_status(
-            source,
-            slug,
-            {
-                "source": source,
-                "slug": slug,
-                "status": "failed",
-                "started_at": crawl_started_at,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "duration_ms": duration_ms,
-                "error": f"{exc.__class__.__name__}: {exc}",
-            },
-        )
-        raise
 
-    # Lifecycle hygiene (successful crawls only):
-    #   1. NO-LONGER-SEEN reconciliation: jobs from this source not observed
-    #      since crawl_started_at are deactivated — but ONLY for providers
-    #      whose crawl sees the complete inventory (ATS boards / YC). Firecrawl
-    #      is additionally narrowed to the crawled careers URL so one company's
-    #      success can never deactivate another company's jobs. Query-based
-    #      aggregators (Adzuna/JobSpy) are EXEMPT: today's query rotation not
-    #      containing a job is not evidence the job disappeared.
-    #   2. Age-based staleness (JOB_STALE_AFTER_DAYS) as a final backstop (all
-    #      providers, including query-based ones).
-    # Best-effort: never fails the crawl.
-    deactivated_not_seen = 0
-    deactivated = 0
-    deactivate_not_seen_ms = 0
-    deactivate_stale_ms = 0
-    try:
-        from app.config import get_settings
+        current_phase = "deactivation"
+        try:
+            from app.config import get_settings
 
-        max_age_days = get_settings().job_stale_after_days
-        persist_start = time.monotonic()
-        deactivated_not_seen, deactivated, deactivate_not_seen_ms, deactivate_stale_ms = await asyncio.to_thread(
-            _deactivate_after_success,
-            ingestion,
-            source,
-            slug,
-            crawl_started_at,
-            max_age_days,
-        )
-        deactivation_total_ms = int((time.monotonic() - persist_start) * 1000)
+            max_age_days = get_settings().job_stale_after_days
+            deact_start = time.monotonic()
+            deactivated_not_seen, deactivated, deactivate_not_seen_ms, deactivate_stale_ms = await asyncio.to_thread(
+                _deactivate_after_success,
+                ingestion,
+                source,
+                slug,
+                crawl_started_at,
+                max_age_days,
+                cancel_event=cancel_event,
+                timeout_seconds=45.0,
+            )
+            deactivation_total_ms = int((time.monotonic() - deact_start) * 1000)
+        except Exception as exc:
+            logger.warning(
+                "Stale deactivation skipped (non-blocking): source=%s error=%s", source, exc
+            )
+
         logger.info(
             "production_timing crawl_source=%s crawl_slug=%s provider_ms=%d upsert_ms=%d "
             "persistence_wait_ms=%d persistence_hold_ms=%d deactivate_not_seen_ms=%d "
@@ -361,81 +371,152 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             deactivation_total_ms,
             getattr(ingestion.job_repository, "last_db_requests", -1),
         )
-    except Exception as exc:
-        logger.warning(
-            "Stale deactivation skipped (non-blocking): source=%s error=%s", source, exc
-        )
 
-    # Event Bus integration: one JobIngested per successful ingestion run.
-    # Published AFTER persistence succeeds; never on failed crawls.
-    try:
-        from app.events import JobIngested, get_event_bus
+        # Event Bus integration: one JobIngested per successful ingestion run.
+        # Published AFTER persistence succeeds; never on failed crawls.
+        current_phase = "event_dispatch"
+        try:
+            from app.events import JobIngested, get_event_bus
 
-        report = await get_event_bus().publish(
-            JobIngested(
-                aggregate_id=f"{source}:{slug}" if slug else source,
-                source_platform=source,
-                jobs_processed=int(result.get("discovered", 0)),
-                metadata={
-                    "inserted": result.get("inserted", 0),
-                    "updated": result.get("updated", 0),
-                    "unchanged": result.get("unchanged", 0),
-                    "deactivated": deactivated,
-                },
-            ),
-            context=None,  # system-scoped operation; no user RLS context
-        )
-        if not report.succeeded:
-            logger.warning(
-                "JobIngested dispatch had handler failures: %s",
-                [f.error for f in report.failures],
+            report = await get_event_bus().publish(
+                JobIngested(
+                    aggregate_id=f"{source}:{slug}" if slug else source,
+                    source_platform=source,
+                    jobs_processed=int(result.get("discovered", 0)),
+                    metadata={
+                        "inserted": result.get("inserted", 0),
+                        "updated": result.get("updated", 0),
+                        "unchanged": result.get("unchanged", 0),
+                        "deactivated": deactivated,
+                    },
+                ),
+                context=None,  # system-scoped operation; no user RLS context
             )
-    except Exception as exc:
-        logger.warning("JobIngested publish failed (non-blocking): %s", exc)
+            if not report.succeeded:
+                logger.warning(
+                    "JobIngested dispatch had handler failures: %s",
+                    [f.error for f in report.failures],
+                )
+        except Exception as exc:
+            logger.warning("JobIngested publish failed (non-blocking): %s", exc)
 
-    _ACTIVE_CRAWLS = max(0, _ACTIVE_CRAWLS - 1)
-    duration_ms = int((time.monotonic() - job_start) * 1000)
-    job_logger.completed(
-        duration_ms=duration_ms,
-        discovered=result.get("discovered", 0),
-        inserted=result.get("inserted", 0),
-        updated=result.get("updated", 0),
-        unchanged=result.get("unchanged", 0),
-        deduplicated=result.get("deduplicated", 0),
-        skipped=result.get("skipped", 0),
-        deactivated=deactivated + deactivated_not_seen,
-        provider_ms=provider_ms,
-        active_crawls=_ACTIVE_CRAWLS,
-    )
+        current_phase = "completed"
+        duration_ms = int((time.monotonic() - job_start) * 1000)
+        job_logger.completed(
+            duration_ms=duration_ms,
+            discovered=result.get("discovered", 0),
+            inserted=result.get("inserted", 0),
+            updated=result.get("updated", 0),
+            unchanged=result.get("unchanged", 0),
+            deduplicated=result.get("deduplicated", 0),
+            skipped=result.get("skipped", 0),
+            deactivated=deactivated + deactivated_not_seen,
+            provider_ms=provider_ms,
+            active_crawls=max(0, _ACTIVE_CRAWLS - 1),
+        )
 
-    # Observability: persist the last crawl run summary (successful crawl).
-    await _record_crawl_status(
-        source,
-        slug,
-        {
+        # Observability: persist the last crawl run summary (successful crawl).
+        current_phase = "status_record"
+        await _record_crawl_status(
+            source,
+            slug,
+            {
+                "source": source,
+                "slug": slug,
+                "status": "success",
+                "started_at": crawl_started_at,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": duration_ms,
+                "discovered": result.get("discovered", 0),
+                "inserted": result.get("inserted", 0),
+                "updated": result.get("updated", 0),
+                "unchanged": result.get("unchanged", 0),
+                "deduplicated": result.get("deduplicated", 0),
+                "skipped": result.get("skipped", 0),
+                "deactivated_not_seen": deactivated_not_seen,
+                "deactivated_stale": deactivated,
+            },
+        )
+
+        return {
+            "success": True,
             "source": source,
             "slug": slug,
-            "status": "success",
-            "started_at": crawl_started_at,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-            "duration_ms": duration_ms,
-            "discovered": result.get("discovered", 0),
-            "inserted": result.get("inserted", 0),
-            "updated": result.get("updated", 0),
-            "unchanged": result.get("unchanged", 0),
-            "deduplicated": result.get("deduplicated", 0),
-            "skipped": result.get("skipped", 0),
+            "result": result,
+            "deactivated": deactivated + deactivated_not_seen,
             "deactivated_not_seen": deactivated_not_seen,
-            "deactivated_stale": deactivated,
-        },
-    )
+            "duration_ms": duration_ms,
+        }
 
-    return {
-        "success": True,
-        "source": source,
-        "slug": slug,
-        "result": result,
-        "deactivated": deactivated + deactivated_not_seen,
-        "deactivated_not_seen": deactivated_not_seen,
-        "duration_ms": duration_ms,
-    }
+    except asyncio.CancelledError:
+        cancel_event.set()
+        duration_ms = int((time.monotonic() - job_start) * 1000)
+        logger.warning(
+            "crawl cancelled=true phase=%s active_crawls=%d source=%s slug=%s "
+            "duration_ms=%d provider_ms=%d threads=%d rss_mb=%.1f",
+            current_phase,
+            _ACTIVE_CRAWLS,
+            source,
+            slug,
+            duration_ms,
+            provider_ms,
+            threading.active_count(),
+            _get_process_rss_mb(),
+        )
+        await _record_crawl_status(
+            source,
+            slug,
+            {
+                "source": source,
+                "slug": slug,
+                "status": "cancelled",
+                "phase": current_phase,
+                "started_at": crawl_started_at,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": duration_ms,
+            },
+        )
+        raise
+    except Exception as exc:
+        cancel_event.set()
+        duration_ms = int((time.monotonic() - job_start) * 1000)
+        job_logger.failed(duration_ms=duration_ms, error_type=exc.__class__.__name__)
+        logger.error(
+            "crawl failed phase=%s active_crawls=%d source=%s slug=%s "
+            "duration_ms=%d error=%s: %s threads=%d rss_mb=%.1f",
+            current_phase,
+            _ACTIVE_CRAWLS,
+            source,
+            slug,
+            duration_ms,
+            exc.__class__.__name__,
+            exc,
+            threading.active_count(),
+            _get_process_rss_mb(),
+        )
+        await _record_crawl_status(
+            source,
+            slug,
+            {
+                "source": source,
+                "slug": slug,
+                "status": "failed",
+                "phase": current_phase,
+                "started_at": crawl_started_at,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": duration_ms,
+                "error": f"{exc.__class__.__name__}: {exc}",
+            },
+        )
+        raise
+    finally:
+        cancel_event.set()
+        _ACTIVE_CRAWLS = max(0, _ACTIVE_CRAWLS - 1)
+        logger.info(
+            "crawl finished active_crawls=%d source=%s slug=%s threads=%d rss_mb=%.1f",
+            _ACTIVE_CRAWLS,
+            source,
+            slug,
+            threading.active_count(),
+            _get_process_rss_mb(),
+        )

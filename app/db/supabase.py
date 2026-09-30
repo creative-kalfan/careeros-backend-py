@@ -11,9 +11,19 @@ import time
 from functools import lru_cache
 from typing import Any, Callable
 
+import httpx
 from supabase import Client, ClientOptions, create_client
 
 from app.config import get_settings
+
+
+class PersistenceCancelledError(Exception):
+    """Raised when sync database persistence/deactivation work is cancelled."""
+
+
+class PersistenceTimeoutError(Exception):
+    """Raised when acquiring the persistence semaphore exceeds its deadline."""
+
 
 # Thread-local storage for service-role clients.
 # Each OS thread gets its own isolated Client instance with its own HTTP/2
@@ -72,31 +82,68 @@ _LOCK_STATS: dict[str, float] = {
 }
 
 
-def call_serialized(fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
-    """Run a sync Supabase-client call with bounded cross-thread concurrency."""
+def call_serialized(
+    fn: Callable[..., Any],
+    /,
+    *args: Any,
+    cancel_event: Optional[threading.Event] = None,
+    timeout_seconds: Optional[float] = None,
+    **kwargs: Any,
+) -> Any:
+    """Run a sync Supabase-client call with bounded concurrency and cancellation safety.
+
+    Args:
+        fn: Sync callable to execute under the semaphore.
+        *args: Positional arguments for fn.
+        cancel_event: Optional cancellation token checked while polling for the
+            semaphore and before/after executing fn.
+        timeout_seconds: Maximum seconds to wait for semaphore acquisition.
+        **kwargs: Keyword arguments for fn.
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        raise PersistenceCancelledError("Persistence work cancelled before acquiring semaphore")
+
     sem = get_persistence_semaphore()
     with _STATS_GUARD:
         _LOCK_STATS["waiting_now"] += 1
     queued_at = time.monotonic()
-    with sem:
-        wait_ms = (time.monotonic() - queued_at) * 1000.0
+
+    # Bounded polling loop: permits clean exit on cancellation without zombie threads
+    acquired = False
+    try:
+        while not acquired:
+            if cancel_event is not None and cancel_event.is_set():
+                raise PersistenceCancelledError("Persistence work cancelled while waiting for semaphore")
+            now = time.monotonic()
+            if timeout_seconds is not None and (now - queued_at) >= timeout_seconds:
+                raise PersistenceTimeoutError(
+                    f"Timed out after {timeout_seconds:.1f}s waiting for persistence semaphore"
+                )
+            acquired = sem.acquire(timeout=0.25)
+    finally:
         with _STATS_GUARD:
             _LOCK_STATS["waiting_now"] -= 1
-            _LOCK_STATS["holding_now"] += 1
-        held_at = time.monotonic()
-        try:
-            return fn(*args, **kwargs)
-        finally:
-            hold_ms = (time.monotonic() - held_at) * 1000.0
-            with _STATS_GUARD:
-                _LOCK_STATS["holding_now"] -= 1
-                _LOCK_STATS["sections"] += 1
-                _LOCK_STATS["wait_ms_total"] += wait_ms
-                _LOCK_STATS["hold_ms_total"] += hold_ms
-                if wait_ms > _LOCK_STATS["wait_ms_max"]:
-                    _LOCK_STATS["wait_ms_max"] = wait_ms
-                if hold_ms > _LOCK_STATS["hold_ms_max"]:
-                    _LOCK_STATS["hold_ms_max"] = hold_ms
+
+    wait_ms = (time.monotonic() - queued_at) * 1000.0
+    with _STATS_GUARD:
+        _LOCK_STATS["holding_now"] += 1
+    held_at = time.monotonic()
+    try:
+        if cancel_event is not None and cancel_event.is_set():
+            raise PersistenceCancelledError("Persistence work cancelled after acquiring semaphore")
+        return fn(*args, **kwargs)
+    finally:
+        sem.release()
+        hold_ms = (time.monotonic() - held_at) * 1000.0
+        with _STATS_GUARD:
+            _LOCK_STATS["holding_now"] -= 1
+            _LOCK_STATS["sections"] += 1
+            _LOCK_STATS["wait_ms_total"] += wait_ms
+            _LOCK_STATS["hold_ms_total"] += hold_ms
+            if wait_ms > _LOCK_STATS["wait_ms_max"]:
+                _LOCK_STATS["wait_ms_max"] = wait_ms
+            if hold_ms > _LOCK_STATS["hold_ms_max"]:
+                _LOCK_STATS["hold_ms_max"] = hold_ms
 
 
 def lock_stats_snapshot() -> dict[str, float]:
@@ -116,17 +163,24 @@ def reset_lock_stats() -> None:
             _LOCK_STATS[key] = 0.0
 
 
+# Hard timeout for individual PostgREST HTTP operations (connect 5s, read 15s, write 15s, pool 5s).
+# Prevents any single DB request from stalling indefinitely under load.
+_POSTGREST_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=15.0, pool=5.0)
+
+
 def get_service_client() -> Client:
     """Return a thread-local service-role Supabase client (bypasses RLS).
 
     Each thread maintains its own isolated Client instance with its own HTTP/2
     connection pool, completely eliminating cross-thread connection state
-    corruption and httpx.RemoteProtocolError.
+    corruption and httpx.RemoteProtocolError. Configured with strict timeouts
+    to bound underlying request lifetimes.
     """
     client = getattr(_THREAD_LOCAL, "service_client", None)
     if client is None:
         settings = get_settings()
-        client = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        options = ClientOptions(postgrest_client_timeout=_POSTGREST_TIMEOUT)
+        client = create_client(settings.supabase_url, settings.supabase_service_role_key, options=options)
         _THREAD_LOCAL.service_client = client
     return client
 

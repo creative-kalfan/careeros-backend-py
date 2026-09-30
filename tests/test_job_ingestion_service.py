@@ -65,7 +65,8 @@ async def test_ingest_ashby_jobs(ingestion_service: JobIngestionService) -> None
     mock_adapter.discover_jobs.assert_awaited_once()
     assert ingestion_service.job_service.normalize_and_classify.call_count == 2
     ingestion_service.job_repository.upsert_jobs.assert_called_once()
-    assert result == {"inserted": 1, "updated": 0}
+    assert result["inserted"] == 1
+    assert result["updated"] == 0
 
 
 @pytest.mark.asyncio
@@ -89,7 +90,8 @@ async def test_ingest_adzuna_jobs(ingestion_service: JobIngestionService) -> Non
     assert mock_adapter.search_by_query.await_count == 6
     assert ingestion_service.job_service.normalize_and_classify.call_count == 18
     ingestion_service.job_repository.upsert_jobs.assert_called_once()
-    assert result == {"inserted": 1, "updated": 0}
+    assert result["inserted"] == 1
+    assert result["updated"] == 0
 
 
 @pytest.mark.asyncio
@@ -153,11 +155,6 @@ async def test_ingest_all(ingestion_service: JobIngestionService) -> None:
     # 1 ashby + 1 greenhouse + 2 smartrecruiters + 1 lever + 1 adzuna = 6 upsert calls
     assert ingestion_service.job_repository.upsert_jobs.call_count == 6
 
-    assert result == {
-        "ashby": {"inserted": 1, "updated": 0},
-        "greenhouse": {"inserted": 1, "updated": 0},
-        "smartrecruiters": {"inserted": 1, "updated": 0},
-        "lever": {"inserted": 1, "updated": 0},
-        "adzuna": {"inserted": 1, "updated": 0},
-        "smartrecruiters_visa": {"inserted": 1, "updated": 0},
-    }
+    for source in ["ashby", "greenhouse", "smartrecruiters", "lever", "adzuna", "smartrecruiters_visa"]:
+        assert result[source]["inserted"] == 1
+        assert result[source]["updated"] == 0

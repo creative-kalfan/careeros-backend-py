@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -121,8 +122,13 @@ class JobIngestionService:
         self.job_repository = job_repository or JobRepository()
         self.job_service = job_service or JobService()
 
-    async def _persist_offloop(self, normalized_jobs: list) -> dict[str, int]:
-        """Run the synchronous Supabase upsert off the event loop.
+    async def _persist_offloop(
+        self,
+        normalized_jobs: list,
+        cancel_event: Optional[threading.Event] = None,
+        timeout_seconds: float = 75.0,
+    ) -> dict[str, int]:
+        """Run the synchronous Supabase upsert off the event loop with cancellation and timeouts.
 
         ``upsert_jobs`` issues blocking HTTP calls (one bulk existence fetch
         per platform chunk + bulk writes). Awaiting it directly stalls ARQ
@@ -134,11 +140,35 @@ class JobIngestionService:
         """
         from app.db.supabase import call_serialized, lock_stats_snapshot
 
+        # Free raw payload memory before persistence to prevent memory bloat
+        for job in normalized_jobs:
+            if getattr(job, "raw", None) is not None:
+                job.raw = None
+
+        local_cancel = cancel_event or threading.Event()
         lock_before = lock_stats_snapshot()
         start = time.monotonic()
-        result = await asyncio.to_thread(
-            call_serialized, self.job_repository.upsert_jobs, normalized_jobs
-        )
+
+        def _execute_upsert():
+            try:
+                return self.job_repository.upsert_jobs(normalized_jobs, cancel_event=local_cancel)
+            except TypeError:
+                return self.job_repository.upsert_jobs(normalized_jobs)
+
+        try:
+            result = await asyncio.to_thread(
+                call_serialized,
+                _execute_upsert,
+                cancel_event=local_cancel,
+                timeout_seconds=timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            local_cancel.set()
+            raise
+        except Exception:
+            local_cancel.set()
+            raise
+
         total_ms = int((time.monotonic() - start) * 1000)
         lock_after = lock_stats_snapshot()
         logger.info(
@@ -162,14 +192,19 @@ class JobIngestionService:
         result["upsert_ms"] = total_ms
         return result
 
-    async def ingest_ashby_jobs(self, slug: str) -> dict[str, int]:
+    async def ingest_ashby_jobs(
+        self, slug: str, cancel_event: Optional[threading.Event] = None
+    ) -> dict[str, int]:
         """Ingest jobs from Ashby."""
         adapter = AshbyAdapter(slug)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return await self._persist_offloop(normalized_jobs)
+        del crawled_jobs
+        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
 
-    async def ingest_greenhouse_jobs(self, slug: str, india_only: bool = False) -> dict[str, int]:
+    async def ingest_greenhouse_jobs(
+        self, slug: str, india_only: bool = False, cancel_event: Optional[threading.Event] = None
+    ) -> dict[str, int]:
         """Ingest jobs from Greenhouse.
 
         ``india_only=True`` keeps only India-classified postings (deterministic
@@ -179,21 +214,28 @@ class JobIngestionService:
         adapter = GreenhouseAdapter(slug, india_only=india_only)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return await self._persist_offloop(normalized_jobs)
+        del crawled_jobs
+        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
 
-    async def ingest_smartrecruiters_jobs(self, slug: str) -> dict[str, int]:
+    async def ingest_smartrecruiters_jobs(
+        self, slug: str, cancel_event: Optional[threading.Event] = None
+    ) -> dict[str, int]:
         """Ingest jobs from SmartRecruiters."""
         adapter = SmartRecruitersAdapter(slug)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return await self._persist_offloop(normalized_jobs)
+        del crawled_jobs
+        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
 
-    async def ingest_lever_jobs(self, slug: str) -> dict[str, int]:
+    async def ingest_lever_jobs(
+        self, slug: str, cancel_event: Optional[threading.Event] = None
+    ) -> dict[str, int]:
         """Ingest jobs from Lever."""
         adapter = LeverAdapter(slug)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return await self._persist_offloop(normalized_jobs)
+        del crawled_jobs
+        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
 
     def _apply_source_quality(self, job: NormalizedJob, careers_url: Optional[str] = None) -> NormalizedJob:
         """Attach verified source provenance to a normalized job.
@@ -222,7 +264,9 @@ class JobIngestionService:
             _set("careers_url", careers_url)
         return job
 
-    async def ingest_ycombinator_jobs(self) -> dict[str, int]:
+    async def ingest_ycombinator_jobs(
+        self, cancel_event: Optional[threading.Event] = None
+    ) -> dict[str, int]:
         """Ingest jobs from Y Combinator's Work at a Startup board.
 
         YC is the discovery layer; each job's apply URL is classified so YC
@@ -238,13 +282,15 @@ class JobIngestionService:
             self._apply_source_quality(self.job_service.normalize_and_classify(j))
             for j in crawled_jobs
         ]
-        return await self._persist_offloop(normalized_jobs)
+        del crawled_jobs
+        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
 
     async def ingest_firecrawl_jobs(
         self,
         careers_url: str,
         company: Optional[str] = None,
         company_website: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> dict[str, int]:
         """Ingest jobs from a company's official career page via Firecrawl.
 
@@ -282,13 +328,15 @@ class JobIngestionService:
             )
             for j in crawled_jobs
         ]
-        return await self._persist_offloop(normalized_jobs)
+        del crawled_jobs
+        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
 
     async def ingest_generic_career_page(
         self,
         careers_url: str,
         company: Optional[str] = None,
         company_website: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> dict[str, int]:
         """Ingest one generic career page: Crawl4AI primary, Firecrawl fallback.
 
@@ -306,7 +354,8 @@ class JobIngestionService:
             )
             for j in crawled_jobs
         ]
-        result = await self._persist_offloop(normalized_jobs)
+        del crawled_jobs
+        result = await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
         result = dict(result)
         result["provider"] = meta.get("provider") or "none"
         if meta.get("fallback"):
@@ -325,7 +374,12 @@ class JobIngestionService:
         start = int(ordinal) % total
         return [ADZUNA_BROAD_QUERIES[(start + i) % total] for i in range(size)]
 
-    async def ingest_adzuna_jobs(self, query: str = "software engineer", extra_queries: Optional[list[str]] = None) -> dict[str, int]:
+    async def ingest_adzuna_jobs(
+        self,
+        query: str = "software engineer",
+        extra_queries: Optional[list[str]] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> dict[str, int]:
         """Ingest jobs from Adzuna, India-first.
 
         Adzuna's API is country-scoped via the URL path
@@ -372,7 +426,8 @@ class JobIngestionService:
             crawled_jobs.extend(await adapter.search_by_query(extra, country="us", results_per_page=per_page))
 
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
-        return await self._persist_offloop(self._drop_invalid(normalized_jobs))
+        del crawled_jobs
+        return await self._persist_offloop(self._drop_invalid(normalized_jobs), cancel_event=cancel_event)
 
     @staticmethod
     def _drop_invalid(jobs: list) -> list:
@@ -397,6 +452,7 @@ class JobIngestionService:
         results_wanted: Optional[int] = None,
         hours_old: Optional[int] = None,
         site_names: Optional[list[str]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> dict[str, int]:
         """Ingest one JobSpy query into the canonical pipeline.
 
@@ -424,7 +480,8 @@ class JobIngestionService:
             self._apply_source_quality(self.job_service.normalize_and_classify(j))
             for j in crawled_jobs
         ]
-        return await self._persist_offloop(self._drop_invalid(normalized_jobs))
+        del crawled_jobs
+        return await self._persist_offloop(self._drop_invalid(normalized_jobs), cancel_event=cancel_event)
 
     @staticmethod
     def jobspy_rotation_batch(
@@ -476,6 +533,7 @@ class JobIngestionService:
         breaker=None,
         cache=None,
         fetch_fn=None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> dict:
         """Run one bounded JobSpy discovery batch (the production path).
 
@@ -685,7 +743,7 @@ class JobIngestionService:
             else:
                 executed += 1
 
-        persist_result = await self._persist_offloop(all_normalized)
+        persist_result = await self._persist_offloop(all_normalized, cancel_event=cancel_event)
         result: dict = dict(persist_result)
         result["discovered"] = sum(r["discovered"] for r in outcome_dicts)
         result["valid"] = len(all_normalized)
