@@ -217,11 +217,17 @@ def _deactivate_after_success(
 async def _dispatch_ingest(
     fn: Any, *args: Any, cancel_event: Optional[threading.Event] = None, **kwargs: Any
 ) -> Any:
-    """Invoke an ingestion method, forwarding cancel_event if accepted."""
+    """Invoke an ingestion method, forwarding cancel_event and kwargs if accepted."""
+    call_kwargs = dict(kwargs)
+    if cancel_event is not None:
+        call_kwargs["cancel_event"] = cancel_event
     try:
-        return await fn(*args, cancel_event=cancel_event, **kwargs)
+        return await fn(*args, **call_kwargs)
     except TypeError:
-        return await fn(*args, **kwargs)
+        try:
+            return await fn(*args, **kwargs)
+        except TypeError:
+            return await fn(*args)
 
 
 @register_job(
@@ -281,8 +287,6 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
     )
 
     ingestion = JobIngestionService()
-    ingestion._current_source = source
-    ingestion._current_slug = slug
 
     try:
         current_phase = "provider_discovery"
@@ -308,17 +312,16 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             result = await _dispatch_ingest(
                 ingestion.ingest_adzuna_jobs,
                 slug or DEFAULT_ADZUNA_QUERY,
-                cancel_event=cancel_event,
             )
         elif source == "jobspy":
             result = await _dispatch_ingest(
                 ingestion.ingest_jobspy_scheduled,
                 extra_query=slug or None,
-                cancel_event=cancel_event,
             )
         elif source == "ycombinator":
             result = await _dispatch_ingest(
-                ingestion.ingest_ycombinator_jobs, cancel_event=cancel_event
+                ingestion.ingest_ycombinator_jobs,
+                cancel_event=cancel_event,
             )
         elif source == "firecrawl":
             company, _, careers_url = slug.partition("|")
@@ -334,6 +337,11 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             raise ValueError(f"Unknown source: {source}")
 
         provider_ms = int((time.monotonic() - provider_start) * 1000)
+        logger.info(
+            "crawl provider_ms=%d phase=discover_normalize source=%s slug=%s "
+            "discovered=%d",
+            provider_ms, source, slug, result.get("discovered", 0),
+        )
 
         current_phase = "deactivation"
         deact_async_wait_ms = 0
@@ -343,7 +351,8 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         discovered = result.get("discovered", 0)
         try:
             prev_active_res = ingestion.job_repository._client.table("jobs").select("id", count="exact").eq("is_active", True).eq("source_platform", source).execute()
-            prev_active_count = prev_active_res.count or 0
+            count_val = getattr(prev_active_res, "count", 0)
+            prev_active_count = int(count_val) if isinstance(count_val, (int, float)) else 0
         except Exception:
             prev_active_count = 0
             
@@ -414,29 +423,63 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         except Exception as exc:
             logger.warning("Event Bus publish failed (non-blocking): %s", exc)
 
-        job_logger.success(
+        current_phase = "completed"
+        duration_ms = int((time.monotonic() - job_start) * 1000)
+        job_logger.completed(
+            duration_ms=duration_ms,
+            discovered=result.get("discovered", 0),
+            inserted=result.get("inserted", 0),
+            updated=result.get("updated", 0),
+            unchanged=result.get("unchanged", 0),
+            deduplicated=result.get("deduplicated", 0),
+            skipped=result.get("skipped", 0),
+            deactivated=deactivated + deactivated_not_seen,
+            provider_ms=provider_ms,
+            active_crawls=max(0, _ACTIVE_CRAWLS - 1),
+        )
+
+        current_phase = "status_record"
+        await _record_crawl_status(
+            source,
+            slug,
             {
+                "source": source,
+                "slug": slug,
+                "status": result.get("status", "success"),
+                "phase": current_phase,
+                "started_at": crawl_started_at,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": duration_ms,
                 "discovered": result.get("discovered", 0),
                 "inserted": result.get("inserted", 0),
                 "updated": result.get("updated", 0),
+                "unchanged": result.get("unchanged", 0),
+                "deduplicated": result.get("deduplicated", 0),
+                "skipped": result.get("skipped", 0),
                 "deactivated": deactivated_not_seen + deactivated,
+                "deactivated_not_seen": deactivated_not_seen,
+                "deactivated_stale": deactivated,
                 "provider_ms": provider_ms,
                 "upsert_ms": result.get("upsert_ms", 0),
                 "deactivation_total_ms": deactivation_total_ms,
-                "rss_mb": _get_process_rss_mb(),
-            }
+            },
         )
+
         return {
+            "success": True,
             "status": result.get("status", "success"),
             "source": source,
             "slug": slug,
+            "result": result,
+            "deactivated": deactivated_not_seen + deactivated,
+            "deactivated_not_seen": deactivated_not_seen,
+            "duration_ms": duration_ms,
             "discovered": result.get("discovered", 0),
             "inserted": result.get("inserted", 0),
             "updated": result.get("updated", 0),
             "unchanged": result.get("unchanged", 0),
             "deduplicated": result.get("deduplicated", 0),
             "skipped": result.get("skipped", 0),
-            "deactivated": deactivated_not_seen + deactivated,
         }
 
     except asyncio.CancelledError:
@@ -445,22 +488,86 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         from app.db.supabase import persistence_gate_snapshot
         gate = persistence_gate_snapshot()
         logger.warning(
-            "crawl cancelled=true phase=%s active_crawls=%d source=%s slug=%s",
+            "crawl cancelled=true phase=%s active_crawls=%d source=%s slug=%s "
+            "duration_ms=%d provider_ms=%d threads=%d rss_mb=%.1f "
+            "persistence_waiters=%d persistence_holders=%d "
+            "async_waiting=%d async_holding=%d sync_waiting=%d sync_holding=%d",
             current_phase,
             _ACTIVE_CRAWLS,
             source,
-            slug
+            slug,
+            duration_ms,
+            provider_ms,
+            threading.active_count(),
+            _get_process_rss_mb(),
+            int(gate.get("persistence_waiters", 0)),
+            int(gate.get("persistence_holders", 0)),
+            int(gate.get("async_waiting_now", 0)),
+            int(gate.get("async_holding_now", 0)),
+            int(gate.get("sync_waiting_now", 0)),
+            int(gate.get("sync_holding_now", 0)),
+        )
+        await _record_crawl_status(
+            source,
+            slug,
+            {
+                "source": source,
+                "slug": slug,
+                "status": "cancelled",
+                "phase": current_phase,
+                "started_at": crawl_started_at,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": duration_ms,
+            },
         )
         raise
     except Exception as exc:
+        cancel_event.set()
         duration_ms = int((time.monotonic() - job_start) * 1000)
         from app.db.supabase import PersistenceTimeoutError
         from arq import Retry
         if isinstance(exc, PersistenceTimeoutError):
             logger.error("Persistence timeout in phase=%s for %s:%s. Retrying.", current_phase, source, slug)
             raise Retry(defer=ctx.get("job_try", 1) * 30)
-        logger.exception("crawl failed phase=%s source=%s slug=%s: %s", current_phase, source, slug, str(exc))
-        job_logger.failed(str(exc), current_phase)
+
+        job_logger.failed(duration_ms=duration_ms, error_type=exc.__class__.__name__)
+        from app.db.supabase import persistence_gate_snapshot
+        gate = persistence_gate_snapshot()
+        logger.error(
+            "crawl failed phase=%s active_crawls=%d source=%s slug=%s "
+            "duration_ms=%d error=%s: %s threads=%d rss_mb=%.1f "
+            "persistence_waiters=%d persistence_holders=%d "
+            "async_waiting=%d async_holding=%d sync_waiting=%d sync_holding=%d",
+            current_phase,
+            _ACTIVE_CRAWLS,
+            source,
+            slug,
+            duration_ms,
+            exc.__class__.__name__,
+            exc,
+            threading.active_count(),
+            _get_process_rss_mb(),
+            int(gate.get("persistence_waiters", 0)),
+            int(gate.get("persistence_holders", 0)),
+            int(gate.get("async_waiting_now", 0)),
+            int(gate.get("async_holding_now", 0)),
+            int(gate.get("sync_waiting_now", 0)),
+            int(gate.get("sync_holding_now", 0)),
+        )
+        await _record_crawl_status(
+            source,
+            slug,
+            {
+                "source": source,
+                "slug": slug,
+                "status": "failed",
+                "phase": current_phase,
+                "started_at": crawl_started_at,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "duration_ms": duration_ms,
+                "error": f"{exc.__class__.__name__}: {exc}",
+            },
+        )
         raise
     finally:
         cancel_event.set()

@@ -245,20 +245,21 @@ class JobIngestionService:
         result["to_thread_ms"] = to_thread_ms
         result["db_thread_ms"] = int(thread_box.get("db_ms", 0))
         result["upsert_ms"] = total_ms
+        result["path"] = getattr(self.job_repository, "last_path", "legacy")
         return result
 
     async def ingest_ashby_jobs(
-        self, slug: str, cancel_event: Optional[threading.Event] = None
+        self, slug: str, cancel_event: Optional[threading.Event] = None, source: str = "ashby"
     ) -> dict[str, int]:
         """Ingest jobs from Ashby."""
         adapter = AshbyAdapter(slug)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=source, slug=slug, cancel_event=cancel_event)
 
     async def ingest_greenhouse_jobs(
-        self, slug: str, india_only: bool = False, cancel_event: Optional[threading.Event] = None
+        self, slug: str, india_only: bool = False, cancel_event: Optional[threading.Event] = None, source: str = "greenhouse"
     ) -> dict[str, int]:
         """Ingest jobs from Greenhouse.
 
@@ -270,27 +271,27 @@ class JobIngestionService:
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=source, slug=slug, cancel_event=cancel_event)
 
     async def ingest_smartrecruiters_jobs(
-        self, slug: str, cancel_event: Optional[threading.Event] = None
+        self, slug: str, cancel_event: Optional[threading.Event] = None, source: str = "smartrecruiters"
     ) -> dict[str, int]:
         """Ingest jobs from SmartRecruiters."""
         adapter = SmartRecruitersAdapter(slug)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=source, slug=slug, cancel_event=cancel_event)
 
     async def ingest_lever_jobs(
-        self, slug: str, cancel_event: Optional[threading.Event] = None
+        self, slug: str, cancel_event: Optional[threading.Event] = None, source: str = "lever"
     ) -> dict[str, int]:
         """Ingest jobs from Lever."""
         adapter = LeverAdapter(slug)
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=source, slug=slug, cancel_event=cancel_event)
 
     def _apply_source_quality(self, job: NormalizedJob, careers_url: Optional[str] = None) -> NormalizedJob:
         """Attach verified source provenance to a normalized job.
@@ -320,7 +321,7 @@ class JobIngestionService:
         return job
 
     async def ingest_ycombinator_jobs(
-        self, cancel_event: Optional[threading.Event] = None
+        self, cancel_event: Optional[threading.Event] = None, source: str = "ycombinator", slug: str = "ycombinator"
     ) -> dict[str, int]:
         """Ingest jobs from Y Combinator's Work at a Startup board.
 
@@ -338,7 +339,7 @@ class JobIngestionService:
             for j in crawled_jobs
         ]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=source, slug=slug, cancel_event=cancel_event)
 
     async def ingest_firecrawl_jobs(
         self,
@@ -346,6 +347,8 @@ class JobIngestionService:
         company: Optional[str] = None,
         company_website: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
+        source: str = "firecrawl",
+        slug: Optional[str] = None,
     ) -> dict[str, int]:
         """Ingest jobs from a company's official career page via Firecrawl.
 
@@ -384,7 +387,8 @@ class JobIngestionService:
             for j in crawled_jobs
         ]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
+        effective_slug = slug or (f"{company}|{careers_url}" if company else careers_url)
+        return await self._persist_offloop(normalized_jobs, source=source, slug=effective_slug, cancel_event=cancel_event)
 
     async def ingest_generic_career_page(
         self,
@@ -392,6 +396,8 @@ class JobIngestionService:
         company: Optional[str] = None,
         company_website: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
+        source: str = "firecrawl",
+        slug: Optional[str] = None,
     ) -> dict[str, int]:
         """Ingest one generic career page: Crawl4AI primary, Firecrawl fallback.
 
@@ -410,7 +416,8 @@ class JobIngestionService:
             for j in crawled_jobs
         ]
         del crawled_jobs
-        result = await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
+        effective_slug = slug or (f"{company}|{careers_url}" if company else careers_url)
+        result = await self._persist_offloop(normalized_jobs, source=source, slug=effective_slug, cancel_event=cancel_event)
         result = dict(result)
         result["provider"] = meta.get("provider") or "none"
         if meta.get("fallback"):
@@ -434,6 +441,8 @@ class JobIngestionService:
         query: str = "software engineer",
         extra_queries: Optional[list[str]] = None,
         cancel_event: Optional[threading.Event] = None,
+        source: str = "adzuna",
+        slug: Optional[str] = None,
     ) -> dict[str, int]:
         """Ingest jobs from Adzuna, India-first.
 
@@ -482,7 +491,8 @@ class JobIngestionService:
 
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         del crawled_jobs
-        return await self._persist_offloop(self._drop_invalid(normalized_jobs), cancel_event=cancel_event)
+        effective_slug = slug or query
+        return await self._persist_offloop(self._drop_invalid(normalized_jobs), source=source, slug=effective_slug, cancel_event=cancel_event)
 
     @staticmethod
     def _drop_invalid(jobs: list) -> list:
@@ -508,6 +518,8 @@ class JobIngestionService:
         hours_old: Optional[int] = None,
         site_names: Optional[list[str]] = None,
         cancel_event: Optional[threading.Event] = None,
+        source: str = "jobspy",
+        slug: Optional[str] = None,
     ) -> dict[str, int]:
         """Ingest one JobSpy query into the canonical pipeline.
 
@@ -536,7 +548,8 @@ class JobIngestionService:
             for j in crawled_jobs
         ]
         del crawled_jobs
-        return await self._persist_offloop(self._drop_invalid(normalized_jobs), cancel_event=cancel_event)
+        effective_slug = slug or query
+        return await self._persist_offloop(self._drop_invalid(normalized_jobs), source=source, slug=effective_slug, cancel_event=cancel_event)
 
     @staticmethod
     def jobspy_rotation_batch(
@@ -589,6 +602,8 @@ class JobIngestionService:
         cache=None,
         fetch_fn=None,
         cancel_event: Optional[threading.Event] = None,
+        source: str = "jobspy",
+        slug: Optional[str] = None,
     ) -> dict:
         """Run one bounded JobSpy discovery batch (the production path).
 
@@ -798,7 +813,8 @@ class JobIngestionService:
             else:
                 executed += 1
 
-        persist_result = await self._persist_offloop(all_normalized, cancel_event=cancel_event)
+        effective_slug = slug or extra_query or "jobspy_scheduled"
+        persist_result = await self._persist_offloop(all_normalized, source=source, slug=effective_slug, cancel_event=cancel_event)
         result: dict = dict(persist_result)
         result["discovered"] = sum(r["discovered"] for r in outcome_dicts)
         result["valid"] = len(all_normalized)
