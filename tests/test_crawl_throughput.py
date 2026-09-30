@@ -91,11 +91,11 @@ class _FakeQuery:
     def limit(self, *a: Any) -> "_FakeQuery":
         return self
 
-    def insert(self, rows: Any) -> "_FakeQuery":
+    def insert(self, rows: Any, *a: Any, **k: Any) -> "_FakeQuery":
         self._insert_rows = rows
         return self
 
-    def update(self, values: dict) -> "_FakeQuery":
+    def update(self, values: dict, *a: Any, **k: Any) -> "_FakeQuery":
         self._update_values = values
         return self
 

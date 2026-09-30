@@ -87,7 +87,7 @@ class _Query:
         self._applied.append(("in_", field, list(values)))
         return self
 
-    def insert(self, _rows):
+    def insert(self, _rows, *a, **kw):
         self._applied.append(("insert", None, None))
         return self
 
@@ -96,7 +96,7 @@ class _Query:
         result.data = [{"id": "job-1"}, {"id": "job-2"}]
         return result
 
-    def update(self, _values):
+    def update(self, _values, *a, **kw):
         self._applied.append(("update", None, None))
         return self
 

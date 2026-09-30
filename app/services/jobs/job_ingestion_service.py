@@ -138,7 +138,7 @@ class JobIngestionService:
         thread (transport safety), but each hold is now a handful of
         requests instead of ~2N.
         """
-        from app.db.supabase import call_serialized, lock_stats_snapshot
+        from app.db.supabase import async_persistence_slot, call_serialized, lock_stats_snapshot
 
         # Free raw payload memory before persistence to prevent memory bloat
         for job in normalized_jobs:
@@ -156,12 +156,13 @@ class JobIngestionService:
                 return self.job_repository.upsert_jobs(normalized_jobs)
 
         try:
-            result = await asyncio.to_thread(
-                call_serialized,
-                _execute_upsert,
-                cancel_event=local_cancel,
-                timeout_seconds=timeout_seconds,
-            )
+            async with async_persistence_slot(cancel_event=local_cancel, timeout_seconds=timeout_seconds):
+                result = await asyncio.to_thread(
+                    call_serialized,
+                    _execute_upsert,
+                    cancel_event=local_cancel,
+                    timeout_seconds=timeout_seconds,
+                )
         except asyncio.CancelledError:
             local_cancel.set()
             raise

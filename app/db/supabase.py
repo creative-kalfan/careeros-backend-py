@@ -6,10 +6,12 @@ and an RLS-authenticated client for user-scoped queries.
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 import threading
 import time
 from functools import lru_cache
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import httpx
 from supabase import Client, ClientOptions, create_client
@@ -64,6 +66,90 @@ def reset_persistence_semaphore(concurrency: Optional[int] = None) -> None:
             except Exception:
                 concurrency = 2
         _PERSISTENCE_SEMAPHORE = threading.BoundedSemaphore(concurrency)
+    reset_async_persistence_semaphore(concurrency)
+
+
+_ASYNC_PERSISTENCE_SEMAPHORE: Optional[asyncio.Semaphore] = None
+_ASYNC_SEMAPHORE_GUARD = threading.Lock()
+
+
+def get_async_persistence_semaphore() -> asyncio.Semaphore:
+    """Return the bounded asyncio persistence semaphore (initialized once)."""
+    global _ASYNC_PERSISTENCE_SEMAPHORE
+    if _ASYNC_PERSISTENCE_SEMAPHORE is None:
+        with _ASYNC_SEMAPHORE_GUARD:
+            if _ASYNC_PERSISTENCE_SEMAPHORE is None:
+                try:
+                    concurrency = max(1, get_settings().persistence_max_concurrency)
+                except Exception:
+                    concurrency = 2
+                _ASYNC_PERSISTENCE_SEMAPHORE = asyncio.Semaphore(concurrency)
+    return _ASYNC_PERSISTENCE_SEMAPHORE
+
+
+def reset_async_persistence_semaphore(concurrency: Optional[int] = None) -> None:
+    """Reset the async persistence semaphore (for tests)."""
+    global _ASYNC_PERSISTENCE_SEMAPHORE
+    with _ASYNC_SEMAPHORE_GUARD:
+        if concurrency is None:
+            try:
+                concurrency = max(1, get_settings().persistence_max_concurrency)
+            except Exception:
+                concurrency = 2
+        _ASYNC_PERSISTENCE_SEMAPHORE = asyncio.Semaphore(concurrency)
+
+
+@asynccontextmanager
+async def async_persistence_slot(
+    cancel_event: Optional[threading.Event] = None,
+    timeout_seconds: Optional[float] = None,
+):
+    """Asynchronously acquire a persistence slot before entering to_thread.
+
+    Prevents ThreadPoolExecutor worker threads from being spawned or kept busy
+    merely polling for the persistence semaphore. Bounded by timeout_seconds and
+    cancellation-aware.
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        raise PersistenceCancelledError("Persistence work cancelled before acquiring semaphore")
+
+    sem = get_async_persistence_semaphore()
+    with _STATS_GUARD:
+        _LOCK_STATS["waiting_now"] += 1
+    queued_at = time.monotonic()
+
+    acquired = False
+    try:
+        while not acquired:
+            if cancel_event is not None and cancel_event.is_set():
+                raise PersistenceCancelledError("Persistence work cancelled while waiting for semaphore")
+            now = time.monotonic()
+            if timeout_seconds is not None and (now - queued_at) >= timeout_seconds:
+                raise PersistenceTimeoutError(
+                    f"Timed out after {timeout_seconds:.1f}s waiting for persistence semaphore"
+                )
+            step_timeout = 0.25
+            if timeout_seconds is not None:
+                step_timeout = min(0.25, max(0.01, timeout_seconds - (now - queued_at)))
+            try:
+                await asyncio.wait_for(sem.acquire(), timeout=step_timeout)
+                acquired = True
+            except asyncio.TimeoutError:
+                pass
+    except asyncio.CancelledError:
+        if cancel_event is not None:
+            cancel_event.set()
+        raise
+    finally:
+        with _STATS_GUARD:
+            _LOCK_STATS["waiting_now"] -= 1
+
+    try:
+        if cancel_event is not None and cancel_event.is_set():
+            raise PersistenceCancelledError("Persistence work cancelled after acquiring semaphore")
+        yield
+    finally:
+        sem.release()
 
 
 # Lightweight lock-contention telemetry (production throughput diagnosis).

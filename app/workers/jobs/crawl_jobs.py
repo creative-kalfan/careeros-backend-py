@@ -337,29 +337,34 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         current_phase = "deactivation"
         try:
             from app.config import get_settings
+            from app.db.supabase import async_persistence_slot
 
             max_age_days = get_settings().job_stale_after_days
             deact_start = time.monotonic()
-            deactivated_not_seen, deactivated, deactivate_not_seen_ms, deactivate_stale_ms = await asyncio.to_thread(
-                _deactivate_after_success,
-                ingestion,
-                source,
-                slug,
-                crawl_started_at,
-                max_age_days,
-                cancel_event=cancel_event,
-                timeout_seconds=45.0,
-            )
+            async with async_persistence_slot(cancel_event=cancel_event, timeout_seconds=45.0):
+                deactivated_not_seen, deactivated, deactivate_not_seen_ms, deactivate_stale_ms = await asyncio.to_thread(
+                    _deactivate_after_success,
+                    ingestion,
+                    source,
+                    slug,
+                    crawl_started_at,
+                    max_age_days,
+                    cancel_event=cancel_event,
+                    timeout_seconds=45.0,
+                )
             deactivation_total_ms = int((time.monotonic() - deact_start) * 1000)
         except Exception as exc:
             logger.warning(
                 "Stale deactivation skipped (non-blocking): source=%s error=%s", source, exc
             )
 
+        from app.db.supabase import lock_stats_snapshot
+        snap = lock_stats_snapshot()
         logger.info(
             "production_timing crawl_source=%s crawl_slug=%s provider_ms=%d upsert_ms=%d "
             "persistence_wait_ms=%d persistence_hold_ms=%d deactivate_not_seen_ms=%d "
-            "deactivate_stale_ms=%d deactivation_total_ms=%d db_requests=%d",
+            "deactivate_stale_ms=%d deactivation_total_ms=%d db_requests=%d "
+            "persistence_waiters=%d persistence_holders=%d",
             source,
             slug,
             provider_ms,
@@ -370,6 +375,8 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             deactivate_stale_ms,
             deactivation_total_ms,
             getattr(ingestion.job_repository, "last_db_requests", -1),
+            int(snap.get("waiting_now", 0)),
+            int(snap.get("holding_now", 0)),
         )
 
         # Event Bus integration: one JobIngested per successful ingestion run.
@@ -451,9 +458,12 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
     except asyncio.CancelledError:
         cancel_event.set()
         duration_ms = int((time.monotonic() - job_start) * 1000)
+        from app.db.supabase import lock_stats_snapshot
+        snap = lock_stats_snapshot()
         logger.warning(
             "crawl cancelled=true phase=%s active_crawls=%d source=%s slug=%s "
-            "duration_ms=%d provider_ms=%d threads=%d rss_mb=%.1f",
+            "duration_ms=%d provider_ms=%d threads=%d rss_mb=%.1f "
+            "persistence_waiters=%d persistence_holders=%d",
             current_phase,
             _ACTIVE_CRAWLS,
             source,
@@ -462,6 +472,8 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             provider_ms,
             threading.active_count(),
             _get_process_rss_mb(),
+            int(snap.get("waiting_now", 0)),
+            int(snap.get("holding_now", 0)),
         )
         await _record_crawl_status(
             source,
@@ -481,9 +493,12 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         cancel_event.set()
         duration_ms = int((time.monotonic() - job_start) * 1000)
         job_logger.failed(duration_ms=duration_ms, error_type=exc.__class__.__name__)
+        from app.db.supabase import lock_stats_snapshot
+        snap = lock_stats_snapshot()
         logger.error(
             "crawl failed phase=%s active_crawls=%d source=%s slug=%s "
-            "duration_ms=%d error=%s: %s threads=%d rss_mb=%.1f",
+            "duration_ms=%d error=%s: %s threads=%d rss_mb=%.1f "
+            "persistence_waiters=%d persistence_holders=%d",
             current_phase,
             _ACTIVE_CRAWLS,
             source,
@@ -493,6 +508,8 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             exc,
             threading.active_count(),
             _get_process_rss_mb(),
+            int(snap.get("waiting_now", 0)),
+            int(snap.get("holding_now", 0)),
         )
         await _record_crawl_status(
             source,

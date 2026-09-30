@@ -1483,3 +1483,55 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - *Memory Concurrency Benchmark:* 10 concurrent crawls with 250 jobs peak at 98.81 MB RSS and settle back to 92.40 MB, far below Render's 512 MB threshold.
   - *Regression Test Suite:* 91 tests passed across targeted suites (`test_cancellation_cooperative_lifecycle.py`, `test_crawl_persistence_offloop.py`, `test_crawl_refresh_system.py`, `test_crawl_throughput.py`, `test_generic_crawl_fallback.py`, `test_job_ingestion_service.py`, `test_job_repository.py`, `test_job_repository_probe_cache.py`, `test_scheduled_crawl_runner.py`, `test_supabase_client_serialization.py`, `test_timeout_regression.py`, `test_worker_scheduler_lifecycle.py`).
 
+### 9.30 Production Persistence Saturation & 493 MB RSS Root Cause Resolution (2026-09-30)
+
+- **Production Incident Evidence:**
+  - Crawl failed with `PersistenceTimeoutError: Timed out after 75.0s waiting for persistence semaphore`.
+  - Log: `crawl failed phase=provider_discovery active_crawls=5 threads=13 rss_mb=493.3`.
+  - Render 512 MB memory threshold: 493.3 MB reached 96.3% of available instance memory.
+  - Queue delay observed: Figma delayed ~293s, Cloudflare delayed ~303s, Yugabyte delayed ~308s.
+  - Crawl completion durations: Datadog 196s, Paytm 158s, LangChain 114s, Cloudflare 109s.
+
+- **Forensic Root Cause Analysis:**
+  1. *Thread Origin of 13 Threads:*
+     - In Python 3.11, default `ThreadPoolExecutor` (used by `asyncio.to_thread`) initializes with `min(32, (os.cpu_count() or 1) + 4)` workers (12 workers on an 8-core host).
+     - Combined with `MainThread`, total thread count was exactly 13 threads (`MainThread` + `asyncio_0` ... `asyncio_11`).
+  2. *In-Thread Semaphore Acquisition (`Architecture A` Flaw):*
+     - Under Architecture A, `_persist_offloop` called `asyncio.to_thread(call_serialized, ...)` directly.
+     - When 5–10 crawls ran concurrently, 5–10 OS threads were immediately pulled from the `ThreadPoolExecutor` merely to wait in the `sem.acquire(timeout=0.25)` polling loop.
+     - While waiting up to 75 seconds for one of the 2 persistence slots, each waiting thread retained its OS thread stack, the Python execution frame, the closure `_execute_upsert`, and the entire `normalized_jobs` batch in heap memory.
+     - On Linux (Render), glibc malloc allocates distinct memory arenas per active thread (up to `8 * CPU` arenas). 13 concurrent OS threads created up to 13 separate glibc malloc arenas, resulting in massive allocator heap fragmentation and memory retention.
+  3. *Persistence Head-of-Line Queue Saturation:*
+     - Only 2 operations could execute concurrently (`persistence_max_concurrency=2`).
+     - Medium/large boards (e.g., Datadog with 436 jobs, Paytm, Cloudflare) held slots for 30–60 seconds across upsert and post-ingestion deactivation.
+     - When 5–10 crawl jobs were picked up by ARQ concurrently (`max_jobs=10`), the 5th and 6th crawls in line waited longer than 75 seconds for an available slot, triggering `PersistenceTimeoutError`.
+  4. *PostgREST Full Representation Response Bloat:*
+     - `JobRepository` `insert()` and `update()` calls did not specify `returning="minimal"`.
+     - PostgREST defaulted to `ReturnMethod.representation`, returning all inserted and updated rows (including multi-kilobyte HTML descriptions) over HTTP back to the client.
+     - The client parsed and buffered megabytes of unneeded JSON response dicts on every 200-row chunk, inflating temporary working-set memory across all active threads.
+  5. *Sequential Crawl vs Concurrent Crawl Memory Pattern:*
+     - Benchmark confirmed that 10 sequential crawls of 500 jobs maintain stable RSS (62.0 MB -> 62.4 MB, delta 0.4 MB, no leak).
+     - The 493.3 MB RSS was temporary working-set amplification + glibc multi-thread arena retention caused by concurrent waiting threads holding payloads.
+
+- **Architectural Fixes Implemented:**
+  1. *Async Persistence Slot (`Architecture B`):*
+     - Added `get_async_persistence_semaphore()`, `reset_async_persistence_semaphore()`, and `async_persistence_slot(cancel_event, timeout_seconds)` in `app/db/supabase.py`.
+     - In `JobIngestionService._persist_offloop` and `crawl_jobs.py` deactivation, the coroutine asynchronously acquires the persistence slot *before* calling `asyncio.to_thread`.
+     - Waiting crawls now wait on the asyncio event loop with zero thread allocation. Executor threads in `ThreadPoolExecutor` are only dispatched when a persistence slot is already secured.
+     - Caps active persistence threads to at most `persistence_max_concurrency` (2) at any given instant.
+  2. *Zero-Body PostgREST Writes (`returning="minimal"`):*
+     - Added `returning="minimal"` to all `insert()` and `update()` calls across `JobRepository` (`_upsert_single`, `_execute_single_action`, `upsert_jobs`, and `_bulk_set_inactive`).
+     - Tells PostgREST to return an empty body (`[]`) rather than echoing the entire dataset back over HTTP.
+     - Eliminates write response deserialization, network buffering, and memory bloat.
+  3. *Linux Glibc Allocator Arena Bounding:*
+     - Added `export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"` to `start.sh`.
+     - Added `mallopt(-8, 2)` initialization in `app/workers/settings.py` for Linux environments.
+     - Prevents glibc from allocating dozens of heap arenas across worker threads, keeping virtual and resident memory tightly bounded.
+  4. *Granular Concurrency & Saturation Telemetry:*
+     - Enhanced `production_timing`, `crawl cancelled`, and `crawl failed` logs in `crawl_jobs.py` with `persistence_waiters` and `persistence_holders` from `lock_stats_snapshot()`.
+
+- **Verification & Acceptance Benchmarks:**
+  - *Thread Count & Concurrency:* Verified Architecture B spawns only active working threads (at most 2 worker threads) instead of 6–11 threads under load.
+  - *Memory Safety:* 5 concurrent crawls with 500 jobs peak at 72.7 MB RSS, leaving > 430 MB of safety headroom on Render's 512 MB ceiling.
+  - *Cancellation Stress Test:* Verified 3 consecutive cancellation cycles cleanly cancel 12 tasks with 0 zombie threads and no semaphore permit leaks.
+  - *Regression Test Suite:* 95 tests passed across all 12 regression test suites in 8.58s.

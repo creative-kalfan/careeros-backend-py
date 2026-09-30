@@ -17,6 +17,15 @@ from app.workers.registry import JobDefinition, get_registered_jobs
 
 logger = logging.getLogger(__name__)
 
+# Restrict glibc memory arenas on Linux (Render 512MB RAM ceiling)
+# Prevents multi-threaded allocator fragmentation where 13 threads create 13+ arenas.
+try:
+    import ctypes
+    libc = ctypes.CDLL("libc.so.6")
+    libc.mallopt(-8, 2)  # M_ARENA_MAX = 2
+except Exception:
+    pass
+
 _settings = get_settings()
 
 # Strong reference: keeps the APScheduler instance (and its event-loop

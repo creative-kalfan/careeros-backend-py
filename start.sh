@@ -2,6 +2,7 @@
 set -e
 
 PORT="${PORT:-10000}"
+export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
 
 if [ "$SERVICE_TYPE" = "worker" ]; then
   echo "Starting ARQ worker service..."

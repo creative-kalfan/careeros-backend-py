@@ -390,7 +390,7 @@ class JobRepository:
         if action == "insert":
             try:
                 self._db_requests += 1
-                self._client.table("jobs").insert(payload[0]).execute()
+                self._client.table("jobs").insert(payload[0], returning="minimal").execute()
                 return "inserted"
             except APIError as exc:
                 args = str(getattr(exc, "args", ""))
@@ -419,7 +419,8 @@ class JobRepository:
             if has_last_seen:
                 self._db_requests += 1
                 self._client.table("jobs").update(
-                    {"last_seen_at": now_iso}
+                    {"last_seen_at": now_iso},
+                    returning="minimal",
                 ).eq("id", payload[0]).execute()
             return "unchanged"
         if action == "reactivate":
@@ -427,11 +428,11 @@ class JobRepository:
             if has_last_seen:
                 update["last_seen_at"] = now_iso
             self._db_requests += 1
-            self._client.table("jobs").update(update).eq("id", payload[0]).execute()
+            self._client.table("jobs").update(update, returning="minimal").eq("id", payload[0]).execute()
             return "unchanged"
         if action == "update":
             self._db_requests += 1
-            self._client.table("jobs").update(payload[1]).eq(
+            self._client.table("jobs").update(payload[1], returning="minimal").eq(
                 "id", payload[0]
             ).execute()
             return "updated"
@@ -548,7 +549,7 @@ class JobRepository:
             chunk_rows = insert_rows[start:start + _UPSERT_WRITE_CHUNK]
             try:
                 self._db_requests += 1
-                self._client.table("jobs").insert(chunk).execute()
+                self._client.table("jobs").insert(chunk, returning="minimal").execute()
                 inserted += len(chunk)
             except APIError as exc:
                 args = str(getattr(exc, "args", ""))
@@ -576,7 +577,8 @@ class JobRepository:
                 chunk = touch_ids[start:start + _DEACTIVATE_ID_CHUNK]
                 self._db_requests += 1
                 self._client.table("jobs").update(
-                    {"last_seen_at": now_iso}
+                    {"last_seen_at": now_iso},
+                    returning="minimal",
                 ).in_("id", chunk).execute()
         if reactivate_ids:
             payload: dict[str, Any] = {"is_active": True}
@@ -587,14 +589,14 @@ class JobRepository:
                     raise PersistenceCancelledError("Upsert cancelled before reactivate chunk")
                 chunk = reactivate_ids[start:start + _DEACTIVATE_ID_CHUNK]
                 self._db_requests += 1
-                self._client.table("jobs").update(payload).in_("id", chunk).execute()
+                self._client.table("jobs").update(payload, returning="minimal").in_("id", chunk).execute()
 
         # Phase 4c: content-changed rows keep the exact per-row full update.
         for row_id, new_row in full_updates:
             if cancel_event is not None and cancel_event.is_set():
                 raise PersistenceCancelledError("Upsert cancelled before update row")
             self._db_requests += 1
-            self._client.table("jobs").update(new_row).eq("id", row_id).execute()
+            self._client.table("jobs").update(new_row, returning="minimal").eq("id", row_id).execute()
 
         # Phase 4d: defensive singles (existing row without an id — the old
         # code would KeyError here; route through the live per-row path).
@@ -708,7 +710,7 @@ class JobRepository:
             chunk = ids[start:start + _DEACTIVATE_ID_CHUNK]
             try:
                 self._db_requests += 1
-                self._client.table("jobs").update({"is_active": False}).in_(
+                self._client.table("jobs").update({"is_active": False}, returning="minimal").in_(
                     "id", chunk
                 ).execute()
                 count += len(chunk)
@@ -718,7 +720,7 @@ class JobRepository:
                         raise PersistenceCancelledError(f"{what} cancelled during fallback update")
                     try:
                         self._db_requests += 1
-                        self._client.table("jobs").update({"is_active": False}).eq(
+                        self._client.table("jobs").update({"is_active": False}, returning="minimal").eq(
                             "id", row_id
                         ).execute()
                         count += 1

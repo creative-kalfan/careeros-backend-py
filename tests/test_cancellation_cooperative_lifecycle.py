@@ -175,3 +175,92 @@ async def test_raw_payload_freed_before_persist():
 
     await service._persist_offloop([job])
     assert job.raw is None
+
+
+@pytest.mark.asyncio
+async def test_async_persistence_slot_bounds_concurrency_and_releases():
+    """async_persistence_slot bounds concurrent holders and releases properly."""
+    from app.db.supabase import async_persistence_slot, reset_persistence_semaphore
+
+    reset_persistence_semaphore(2)
+    active = 0
+    max_active = 0
+
+    async def _worker():
+        nonlocal active, max_active
+        async with async_persistence_slot():
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.05)
+            active -= 1
+
+    await asyncio.gather(*[_worker() for _ in range(5)])
+    assert max_active == 2
+    assert active == 0
+
+
+@pytest.mark.asyncio
+async def test_async_persistence_slot_aborts_on_cancel_event():
+    """async_persistence_slot raises PersistenceCancelledError when cancel_event is set."""
+    from app.db.supabase import async_persistence_slot, PersistenceCancelledError
+
+    ev = threading.Event()
+    ev.set()
+    with pytest.raises(PersistenceCancelledError):
+        async with async_persistence_slot(cancel_event=ev):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_async_persistence_slot_times_out():
+    """async_persistence_slot raises PersistenceTimeoutError when acquisition deadline is exceeded."""
+    from app.db.supabase import async_persistence_slot, reset_persistence_semaphore, PersistenceTimeoutError
+
+    reset_persistence_semaphore(1)
+
+    async def _holder():
+        async with async_persistence_slot():
+            await asyncio.sleep(0.5)
+
+    holder_task = asyncio.create_task(_holder())
+    await asyncio.sleep(0.02)
+
+    with pytest.raises(PersistenceTimeoutError, match="waiting for persistence semaphore"):
+        async with async_persistence_slot(timeout_seconds=0.1):
+            pass
+
+    await holder_task
+
+
+@pytest.mark.asyncio
+async def test_async_persistence_slot_releases_on_task_cancellation():
+    """Cancelling a waiting coroutine cleanly releases slot and permits subsequent acquisitions."""
+    from app.db.supabase import async_persistence_slot, reset_persistence_semaphore
+
+    reset_persistence_semaphore(1)
+
+    async def _holder():
+        async with async_persistence_slot():
+            await asyncio.sleep(0.1)
+
+    t1 = asyncio.create_task(_holder())
+    await asyncio.sleep(0.01)
+
+    async def _waiter():
+        async with async_persistence_slot():
+            pass
+
+    t2 = asyncio.create_task(_waiter())
+    await asyncio.sleep(0.01)
+    t2.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await t2
+
+    await t1
+
+    # After holder finishes, slot must be completely free
+    executed = False
+    async with async_persistence_slot(timeout_seconds=0.5):
+        executed = True
+    assert executed is True
