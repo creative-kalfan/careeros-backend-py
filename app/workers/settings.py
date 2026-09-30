@@ -128,16 +128,12 @@ class WorkerSettings:
     on_startup = worker_startup
     on_shutdown = worker_shutdown
     job_timeout = 300
-    keep_result = 3600
-    max_jobs = 10
+    keep_result = 5
+    max_jobs = max(1, _settings.persistence_max_concurrency)
     # Queue-poll interval: env-driven (ARQ_POLL_DELAY_SECONDS, default 10s).
     # Idle cost is ~86400/poll_delay ZRANGEBYSCORE/day: 0.5s = ~172.8k/day
     # (~5.2M/month — too hot for metered/request-billed Redis plans);
-    # 10s = ~8.6k/day, safe everywhere. On non-metered backends (e.g. Aiven
-    # Valkey free tier) lower ARQ_POLL_DELAY_SECONDS via env for faster
-    # pickup — no code change needed.
-    # Health checks stay at the ARQ default (hourly: ZCARD + PSETEX, ~48
-    # req/day, negligible) — do not shorten health_check_interval.
-    poll_delay = _settings.arq_poll_delay_seconds
+    # 30s = safe for free tier limits without impacting background job latency significantly.
+    poll_delay = 30.0 if _settings.arq_poll_delay_seconds == 10.0 else _settings.arq_poll_delay_seconds
     health_check_interval = 3600
     retry_jobs = True

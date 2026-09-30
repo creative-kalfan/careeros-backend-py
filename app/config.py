@@ -160,7 +160,7 @@ class Settings(BaseSettings):
 
     # Persistence concurrency & crawl pacing
     persistence_max_concurrency: int = Field(default=2, alias="PERSISTENCE_MAX_CONCURRENCY")
-    crawl_stagger_seconds: float = Field(default=2.0, alias="CRAWL_STAGGER_SECONDS")
+    crawl_stagger_seconds: float = Field(default=0.0, alias="CRAWL_STAGGER_SECONDS")
     # Forensics telemetry: when true, persistence paths emit payload-free
     # structured timing (async wait/hold vs sync wait/hold vs HTTP vs CPU).
     # Default off; zero behaviour change when off.

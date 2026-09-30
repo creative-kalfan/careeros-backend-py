@@ -125,6 +125,8 @@ class JobIngestionService:
     async def _persist_offloop(
         self,
         normalized_jobs: list,
+        source: Optional[str] = None,
+        slug: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
         timeout_seconds: float = 75.0,
     ) -> dict[str, int]:
@@ -165,7 +167,9 @@ class JobIngestionService:
             thread_start = time.monotonic()
             try:
                 try:
-                    return self.job_repository.upsert_jobs(normalized_jobs, cancel_event=local_cancel)
+                    return self.job_repository.upsert_jobs(
+                        normalized_jobs, source=source, slug=slug, cancel_event=local_cancel
+                    )
                 except TypeError:
                     return self.job_repository.upsert_jobs(normalized_jobs)
             finally:
@@ -251,7 +255,7 @@ class JobIngestionService:
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
 
     async def ingest_greenhouse_jobs(
         self, slug: str, india_only: bool = False, cancel_event: Optional[threading.Event] = None
@@ -266,7 +270,7 @@ class JobIngestionService:
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
 
     async def ingest_smartrecruiters_jobs(
         self, slug: str, cancel_event: Optional[threading.Event] = None
@@ -276,7 +280,7 @@ class JobIngestionService:
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
 
     async def ingest_lever_jobs(
         self, slug: str, cancel_event: Optional[threading.Event] = None
@@ -286,7 +290,7 @@ class JobIngestionService:
         crawled_jobs = await adapter.discover_jobs()
         normalized_jobs = [self.job_service.normalize_and_classify(j) for j in crawled_jobs]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
 
     def _apply_source_quality(self, job: NormalizedJob, careers_url: Optional[str] = None) -> NormalizedJob:
         """Attach verified source provenance to a normalized job.
@@ -334,7 +338,7 @@ class JobIngestionService:
             for j in crawled_jobs
         ]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
 
     async def ingest_firecrawl_jobs(
         self,
@@ -380,7 +384,7 @@ class JobIngestionService:
             for j in crawled_jobs
         ]
         del crawled_jobs
-        return await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
+        return await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
 
     async def ingest_generic_career_page(
         self,
@@ -406,7 +410,7 @@ class JobIngestionService:
             for j in crawled_jobs
         ]
         del crawled_jobs
-        result = await self._persist_offloop(normalized_jobs, cancel_event=cancel_event)
+        result = await self._persist_offloop(normalized_jobs, source=getattr(self, "_current_source", "unknown"), slug=getattr(self, "_current_slug", "unknown"), cancel_event=cancel_event)
         result = dict(result)
         result["provider"] = meta.get("provider") or "none"
         if meta.get("fallback"):
@@ -955,3 +959,5 @@ class JobIngestionService:
             results["smartrecruiters_visa"] = {"error": str(e)}
 
         return results
+
+

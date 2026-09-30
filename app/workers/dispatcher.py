@@ -85,13 +85,15 @@ async def enqueue_crawl_company(
     Returns the ARQ job_id if enqueued, or None if a crawl for the same
     company is already in progress.
     """
+    import uuid
     from app.config import get_settings as _get_settings
     settings = _get_settings()
     lock_ttl = settings.crawl_lock_ttl_seconds
 
     redis = await _get_redis()
     lock_key = f"crawl_lock:{source}:{slug}"
-    acquired = await redis.set(lock_key, "1", ex=lock_ttl, nx=True)
+    job_id = str(uuid.uuid4())
+    acquired = await redis.set(lock_key, job_id, ex=lock_ttl, nx=True)
     if not acquired:
         logger.info("Crawl skipped: already in progress source=%s slug=%s lock=%s", source, slug, lock_key)
         return None
@@ -99,9 +101,11 @@ async def enqueue_crawl_company(
     job_kwargs: dict[str, Any] = {}
     if _defer is not None and _defer > 0:
         job_kwargs["_defer_by"] = _defer
+    job_kwargs["_job_id"] = job_id
 
     job = await redis.enqueue_job("crawl_company_job", source, slug, **job_kwargs)
     if job is None:
         logger.error("Failed to enqueue crawl_company_job source=%s slug=%s", source, slug)
+        await redis.delete(lock_key)
         return None
     return job.job_id

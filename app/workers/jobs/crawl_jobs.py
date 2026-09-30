@@ -227,7 +227,7 @@ async def _dispatch_ingest(
 @register_job(
     "crawl_company_job",
     timeout=300,
-    max_tries=2,
+    max_tries=3,
     retry=True,
     description="Crawl jobs for a single ATS source/company.",
 )
@@ -281,6 +281,8 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
     )
 
     ingestion = JobIngestionService()
+    ingestion._current_source = source
+    ingestion._current_slug = slug
 
     try:
         current_phase = "provider_discovery"
@@ -309,9 +311,6 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                 cancel_event=cancel_event,
             )
         elif source == "jobspy":
-            # Broad discovery layer: bounded rotation batch (query families
-            # x India locations x freshness buckets) with provider-aware
-            # throttling. The registry slug rides along as one extra query.
             result = await _dispatch_ingest(
                 ingestion.ingest_jobspy_scheduled,
                 extra_query=slug or None,
@@ -322,10 +321,6 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                 ingestion.ingest_ycombinator_jobs, cancel_event=cancel_event
             )
         elif source == "firecrawl":
-            # Slug format: "<company>|<careers_url>" (careers URL is required).
-            # Generic career page: Crawl4AI primary, Firecrawl fallback
-            # (see app.crawlers.generic_fallback). Direct ATS sources above
-            # always keep priority over both generic providers.
             company, _, careers_url = slug.partition("|")
             if not careers_url:
                 raise ValueError("firecrawl crawl requires slug '<company>|<careers_url>'")
@@ -339,154 +334,109 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             raise ValueError(f"Unknown source: {source}")
 
         provider_ms = int((time.monotonic() - provider_start) * 1000)
-        logger.info(
-            "crawl provider_ms=%d phase=discover_normalize source=%s slug=%s "
-            "discovered=%d",
-            provider_ms, source, slug, result.get("discovered", 0),
-        )
 
         current_phase = "deactivation"
         deact_async_wait_ms = 0
         deact_async_hold_ms = 0
         deact_to_thread_ms = 0
+        
+        discovered = result.get("discovered", 0)
         try:
-            from app.config import get_settings
-            from app.db.supabase import async_persistence_slot
+            prev_active_res = ingestion.job_repository._client.table("jobs").select("id", count="exact").eq("is_active", True).eq("source_platform", source).execute()
+            prev_active_count = prev_active_res.count or 0
+        except Exception:
+            prev_active_count = 0
+            
+        is_suspicious_empty = False
+        if discovered == 0 and prev_active_count > 0:
+            is_suspicious_empty = True
+        elif discovered < (prev_active_count * 0.5) and prev_active_count > 10:
+            is_suspicious_empty = True
+            
+        if is_suspicious_empty:
+            logger.warning("Suspicious empty crawl for %s:%s (discovered=%d, prev_active=%d). Skipping deactivation.", source, slug, discovered, prev_active_count)
+            result["status"] = "suspicious_empty"
+        else:
+            try:
+                from app.config import get_settings
+                from app.db.supabase import async_persistence_slot
 
-            max_age_days = get_settings().job_stale_after_days
-            deact_start = time.monotonic()
-            deact_async_acquire_start = time.monotonic()
-            async with async_persistence_slot(cancel_event=cancel_event, timeout_seconds=45.0):
-                deact_async_wait_ms = int((time.monotonic() - deact_async_acquire_start) * 1000)
-                deact_hold_start = time.monotonic()
-                deact_thread_start = time.monotonic()
-                # Single-gate: async slot above is the capacity boundary;
-                # already_gated=True bypasses the redundant sync semaphore.
-                deactivated_not_seen, deactivated, deactivate_not_seen_ms, deactivate_stale_ms = await asyncio.to_thread(
-                    _deactivate_after_success,
-                    ingestion,
-                    source,
-                    slug,
-                    crawl_started_at,
-                    max_age_days,
-                    cancel_event,
-                    45.0,
-                    True,
+                max_age_days = get_settings().job_stale_after_days
+                deact_start = time.monotonic()
+                deact_async_acquire_start = time.monotonic()
+                async with async_persistence_slot(cancel_event=cancel_event, timeout_seconds=45.0):
+                    deact_async_wait_ms = int((time.monotonic() - deact_async_acquire_start) * 1000)
+                    deact_hold_start = time.monotonic()
+                    deact_thread_start = time.monotonic()
+                    deactivated_not_seen, deactivated, deactivate_not_seen_ms, deactivate_stale_ms = await asyncio.to_thread(
+                        _deactivate_after_success,
+                        ingestion,
+                        source,
+                        slug,
+                        crawl_started_at,
+                        max_age_days,
+                        cancel_event,
+                        45.0,
+                        True,
+                    )
+                    deact_to_thread_ms = int((time.monotonic() - deact_thread_start) * 1000)
+                    deact_async_hold_ms = int((time.monotonic() - deact_hold_start) * 1000)
+                deactivation_total_ms = int((time.monotonic() - deact_start) * 1000)
+            except Exception as exc:
+                logger.warning(
+                    "Stale deactivation skipped (non-blocking): source=%s error=%s", source, exc
                 )
-                deact_to_thread_ms = int((time.monotonic() - deact_thread_start) * 1000)
-                deact_async_hold_ms = int((time.monotonic() - deact_hold_start) * 1000)
-            deactivation_total_ms = int((time.monotonic() - deact_start) * 1000)
-        except Exception as exc:
-            logger.warning(
-                "Stale deactivation skipped (non-blocking): source=%s error=%s", source, exc
-            )
 
         from app.db.supabase import persistence_gate_snapshot
         gate = persistence_gate_snapshot()
+        
         logger.info(
-            "production_timing crawl_source=%s crawl_slug=%s provider_ms=%d upsert_ms=%d "
-            "persistence_wait_ms=%d persistence_hold_ms=%d deactivate_not_seen_ms=%d "
-            "deactivate_stale_ms=%d deactivation_total_ms=%d db_requests=%d "
-            "persistence_waiters=%d persistence_holders=%d "
-            "async_wait_ms=%d async_hold_ms=%d deact_async_wait_ms=%d deact_async_hold_ms=%d "
-            "deact_to_thread_ms=%d async_waiting=%d async_holding=%d sync_waiting=%d sync_holding=%d",
-            source,
-            slug,
-            provider_ms,
-            result.get("upsert_ms", 0),
-            result.get("persistence_wait_ms", 0),
-            result.get("persistence_hold_ms", 0),
-            deactivate_not_seen_ms,
-            deactivate_stale_ms,
-            deactivation_total_ms,
-            getattr(ingestion.job_repository, "last_db_requests", -1),
-            int(gate.get("persistence_waiters", 0)),
-            int(gate.get("persistence_holders", 0)),
-            int(result.get("async_wait_ms", 0)),
-            int(result.get("async_hold_ms", 0)),
-            deact_async_wait_ms,
-            deact_async_hold_ms,
-            deact_to_thread_ms,
-            int(gate.get("async_waiting_now", 0)),
-            int(gate.get("async_holding_now", 0)),
-            int(gate.get("sync_waiting_now", 0)),
-            int(gate.get("sync_holding_now", 0)),
+            "CRAWL_FINISHED source=%s slug=%s job_try=%d fetch_ms=%d persist_wait_ms=%d persist_hold_ms=%d total_ms=%d path=%s discovered=%d inserted=%d updated=%d unchanged=%d deactivated=%d rss_mb=%.1f",
+            source, slug, ctx.get("job_try", 1), provider_ms, result.get("async_wait_ms", 0), result.get("async_hold_ms", 0), int((time.monotonic() - job_start) * 1000), result.get("path", "legacy"), discovered, result.get("inserted", 0), result.get("updated", 0), result.get("unchanged", 0), deactivated_not_seen + deactivated, _get_process_rss_mb()
         )
 
-        # Event Bus integration: one JobIngested per successful ingestion run.
-        # Published AFTER persistence succeeds; never on failed crawls.
         current_phase = "event_dispatch"
         try:
             from app.events import JobIngested, get_event_bus
-
             report = await get_event_bus().publish(
                 JobIngested(
                     aggregate_id=f"{source}:{slug}" if slug else source,
                     source_platform=source,
-                    jobs_processed=int(result.get("discovered", 0)),
+                    jobs_processed=discovered,
                     metadata={
                         "inserted": result.get("inserted", 0),
                         "updated": result.get("updated", 0),
                         "unchanged": result.get("unchanged", 0),
-                        "deactivated": deactivated,
+                        "deactivated": deactivated_not_seen + deactivated,
                     },
-                ),
-                context=None,  # system-scoped operation; no user RLS context
-            )
-            if not report.succeeded:
-                logger.warning(
-                    "JobIngested dispatch had handler failures: %s",
-                    [f.error for f in report.failures],
                 )
+            )
         except Exception as exc:
-            logger.warning("JobIngested publish failed (non-blocking): %s", exc)
+            logger.warning("Event Bus publish failed (non-blocking): %s", exc)
 
-        current_phase = "completed"
-        duration_ms = int((time.monotonic() - job_start) * 1000)
-        job_logger.completed(
-            duration_ms=duration_ms,
-            discovered=result.get("discovered", 0),
-            inserted=result.get("inserted", 0),
-            updated=result.get("updated", 0),
-            unchanged=result.get("unchanged", 0),
-            deduplicated=result.get("deduplicated", 0),
-            skipped=result.get("skipped", 0),
-            deactivated=deactivated + deactivated_not_seen,
-            provider_ms=provider_ms,
-            active_crawls=max(0, _ACTIVE_CRAWLS - 1),
-        )
-
-        # Observability: persist the last crawl run summary (successful crawl).
-        current_phase = "status_record"
-        await _record_crawl_status(
-            source,
-            slug,
+        job_logger.success(
             {
-                "source": source,
-                "slug": slug,
-                "status": "success",
-                "started_at": crawl_started_at,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "duration_ms": duration_ms,
                 "discovered": result.get("discovered", 0),
                 "inserted": result.get("inserted", 0),
                 "updated": result.get("updated", 0),
-                "unchanged": result.get("unchanged", 0),
-                "deduplicated": result.get("deduplicated", 0),
-                "skipped": result.get("skipped", 0),
-                "deactivated_not_seen": deactivated_not_seen,
-                "deactivated_stale": deactivated,
-            },
+                "deactivated": deactivated_not_seen + deactivated,
+                "provider_ms": provider_ms,
+                "upsert_ms": result.get("upsert_ms", 0),
+                "deactivation_total_ms": deactivation_total_ms,
+                "rss_mb": _get_process_rss_mb(),
+            }
         )
-
         return {
-            "success": True,
+            "status": result.get("status", "success"),
             "source": source,
             "slug": slug,
-            "result": result,
-            "deactivated": deactivated + deactivated_not_seen,
-            "deactivated_not_seen": deactivated_not_seen,
-            "duration_ms": duration_ms,
+            "discovered": result.get("discovered", 0),
+            "inserted": result.get("inserted", 0),
+            "updated": result.get("updated", 0),
+            "unchanged": result.get("unchanged", 0),
+            "deduplicated": result.get("deduplicated", 0),
+            "skipped": result.get("skipped", 0),
+            "deactivated": deactivated_not_seen + deactivated,
         }
 
     except asyncio.CancelledError:
@@ -495,84 +445,35 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         from app.db.supabase import persistence_gate_snapshot
         gate = persistence_gate_snapshot()
         logger.warning(
-            "crawl cancelled=true phase=%s active_crawls=%d source=%s slug=%s "
-            "duration_ms=%d provider_ms=%d threads=%d rss_mb=%.1f "
-            "persistence_waiters=%d persistence_holders=%d "
-            "async_waiting=%d async_holding=%d sync_waiting=%d sync_holding=%d",
+            "crawl cancelled=true phase=%s active_crawls=%d source=%s slug=%s",
             current_phase,
             _ACTIVE_CRAWLS,
             source,
-            slug,
-            duration_ms,
-            provider_ms,
-            threading.active_count(),
-            _get_process_rss_mb(),
-            int(gate.get("persistence_waiters", 0)),
-            int(gate.get("persistence_holders", 0)),
-            int(gate.get("async_waiting_now", 0)),
-            int(gate.get("async_holding_now", 0)),
-            int(gate.get("sync_waiting_now", 0)),
-            int(gate.get("sync_holding_now", 0)),
-        )
-        await _record_crawl_status(
-            source,
-            slug,
-            {
-                "source": source,
-                "slug": slug,
-                "status": "cancelled",
-                "phase": current_phase,
-                "started_at": crawl_started_at,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "duration_ms": duration_ms,
-            },
+            slug
         )
         raise
     except Exception as exc:
-        cancel_event.set()
         duration_ms = int((time.monotonic() - job_start) * 1000)
-        job_logger.failed(duration_ms=duration_ms, error_type=exc.__class__.__name__)
-        from app.db.supabase import persistence_gate_snapshot
-        gate = persistence_gate_snapshot()
-        logger.error(
-            "crawl failed phase=%s active_crawls=%d source=%s slug=%s "
-            "duration_ms=%d error=%s: %s threads=%d rss_mb=%.1f "
-            "persistence_waiters=%d persistence_holders=%d "
-            "async_waiting=%d async_holding=%d sync_waiting=%d sync_holding=%d",
-            current_phase,
-            _ACTIVE_CRAWLS,
-            source,
-            slug,
-            duration_ms,
-            exc.__class__.__name__,
-            exc,
-            threading.active_count(),
-            _get_process_rss_mb(),
-            int(gate.get("persistence_waiters", 0)),
-            int(gate.get("persistence_holders", 0)),
-            int(gate.get("async_waiting_now", 0)),
-            int(gate.get("async_holding_now", 0)),
-            int(gate.get("sync_waiting_now", 0)),
-            int(gate.get("sync_holding_now", 0)),
-        )
-        await _record_crawl_status(
-            source,
-            slug,
-            {
-                "source": source,
-                "slug": slug,
-                "status": "failed",
-                "phase": current_phase,
-                "started_at": crawl_started_at,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "duration_ms": duration_ms,
-                "error": f"{exc.__class__.__name__}: {exc}",
-            },
-        )
+        from app.db.supabase import PersistenceTimeoutError
+        from arq import Retry
+        if isinstance(exc, PersistenceTimeoutError):
+            logger.error("Persistence timeout in phase=%s for %s:%s. Retrying.", current_phase, source, slug)
+            raise Retry(defer=ctx.get("job_try", 1) * 30)
+        logger.exception("crawl failed phase=%s source=%s slug=%s: %s", current_phase, source, slug, str(exc))
+        job_logger.failed(str(exc), current_phase)
         raise
     finally:
         cancel_event.set()
         _ACTIVE_CRAWLS = max(0, _ACTIVE_CRAWLS - 1)
+        try:
+            from app.workers.settings import get_redis_pool
+            redis = await get_redis_pool()
+            lock_key = f"crawl_lock:{source}:{slug}"
+            lock_val = await redis.get(lock_key)
+            if lock_val and lock_val.decode("utf-8") == ctx.get("job_id"):
+                await redis.delete(lock_key)
+        except Exception:
+            pass
         logger.info(
             "crawl finished active_crawls=%d source=%s slug=%s threads=%d rss_mb=%.1f",
             _ACTIVE_CRAWLS,
@@ -581,3 +482,4 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             threading.active_count(),
             _get_process_rss_mb(),
         )
+
