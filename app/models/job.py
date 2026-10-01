@@ -195,6 +195,14 @@ class NormalizedJob(BaseModel):
 
         Only columns that exist in the ``jobs`` table are emitted (see
         ``_DB_COLUMNS``) so ingestion never fails on a schema mismatch.
+
+        Compensation is persisted as the structured ``salary_min`` /
+        ``salary_max`` columns (migration 020) ONLY. ``self.salary`` (the
+        provider-formatted display string) and ``self.salary_currency`` have
+        no ``jobs`` column and are intentionally not emitted — the display
+        string for the API is produced by ``JobOut.from_db_row``. Keys for
+        non-existent columns must never appear here: a write payload naming
+        one would fail with PostgREST 42703.
         """
         row = {
             "title": self.title,
@@ -212,8 +220,6 @@ class NormalizedJob(BaseModel):
             "remote": self.remote,
             "workplace_type": self.workplace_type,
             "employment_type": self.employment_type,
-            "salary": self.salary,
-            "salary_currency": self.salary_currency,
             "salary_min": self.salary_min,
             "salary_max": self.salary_max,
             "skills": self.skills,

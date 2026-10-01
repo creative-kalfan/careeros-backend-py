@@ -27,6 +27,7 @@ from app.db.supabase import (
 )
 from app.models.job import NormalizedJob
 from app.repositories.job_repository import JobRepository
+from tests.schema_helpers import missing_jobs_columns
 
 DUPLICATE_KEY_ERROR = APIError(
     {"message": "duplicate key value violates unique constraint", "code": "23505"}
@@ -59,6 +60,20 @@ class _FakeQuery:
 
     # -- builder --
     def select(self, *a: Any, **k: Any) -> "_FakeQuery":
+        # Schema guard: PostgREST rejects a projection naming a column the
+        # ``jobs`` table does not have (42703) and fails the WHOLE request.
+        # Every repository projection must therefore stay inside the canonical
+        # migration schema (see tests/test_jobs_schema_projection.py for the
+        # exact production reproduction).
+        projection = a[0] if a and isinstance(a[0], str) else "*"
+        missing = missing_jobs_columns(projection)
+        if missing:
+            raise APIError(
+                {
+                    "message": f"column jobs.{sorted(missing)[0]} does not exist",
+                    "code": "42703",
+                }
+            )
         return self
 
     def eq(self, field: str, value: Any) -> "_FakeQuery":

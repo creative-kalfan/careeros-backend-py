@@ -27,9 +27,22 @@ from app.models.job import NormalizedJob
 logger = logging.getLogger(__name__)
 
 # Fields compared to decide whether an existing row actually changed.
+#
+# Every name here MUST be a real ``public.jobs`` column: these fields are
+# projected verbatim by ``_EXISTING_ROW_COLUMNS``, and PostgREST fails the
+# WHOLE request with 42703 ("column jobs.<name> does not exist") when a
+# projection names a column the table does not have.
+#
+# ``salary`` is deliberately absent. The canonical schema (migration 020)
+# persists compensation as the structured ``salary_min`` / ``salary_max``
+# columns only; ``NormalizedJob.salary`` is a provider-formatted display
+# string that ``to_db_row()`` never writes (it is not in
+# ``NormalizedJob._DB_COLUMNS``). A non-existent column can therefore never
+# carry change signal — the structured columns above do. ``salary_currency``
+# is likewise model-only.
 _CONTENT_FIELDS = (
     "title", "company", "location", "description", "url", "posted_at",
-    "role_category", "application_deadline", "employment_type", "salary",
+    "role_category", "application_deadline", "employment_type",
     "salary_min", "salary_max", "skills", "experience_level", "remote",
     "mass_hiring", "mass_hiring_status", "mass_hiring_details",
 )
