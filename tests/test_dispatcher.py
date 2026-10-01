@@ -149,7 +149,10 @@ class TestDispatcher:
             job_id = await enqueue_crawl_company("greenhouse", "stripe")
             assert job_id == "crawl-job-id"
             mock_redis.set.assert_called_once()
-            mock_redis.enqueue_job.assert_called_once_with("crawl_company_job", "greenhouse", "stripe")
+            assert mock_redis.enqueue_job.call_args.args == (
+                "crawl_company_job", "greenhouse", "stripe"
+            )
+            assert mock_redis.enqueue_job.call_args.kwargs["_job_id"]
 
     @pytest.mark.asyncio
     async def test_enqueue_crawl_company_lock_held(self) -> None:

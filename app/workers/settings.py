@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+import os
 from typing import Any
 
 from arq.connections import ArqRedis, RedisSettings, create_pool
@@ -32,6 +34,8 @@ _settings = get_settings()
 # handles) alive for the worker process lifetime. Without this the scheduler
 # could be garbage-collected after startup.
 _crawl_runner = None
+_dispatcher_task: asyncio.Task | None = None
+_health_server: asyncio.Server | None = None
 
 
 def normalize_redis_dsn(dsn: str) -> str:
@@ -50,7 +54,14 @@ def normalize_redis_dsn(dsn: str) -> str:
     return dsn
 
 
-redis_settings = RedisSettings.from_dsn(normalize_redis_dsn(_settings.redis_url))
+_redis_parsed = RedisSettings.from_dsn(normalize_redis_dsn(_settings.redis_url))
+redis_settings = RedisSettings(**{
+    **vars(_redis_parsed),
+    "conn_timeout": max(1, int(_settings.arq_connect_timeout)),
+    "conn_retries": 5,
+    "conn_retry_delay": 1,
+    "retry_on_timeout": True,
+})
 
 redis_pool: ArqRedis | None = None
 
@@ -78,8 +89,8 @@ def _build_function_list() -> list[Any]:
 
 
 async def worker_startup(ctx: dict[str, Any]) -> None:
-    """ARQ on_startup: own the crawler scheduler in the worker process."""
-    global _crawl_runner
+    """Start crawl dispatch and optional legacy/health services."""
+    global _crawl_runner, _dispatcher_task, _health_server
     settings = get_settings()
     logger.info(
         "crawler scheduler initialization started crawler_enabled=%s",
@@ -87,32 +98,59 @@ async def worker_startup(ctx: dict[str, Any]) -> None:
     )
     if not settings.job_crawl_enabled:
         logger.info("crawler scheduler disabled (JOB_CRAWL_ENABLED=false)")
-        return
-    try:
-        from app.services.jobs.scheduled_crawl_runner import ScheduledCrawlRunner
+    else:
+        try:
+            redis = ctx.get("redis")
+            if redis is not None:
+                policy = await redis.config_get("maxmemory-policy")
+                value = policy.get("maxmemory-policy") if isinstance(policy, dict) else None
+                if value and value != "noeviction":
+                    logger.critical("Redis maxmemory-policy=%s; ARQ jobs may be evicted", value)
+        except Exception:
+            logger.warning("Unable to inspect Redis maxmemory-policy; continuing", exc_info=True)
+    if settings.job_crawl_enabled and settings.legacy_apscheduler_enabled:
+        try:
+            from app.services.jobs.scheduled_crawl_runner import ScheduledCrawlRunner
+            _crawl_runner = ScheduledCrawlRunner()
+            _crawl_runner.start()
+            logger.warning("legacy APScheduler enabled; possible duplicate scheduling")
+        except Exception:
+            logger.exception("legacy APScheduler initialization failed")
+    elif settings.job_crawl_enabled:
+        from app.services.jobs.crawl_dispatcher import dispatcher_loop
+        _dispatcher_task = asyncio.create_task(dispatcher_loop(ctx), name="crawl-dispatcher")
 
-        _crawl_runner = ScheduledCrawlRunner()
-        _crawl_runner.start()
-        sched = _crawl_runner._scheduler
-        jobs = sched.get_jobs() if sched is not None else []
-        logger.info("crawler scheduler initialized jobs=%d", len(jobs))
-        for job in jobs:
-            logger.info(
-                "next crawl scheduled id=%s next_run_time=%s",
-                job.id,
-                job.next_run_time.isoformat() if job.next_run_time else "none",
-            )
-        logger.info("crawler scheduler started")
-    except Exception:
-        # Worker must stay alive for API-enqueued jobs; scheduler failure is
-        # observable via this log, never silent.
-        logger.exception("crawler scheduler initialization failed")
-        _crawl_runner = None
+    if settings.worker_http_health:
+        async def health(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                await reader.read(4096)
+                body = b'{"status":"ok","service":"worker"}'
+                headers = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n"
+                writer.write(headers + body)
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+        try:
+            _health_server = await asyncio.start_server(health, "0.0.0.0", int(os.getenv("PORT", "8000")))
+        except Exception:
+            logger.exception("worker health endpoint failed to start")
 
 
 async def worker_shutdown(ctx: dict[str, Any]) -> None:
-    """ARQ on_shutdown: stop the crawler scheduler (idempotent)."""
-    global _crawl_runner
+    """Stop scheduler, dispatcher, and optional health listener."""
+    global _crawl_runner, _dispatcher_task, _health_server
+    if _dispatcher_task is not None:
+        _dispatcher_task.cancel()
+        try:
+            await _dispatcher_task
+        except asyncio.CancelledError:
+            pass
+        _dispatcher_task = None
+    if _health_server is not None:
+        _health_server.close()
+        await _health_server.wait_closed()
+        _health_server = None
     if _crawl_runner is not None:
         try:
             _crawl_runner.shutdown()
@@ -130,6 +168,6 @@ class WorkerSettings:
     job_timeout = 300
     keep_result = 5
     max_jobs = max(1, _settings.persistence_max_concurrency)
-    poll_delay = _settings.arq_poll_delay_seconds
+    poll_delay = _settings.arq_poll_delay
     health_check_interval = 3600
     retry_jobs = True

@@ -33,14 +33,12 @@ def test_idle_model_matches_arq_polling_math():
     assert estimate_idle_requests_per_month(0.5) > UPSTASH_MONTHLY_BUDGET * 10
 
 
-def test_default_poll_delay_fits_budget_with_headroom():
+def test_default_poll_delay_uses_fast_aiven_default():
     from app.workers.settings import WorkerSettings
 
-    assert WorkerSettings.poll_delay == pytest.approx(10.0)
+    assert WorkerSettings.poll_delay == pytest.approx(2.0)
     monthly = estimate_idle_requests_per_month(float(WorkerSettings.poll_delay))
-    # Must fit COMFORTABLY: under 60% of budget for idle alone, leaving room
-    # for real jobs, retries, scheduler passes, and health checks.
-    assert monthly < UPSTASH_MONTHLY_BUDGET * 0.6
+    assert monthly > UPSTASH_MONTHLY_BUDGET
 
 
 def test_poll_delay_env_override(monkeypatch):

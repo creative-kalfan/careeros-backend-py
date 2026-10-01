@@ -65,6 +65,7 @@ from app.api.routes.tailoring_evidence import router as tailoring_evidence_route
 from app.api.routes.interview_prep import router as interview_prep_router
 from app.api.routes.resume_templates import router as templates_router
 from app.api.routes.dashboard import router as dashboard_router
+from app.api.routes.admin import router as admin_router
 from app.auth.service import AuthError
 from app.config import get_settings
 
@@ -140,10 +141,21 @@ def _get_cors_origins() -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Web lifespan owns no scheduler; the ARQ worker owns crawling."""
+    """Keep scheduled crawling in workers unless explicitly opted in."""
     _init_sentry()
-    logger.info("Web lifespan: crawler scheduler owned by ARQ worker (see WorkerSettings.on_startup)")
-    yield
+    runner = None
+    if get_settings().run_scheduler_in_web and get_settings().legacy_apscheduler_enabled:
+        from app.services.jobs.scheduled_crawl_runner import ScheduledCrawlRunner
+        runner = ScheduledCrawlRunner()
+        runner.start()
+        logger.warning("Web process owns legacy APScheduler by explicit configuration")
+    else:
+        logger.info("Web lifespan: crawl scheduling disabled; use the worker entrypoint")
+    try:
+        yield
+    finally:
+        if runner is not None:
+            runner.shutdown()
 
 app = FastAPI(
     title="CareerOS Backend (Python)",
@@ -269,6 +281,7 @@ app.include_router(tailoring_evidence_router)
 app.include_router(interview_prep_router)
 app.include_router(templates_router)
 app.include_router(dashboard_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")

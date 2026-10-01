@@ -36,10 +36,30 @@ class Settings(BaseSettings):
     # and must not be restored on metered plans. Non-metered backends
     # (e.g. Aiven Valkey free tier) may lower it via env for faster pickup.
     arq_poll_delay_seconds: float = Field(default=10.0, alias="ARQ_POLL_DELAY_SECONDS")
+    arq_poll_delay: float = Field(default=2.0, alias="ARQ_POLL_DELAY")
+    arq_connect_timeout: float = Field(default=5.0, alias="ARQ_CONNECT_TIMEOUT")
 
     # Crawl concurrency-lock TTL (seconds). Must exceed the maximum expected
     # crawl duration so a stale lock never permanently blocks a company.
     crawl_lock_ttl_seconds: int = Field(default=300, alias="CRAWL_LOCK_TTL_SECONDS")
+    legacy_apscheduler_enabled: bool = Field(default=False, alias="LEGACY_APSCHEDULER_ENABLED")
+    run_scheduler_in_web: bool = Field(default=False, alias="RUN_SCHEDULER_IN_WEB")
+    dispatch_tick_seconds: int = Field(default=60, alias="DISPATCH_TICK_SECONDS")
+    dispatch_batch: int = Field(default=2, alias="DISPATCH_BATCH")
+    crawl_lease_seconds: int = Field(default=900, alias="CRAWL_LEASE_SECONDS")
+    crawl_dead_after_failures: int = Field(default=10, alias="CRAWL_DEAD_AFTER_FAILURES")
+    crawl_min_interval_minutes: int = Field(default=360, alias="CRAWL_MIN_INTERVAL_MINUTES")
+    crawl_max_interval_minutes: int = Field(default=2880, alias="CRAWL_MAX_INTERVAL_MINUTES")
+    job_miss_threshold: int = Field(default=2, alias="JOB_MISS_THRESHOLD")
+    ats_fetch_concurrency: int = Field(default=10, alias="ATS_FETCH_CONCURRENCY")
+    ats_connect_timeout_seconds: float = Field(default=5.0, alias="ATS_CONNECT_TIMEOUT_SECONDS")
+    ats_read_timeout_seconds: float = Field(default=20.0, alias="ATS_READ_TIMEOUT_SECONDS")
+    discovery_max_probes_per_day: int = Field(default=50, alias="DISCOVERY_MAX_PROBES_PER_DAY")
+    slo_overdue_minutes: int = Field(default=120, alias="SLO_OVERDUE_MINUTES")
+    admin_status_token: str = Field(default="", alias="ADMIN_STATUS_TOKEN")
+    alert_webhook_url: str = Field(default="", alias="ALERT_WEBHOOK_URL")
+    heartbeat_url: str = Field(default="", alias="HEARTBEAT_URL")
+    worker_http_health: bool = Field(default=False, alias="WORKER_HTTP_HEALTH")
 
     # LLM Gateway (backend-only credentials; empty key = provider unconfigured).
     llm_default_provider: str = Field(default="groq", alias="LLM_DEFAULT_PROVIDER")

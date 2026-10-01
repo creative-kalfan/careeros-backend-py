@@ -26,6 +26,7 @@ def test_worker_settings_wires_startup_shutdown():
 @pytest.mark.asyncio
 async def test_worker_startup_starts_scheduler_with_imminent_first_run(monkeypatch):
     monkeypatch.setenv("JOB_CRAWL_ENABLED", "true")
+    monkeypatch.setenv("LEGACY_APSCHEDULER_ENABLED", "true")
     get_settings.cache_clear()
     from app.workers import settings as ws
 

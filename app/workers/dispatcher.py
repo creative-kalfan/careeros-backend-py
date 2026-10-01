@@ -103,9 +103,28 @@ async def enqueue_crawl_company(
         job_kwargs["_defer_by"] = _defer
     job_kwargs["_job_id"] = job_id
 
-    job = await redis.enqueue_job("crawl_company_job", source, slug, **job_kwargs)
+    try:
+        job = await redis.enqueue_job("crawl_company_job", source, slug, **job_kwargs)
+        if job is None:
+            logger.error("Failed to enqueue crawl_company_job source=%s slug=%s", source, slug)
+            await redis.delete(lock_key)
+            return None
+        return job.job_id
+    except Exception:
+        try:
+            owned_value = await redis.get(lock_key)
+            if owned_value and owned_value.decode("utf-8") == job_id:
+                await redis.delete(lock_key)
+        except Exception:
+            logger.warning("Failed to release crawl lock after enqueue error", exc_info=True)
+        raise
+
+
+async def enqueue_scheduled_crawl(source: str, slug: str, job_id: str) -> Optional[str]:
+    """Enqueue DB-scheduled crawl; ARQ job ID is its deduplication key."""
+    redis = await _get_redis()
+    job = await redis.enqueue_job("crawl_company_job", source, slug, _job_id=job_id)
     if job is None:
-        logger.error("Failed to enqueue crawl_company_job source=%s slug=%s", source, slug)
-        await redis.delete(lock_key)
+        logger.info("Scheduled crawl deduplicated source=%s slug=%s", source, slug)
         return None
     return job.job_id
