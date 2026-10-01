@@ -1421,3 +1421,71 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - Bulk unchanged recrawl of 1000 jobs executes in 2 DB requests instead of 1001 HTTP requests.
   - Test suite: 64 unit and integration tests passing in `tests/test_crawl_throughput.py`, `tests/test_crawl_refresh_system.py`, `tests/test_crawl_persistence_offloop.py`, `tests/test_supabase_client_serialization.py`, `tests/test_scheduled_crawl_runner.py`, `tests/test_worker_scheduler_lifecycle.py`, and `tests/test_job_repository.py`.
   - Regression suite: 67 passed in `test_job_ingestion_2o.py`, `test_jobspy_expansion.py`, `test_generic_crawl_fallback.py`, and `test_ingestion_reliability.py`.
+### 9.27 Production schema mismatch: `jobs.salary` in the bulk identity lookup (2026-09-29)
+
+- **Symptom (production):** deployment started cleanly and scheduler staggering
+  worked, but every crawl that reached persistence failed with
+  `postgrest.exceptions.APIError: {"message": "column jobs.salary does not
+  exist", "code": "42703"}` along
+  `crawl_company_job -> JobIngestionService._persist_offloop() ->
+  asyncio.to_thread() -> app.db.supabase.call_serialized() ->
+  JobRepository.upsert_jobs() -> JobRepository._find_many_by_identity() ->
+  Supabase/PostgREST`. Multiple unrelated providers (ycombinator,
+  firecrawl/generic career pages, Razorpay) failed identically while PhonePe
+  (no persistence-relevant row differences) reported crawl completion — i.e. a
+  schema mismatch, not a provider defect.
+- **Root cause (verified against the migration history, explanation D — code
+  referencing a field it never needed, which also never existed):** the bulk
+  existence fetch projects `",".join(_EXISTING_ROW_COLUMNS)` verbatim, and
+  `_CONTENT_FIELDS` still listed `salary`. `public.jobs` has **no `salary` and
+  no `salary_currency` column in any migration**: `000_baseline_schema.sql`
+  defines the base table, `011` adds `last_seen_at`, `013` the identity unique
+  index, `016` provenance, `020` the structured job features
+  (`salary_min`/`salary_max`, `employment_type`, `experience_level`, `skills`,
+  `remote`, `workplace_type`), `021` mass-hiring. Migration 020 states
+  explicitly that `salary`/`salary_currency` were emitted by
+  `NormalizedJob.to_db_row()` but dropped by `_DB_COLUMNS`, so they can never
+  be persisted. `select("*")` (the pre-bulk single-row path) silently omits a
+  non-existent column — the bulk projection in commit `10acb165` turned the
+  dead reference into a hard 42703 for every crawl.
+- **Cross-check that the missing column is only `salary`:** Postgres reports the
+  *first* unresolvable column, and the projection orders `source_history`
+  (016), `employment_type` (020) before `salary` without error — so 016/020/021
+  are applied in production and the projection is otherwise sound (verified in
+  the field-by-field audit of `_find_many_by_identity`).
+- **Fix (smallest architecturally correct change):** removed `salary` from
+  `_CONTENT_FIELDS` — no migration was invented, no column was added to
+  production, and `_is_same_job()` still compares every persisted content field
+  (`salary_min`/`salary_max` remain in the comparison set, so real compensation
+  changes are still detected and written). `NormalizedJob.to_db_row()` no
+  longer emits the model-only `salary`/`salary_currency` keys at all, so the
+  misleading coupling cannot silently return. All `10acb165` throughput work
+  is untouched (bulk identity lookup, 200/500 chunking, normalized datetime and
+  list comparisons, reduced unchanged-job traffic, scoped deactivation,
+  persistence concurrency limit, staggered scheduler), as is the `16355b62` ARQ
+  defer fix (`_defer_by`/`_defer_until`; `crawl_company_job(ctx, source, slug)`
+  takes no `_defer` kwarg).
+- **Regression tests preventing recurrence:**
+  - `tests/schema_helpers.py` parses `sql/migrations/*.sql` into the canonical
+    `public.jobs` column set (no hand-maintained list, so a projection can only
+    be blessed by an actual migration).
+  - `tests/test_jobs_schema_projection.py` — 23 tests: a strict in-memory
+    PostgREST stand-in that raises 42703 for unknown projection columns
+    (reproducing the production failure exactly), "every column of the identity
+    lookup exists" assertions over `_EXISTING_ROW_COLUMNS`, `_CONTENT_FIELDS`,
+    `_PROVENANCE_FIELDS`, `_MASS_HIRING_FIELDS`, the `_DB_COLUMNS` write
+    whitelist and every literal `select(...)` in `job_repository.py`, plus
+    new/unchanged/changed upsert, identity dedup, salary semantics under the
+    real schema (string-only change is not persistable; `salary_min/max` change
+    is an UPDATE) and 200/500/1000 unchanged-board request counts (1/3/5
+    fetches + 1/1/2 touches). Re-adding `salary` makes 17 of them fail.
+  - `tests/test_crawl_throughput.py`'s fake client now schema-checks every
+    projection, so the whole throughput suite fails on this class of bug.
+- **Live verification (read-only):** `scripts/verify_jobs_schema.py` probes the
+  live `public.jobs` schema through the existing service-role client — the
+  identity-lookup projection, each decision field group, the write whitelist,
+  the candidate-universe projection and the absence of `salary` /
+  `salary_currency`; exit 0 all-present, 1 mismatch, 2 could-not-verify (no
+  credentials — nothing is claimed).
+
+
