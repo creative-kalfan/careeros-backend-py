@@ -35,6 +35,19 @@ if not logger.handlers:
 
 
 @register_job(
+    "discover_ats_targets",
+    timeout=180,
+    max_tries=2,
+    retry=True,
+    description="Discover and verify a bounded daily batch of ATS boards.",
+)
+async def discover_ats_targets_job(ctx: dict[str, Any]) -> dict[str, int]:
+    from app.services.jobs.source_discovery import discover_ats_targets
+
+    return await discover_ats_targets(ctx)
+
+
+@register_job(
     "careeros_worker_health",
     timeout=60,
     max_tries=1,

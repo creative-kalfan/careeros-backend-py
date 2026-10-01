@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from app.crawlers.adapters.ashby import AshbyAdapter
+from app.crawlers.errors import BoardNotFoundError
 from app.crawlers.models import CrawledJob
 
 
@@ -38,12 +39,10 @@ async def test_ashby_adapter_real_api():
 
 @pytest.mark.asyncio
 async def test_ashby_adapter_invalid_slug():
-    """Test that invalid slug returns empty list, not exception."""
+    """A missing board is typed so scheduler can retire it after 404s."""
     async with AshbyAdapter("this-slug-definitely-does-not-exist-12345") as adapter:
-        jobs = await adapter.discover_jobs()
-    
-    assert isinstance(jobs, list)
-    assert len(jobs) == 0
+        with pytest.raises(BoardNotFoundError):
+            await adapter.discover_jobs()
 
 
 @pytest.mark.asyncio

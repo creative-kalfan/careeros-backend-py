@@ -7,7 +7,9 @@ from typing import Any, Optional
 
 import httpx
 
+from app.crawlers.ats_http import get_json_response, request_semaphore, timeout_config
 from app.crawlers.base import BaseCrawler
+from app.crawlers.errors import BoardNotFoundError
 from app.crawlers.models import CrawledJob
 
 ASHBY_API = "https://api.ashbyhq.com/posting-api/job-board/{slug}"
@@ -67,10 +69,11 @@ class AshbyAdapter(BaseCrawler):
         self.slug = slug
         self.api_base = api_base
         self._client = client
+        self._semaphore = request_semaphore()
 
     async def __aenter__(self) -> "AshbyAdapter":
         if self._client is None:
-            self._client = httpx.AsyncClient()
+            self._client = httpx.AsyncClient(timeout=timeout_config())
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -80,13 +83,16 @@ class AshbyAdapter(BaseCrawler):
 
     async def discover_jobs(self) -> list[CrawledJob]:
         url = self.api_base.format(slug=self.slug)
-        client = self._client or httpx.AsyncClient()
+        client = self._client or httpx.AsyncClient(timeout=timeout_config())
         owned = self._client is None
         try:
             try:
-                response = await client.get(url, headers={"Accept": "application/json"})
+                async with self._semaphore:
+                    response = await get_json_response(client, url, headers={"Accept": "application/json"})
             except httpx.HTTPError:
-                return []
+                raise
+            if response.status_code == 404:
+                raise BoardNotFoundError(f"Ashby board not found: {self.slug}")
             if response.status_code != 200:
                 return []
             try:
@@ -103,6 +109,8 @@ class AshbyAdapter(BaseCrawler):
             # so no per-job detail fetch is needed.
             jobs = [self._parse_job(raw) for raw in jobs_raw if isinstance(raw, dict)]
             return jobs
+        except (BoardNotFoundError, httpx.HTTPError):
+            raise
         except Exception as e:
             print(f"Error in discover_jobs: {e}")
             return []

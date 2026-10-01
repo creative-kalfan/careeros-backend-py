@@ -18,7 +18,9 @@ from typing import Any, Optional
 
 import httpx
 
+from app.crawlers.ats_http import get_json_response, request_semaphore, timeout_config
 from app.crawlers.base import BaseCrawler
+from app.crawlers.errors import BoardNotFoundError
 from app.crawlers.models import CrawledJob
 from app.services.jobs.india_geography import is_india_job
 
@@ -83,10 +85,11 @@ class GreenhouseAdapter(BaseCrawler):
         self.api_base = api_base
         self._client = client
         self.india_only = india_only
+        self._semaphore = request_semaphore()
 
     async def __aenter__(self) -> "GreenhouseAdapter":
         if self._client is None:
-            self._client = httpx.AsyncClient()
+            self._client = httpx.AsyncClient(timeout=timeout_config())
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -96,19 +99,22 @@ class GreenhouseAdapter(BaseCrawler):
 
     async def discover_jobs(self) -> list[CrawledJob]:
         url = self.api_base.format(slug=self.slug)
-        client = self._client or httpx.AsyncClient()
+        client = self._client or httpx.AsyncClient(timeout=timeout_config())
         owned = self._client is None
         try:
             try:
                 # Greenhouse supports ?content=true to return all jobs WITH full HTML description in one request
-                response = await client.get(
+                async with self._semaphore:
+                    response = await get_json_response(client,
                     url,
                     params={"content": "true"},
                     headers={"Accept": "application/json"},
-                )
+                    )
             except httpx.HTTPError:
-                return []
-            if response.status_code == 404 or response.status_code != 200:
+                raise
+            if response.status_code == 404:
+                raise BoardNotFoundError(f"Greenhouse board not found: {self.slug}")
+            if response.status_code != 200:
                 return []
             try:
                 data = response.json()
@@ -131,13 +137,11 @@ class GreenhouseAdapter(BaseCrawler):
                     if isinstance(raw, dict)
                 ]
             else:
-                semaphore = asyncio.Semaphore(5)
-
                 async def _fetch_one(raw: dict[str, Any]) -> CrawledJob:
                     job_id = raw.get("id")
                     detail = raw
                     if job_id is not None:
-                        async with semaphore:
+                        async with self._semaphore:
                             detail = await self._fetch_detail(client, str(job_id))
                     if not isinstance(detail, dict):
                         detail = {}
@@ -165,7 +169,7 @@ class GreenhouseAdapter(BaseCrawler):
         base = self.api_base.rstrip("/jobs").format(slug=self.slug)
         url = f"{base}/jobs/{job_id}"
         try:
-            response = await client.get(url, headers={"Accept": "application/json"})
+            response = await get_json_response(client, url, headers={"Accept": "application/json"})
             if response.status_code != 200:
                 return None
             data = response.json()

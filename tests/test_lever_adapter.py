@@ -6,6 +6,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.crawlers.adapters.lever import LeverAdapter
+from app.crawlers.errors import BoardNotFoundError
 from app.crawlers.models import CrawledJob
 
 @pytest.mark.asyncio
@@ -28,15 +29,17 @@ async def test_lever_adapter_real_api():
 async def test_lever_adapter_invalid_slug():
     """Test LeverAdapter with invalid slug."""
     async with LeverAdapter("invalid-slug") as adapter:
-        jobs = await adapter.discover_jobs()
-        assert isinstance(jobs, list)
-        assert len(jobs) == 0
+        with pytest.raises(BoardNotFoundError):
+            await adapter.discover_jobs()
 
 @pytest.mark.asyncio
 async def test_lever_adapter_remote_detection():
     """Test LeverAdapter remote detection."""
     async with LeverAdapter("lever-demo") as adapter:
-        jobs = await adapter.discover_jobs()
+        try:
+            jobs = await adapter.discover_jobs()
+        except BoardNotFoundError:
+            pytest.skip("Lever demo board no longer exists")
         for job in jobs:
             if "remote" in job.location.lower():
                 assert job.remote

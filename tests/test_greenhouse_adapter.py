@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from app.crawlers.adapters.greenhouse import GreenhouseAdapter
+from app.crawlers.errors import BoardNotFoundError
 
 REAL_SLUG = "greenhouse"
 MISSING_SLUG = "this-company-definitely-does-not-exist-xyz-99231"
@@ -56,8 +57,8 @@ async def test_real_company_returns_jobs_with_all_fields_populated() -> None:
 @pytest.mark.asyncio
 async def test_missing_company_returns_empty_list_not_exception() -> None:
     async with GreenhouseAdapter(MISSING_SLUG) as ad:
-        jobs = await ad.discover_jobs()
-    assert jobs == []
+        with pytest.raises(BoardNotFoundError):
+            await ad.discover_jobs()
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,9 @@ from typing import Any, Optional
 
 import httpx
 
+from app.crawlers.ats_http import get_json_response, request_semaphore, timeout_config
 from app.crawlers.base import BaseCrawler
+from app.crawlers.errors import BoardNotFoundError
 from app.crawlers.models import CrawledJob
 
 SMARTRECRUITERS_API = "https://api.smartrecruiters.com/v1/companies/{slug}/postings"
@@ -68,10 +70,11 @@ class SmartRecruitersAdapter(BaseCrawler):
         self.slug = slug
         self.api_base = api_base
         self._client = client
+        self._semaphore = request_semaphore()
 
     async def __aenter__(self) -> "SmartRecruitersAdapter":
         if self._client is None:
-            self._client = httpx.AsyncClient()
+            self._client = httpx.AsyncClient(timeout=timeout_config())
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -81,13 +84,16 @@ class SmartRecruitersAdapter(BaseCrawler):
 
     async def discover_jobs(self) -> list[CrawledJob]:
         url = self.api_base.format(slug=self.slug)
-        client = self._client or httpx.AsyncClient()
+        client = self._client or httpx.AsyncClient(timeout=timeout_config())
         owned = self._client is None
         try:
             try:
-                response = await client.get(url, headers={"Accept": "application/json"})
+                async with self._semaphore:
+                    response = await get_json_response(client, url, headers={"Accept": "application/json"})
             except httpx.HTTPError:
-                return []
+                raise
+            if response.status_code == 404:
+                raise BoardNotFoundError(f"SmartRecruiters board not found: {self.slug}")
             if response.status_code != 200:
                 return []
             try:
@@ -102,13 +108,11 @@ class SmartRecruitersAdapter(BaseCrawler):
 
             # List endpoint has minimal data - fetch full details for each job
             # with bounded concurrency (limit 5)
-            semaphore = asyncio.Semaphore(5)
-
             async def _fetch_one(raw: dict[str, Any]) -> CrawledJob:
                 job_id = raw.get("id")
                 detail = raw
                 if job_id is not None:
-                    async with semaphore:
+                    async with self._semaphore:
                         detail = await self._fetch_detail(client, str(job_id))
                 if not isinstance(detail, dict):
                     detail = {}
@@ -119,6 +123,8 @@ class SmartRecruitersAdapter(BaseCrawler):
                 *(_fetch_one(raw) for raw in jobs_raw if isinstance(raw, dict))
             )
             return list(jobs)
+        except (BoardNotFoundError, httpx.HTTPError):
+            raise
         except Exception as e:
             print(f"Error in discover_jobs: {e}")
             return []
@@ -130,7 +136,7 @@ class SmartRecruitersAdapter(BaseCrawler):
         """Fetch full detail (with jobAd content) for a single job."""
         url = f"https://api.smartrecruiters.com/v1/companies/{self.slug}/postings/{job_id}"
         try:
-            response = await client.get(url, headers={"Accept": "application/json"})
+            response = await get_json_response(client, url, headers={"Accept": "application/json"})
             if response.status_code != 200:
                 return None
             data = response.json()
