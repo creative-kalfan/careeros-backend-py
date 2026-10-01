@@ -141,6 +141,7 @@ def _deactivate_after_success(
     cancel_event: Optional[threading.Event] = None,
     timeout_seconds: float = 45.0,
     already_gated: bool = False,
+    miss_threshold: int = 2,
 ) -> tuple[int, int, int, int]:
     """Synchronous post-ingestion deactivation; runs in a worker thread.
 
@@ -159,7 +160,7 @@ def _deactivate_after_success(
     """
     from app.db.supabase import call_serialized, run_gated_persistence
 
-    not_seen_kwargs: dict[str, Any] = {}
+    not_seen_kwargs: dict[str, Any] = {"miss_threshold": miss_threshold}
     stale_kwargs: dict[str, Any] = {}
 
     if source == "firecrawl":
@@ -337,6 +338,14 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             raise ValueError(f"Unknown source: {source}")
 
         provider_ms = int((time.monotonic() - provider_start) * 1000)
+        inserted_ids = getattr(ingestion.job_repository, "last_inserted_ids", [])
+        if not isinstance(inserted_ids, list):
+            inserted_ids = []
+        if not inserted_ids:
+            inserted_ids = result.get("inserted_ids", [])
+        if not isinstance(inserted_ids, list):
+            inserted_ids = []
+        content_hash = getattr(ingestion.job_repository, "last_content_hash", None)
         logger.info(
             "crawl provider_ms=%d phase=discover_normalize source=%s slug=%s "
             "discovered=%d",
@@ -387,6 +396,7 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                         cancel_event,
                         45.0,
                         True,
+                        get_settings().job_miss_threshold,
                     )
                     deact_to_thread_ms = int((time.monotonic() - deact_thread_start) * 1000)
                     deact_async_hold_ms = int((time.monotonic() - deact_hold_start) * 1000)
@@ -400,26 +410,42 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         gate = persistence_gate_snapshot()
         
         logger.info(
-            "CRAWL_FINISHED source=%s slug=%s job_try=%d fetch_ms=%d persist_wait_ms=%d persist_hold_ms=%d total_ms=%d path=%s discovered=%d inserted=%d updated=%d unchanged=%d deactivated=%d rss_mb=%.1f",
+            "CRAWL_FINISHED phase=completed source=%s slug=%s job_try=%d fetch_ms=%d persist_wait_ms=%d persist_hold_ms=%d total_ms=%d path=%s discovered=%d inserted=%d updated=%d unchanged=%d deactivated=%d rss_mb=%.1f",
             source, slug, ctx.get("job_try", 1), provider_ms, result.get("async_wait_ms", 0), result.get("async_hold_ms", 0), int((time.monotonic() - job_start) * 1000), result.get("path", "legacy"), discovered, result.get("inserted", 0), result.get("updated", 0), result.get("unchanged", 0), deactivated_not_seen + deactivated, _get_process_rss_mb()
+        )
+
+        from app.services.jobs.crawl_dispatcher import complete_target
+        await complete_target(
+            source, slug, True,
+            job_count=int(discovered),
+            content_hash=content_hash,
         )
 
         current_phase = "event_dispatch"
         try:
             from app.events import JobIngested, get_event_bus
-            report = await get_event_bus().publish(
-                JobIngested(
-                    aggregate_id=f"{source}:{slug}" if slug else source,
+            for external_id in inserted_ids:
+                await get_event_bus().publish(JobIngested(
+                    aggregate_id=f"{source}:{external_id}",
                     source_platform=source,
-                    jobs_processed=discovered,
-                    metadata={
-                        "inserted": result.get("inserted", 0),
-                        "updated": result.get("updated", 0),
-                        "unchanged": result.get("unchanged", 0),
-                        "deactivated": deactivated_not_seen + deactivated,
-                    },
-                )
-            )
+                    jobs_processed=1,
+                    metadata={"external_job_id": external_id, "inserted": True},
+                ))
+                try:
+                    from app.workers.settings import get_redis_pool
+                    redis = await get_redis_pool()
+                    import hashlib
+                    analysis_id = "analyze:" + hashlib.sha1(f"{source}:{external_id}".encode()).hexdigest()
+                    await redis.enqueue_job("analyze_job_intelligence", external_id, _job_id=analysis_id)
+                except Exception as exc:
+                    logger.warning("new-job analysis enqueue failed (%s)", type(exc).__name__)
+            if not inserted_ids and int(result.get("inserted", 0)) > 0:
+                # Compatibility for alternate repositories without ID side-channel.
+                await get_event_bus().publish(JobIngested(
+                    aggregate_id=f"{source}:{slug}", source_platform=source,
+                    jobs_processed=int(result.get("inserted", 0)),
+                    metadata={"inserted": True, "identity_unavailable": True},
+                ))
         except Exception as exc:
             logger.warning("Event Bus publish failed (non-blocking): %s", exc)
 
@@ -524,6 +550,14 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
     except Exception as exc:
         cancel_event.set()
         duration_ms = int((time.monotonic() - job_start) * 1000)
+        try:
+            from app.services.jobs.crawl_dispatcher import complete_target
+            await complete_target(
+                source, slug, False, error=type(exc).__name__,
+                not_found=type(exc).__name__ == "BoardNotFoundError",
+            )
+        except Exception:
+            logger.warning("crawl target failure update failed", exc_info=True)
         from app.db.supabase import PersistenceTimeoutError
         from arq import Retry
         if isinstance(exc, PersistenceTimeoutError):

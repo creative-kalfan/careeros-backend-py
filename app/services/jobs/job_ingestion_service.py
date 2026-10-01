@@ -7,7 +7,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from app.crawlers.adapters.ashby import AshbyAdapter
 from app.crawlers.adapters.greenhouse import GreenhouseAdapter
@@ -129,7 +129,7 @@ class JobIngestionService:
         slug: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
         timeout_seconds: float = 75.0,
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
         """Run the synchronous Supabase upsert off the event loop with cancellation and timeouts.
 
         ``upsert_jobs`` issues blocking HTTP calls (one bulk existence fetch
@@ -238,14 +238,8 @@ class JobIngestionService:
             int(thread_box.get("db_ms", 0)),
             str(thread_box.get("name", "")),
         )
-        result["persistence_wait_ms"] = sync_wait_delta
-        result["persistence_hold_ms"] = sync_hold_delta
-        result["async_wait_ms"] = async_wait_ms
-        result["async_hold_ms"] = async_hold_ms
-        result["to_thread_ms"] = to_thread_ms
-        result["db_thread_ms"] = int(thread_box.get("db_ms", 0))
-        result["upsert_ms"] = total_ms
-        result["path"] = getattr(self.job_repository, "last_path", "legacy")
+        # Keep the public ingestion result contract count-only. Operational
+        # metrics and insert identity stay on the repository side-channel.
         return result
 
     async def ingest_ashby_jobs(

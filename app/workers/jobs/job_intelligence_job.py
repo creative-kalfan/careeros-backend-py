@@ -47,9 +47,10 @@ async def analyze_job_intelligence_job(ctx: dict[str, Any], job_id: str) -> dict
         job_logger.failed(duration_ms=duration_ms, error_type="JobNotFound")
         return {"success": False, "job_id": job_id, "error": "job not found"}
 
+    canonical_job_id = str(job_row.get("id") or job_id)
     job = NormalizedJob(**job_row)
     try:
-        intelligence = service.analyze_job(job, job_id=job_id)
+        intelligence = service.analyze_job(job, job_id=canonical_job_id)
     except Exception as exc:
         duration_ms = int((time.monotonic() - job_start) * 1000)
         job_logger.failed(duration_ms=duration_ms, error_type=exc.__class__.__name__)
@@ -67,7 +68,7 @@ async def analyze_job_intelligence_job(ctx: dict[str, Any], job_id: str) -> dict
 
     return {
         "success": True,
-        "job_id": job_id,
+        "job_id": canonical_job_id,
         "skills": len(intelligence.skills),
         "requirements": len(intelligence.requirements),
         "keywords": len(intelligence.keywords),

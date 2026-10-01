@@ -203,9 +203,10 @@ class TestWorkerFirecrawlBranch:
             )
 
         assert result["success"] is True
-        ingestion.ingest_generic_career_page.assert_awaited_once_with(
-            careers_url="https://acme.com/careers", company="Acme"
-        )
+        ingestion.ingest_generic_career_page.assert_awaited_once()
+        assert ingestion.ingest_generic_career_page.await_args.kwargs["careers_url"] == "https://acme.com/careers"
+        assert ingestion.ingest_generic_career_page.await_args.kwargs["company"] == "Acme"
+        assert "cancel_event" in ingestion.ingest_generic_career_page.await_args.kwargs
 
     @pytest.mark.asyncio
     async def test_crawl_company_job_firecrawl_requires_careers_url(self):

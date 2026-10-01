@@ -161,7 +161,9 @@ class TestCrawlJobReliability:
                     failures: list[Any] = []
                 return R()
 
-        ingestion = self._patched_ingestion({"discovered": 5, "inserted": 2})
+        ingestion = self._patched_ingestion({
+            "discovered": 5, "inserted": 2, "inserted_ids": ["new-1", "new-2"]
+        })
 
         with patch.object(crawl_jobs, "JobIngestionService", return_value=ingestion), \
              patch("app.events.get_event_bus", return_value=FakeBus()):
@@ -171,12 +173,12 @@ class TestCrawlJobReliability:
         assert result["deactivated"] == 1
         # Empty slug falls back to the default query.
         ingestion.ingest_adzuna_jobs.assert_called_once_with("software engineer")
-        assert len(captured) == 1
-        event, ctx = captured[0]
-        assert type(event).__name__ == "JobIngested"
-        assert event.source_platform == "adzuna"
-        assert event.jobs_processed == 5
-        assert ctx is None  # system-scoped: no user context
+        assert len(captured) == 2
+        for event, ctx in captured:
+            assert type(event).__name__ == "JobIngested"
+            assert event.source_platform == "adzuna"
+            assert event.jobs_processed == 1
+            assert ctx is None  # system-scoped: no user context
 
     def test_failed_crawl_does_not_deactivate_or_publish(self) -> None:
         from app.workers.jobs import crawl_jobs

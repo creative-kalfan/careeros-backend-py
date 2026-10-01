@@ -340,3 +340,27 @@ async def test_concurrent_ingests_distinct_slugs():
 
         assert beta_call["source"] == "ashby"
         assert beta_call["titles"] == ["Designer at Beta"]
+
+        service.job_repository = MagicMock()
+        deactivation_calls: list[dict] = []
+        service.job_repository.deactivate_not_seen_since.side_effect = (
+            lambda **kwargs: deactivation_calls.append(kwargs) or 0
+        )
+        service.job_repository.deactivate_stale_jobs.return_value = 0
+
+        from app.workers.jobs.crawl_jobs import _deactivate_after_success
+
+        await asyncio.gather(
+            asyncio.to_thread(
+                _deactivate_after_success, service, "firecrawl",
+                "Alpha|https://alpha.example.com/careers", "2026-10-01T00:00:00+00:00", 30,
+            ),
+            asyncio.to_thread(
+                _deactivate_after_success, service, "firecrawl",
+                "Beta|https://beta.example.com/careers", "2026-10-01T00:00:00+00:00", 30,
+            ),
+        )
+        assert {(call["company"], call["careers_url"]) for call in deactivation_calls} == {
+            ("Alpha", "https://alpha.example.com/careers"),
+            ("Beta", "https://beta.example.com/careers"),
+        }

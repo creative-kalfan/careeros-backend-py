@@ -92,7 +92,9 @@ def test_stale_record_deactivation():
 
     deactivated = repo.deactivate_stale_jobs(max_age_days=30)
     assert deactivated == 1
-    mock_client.table.return_value.update.assert_called_with({"is_active": False})
+    mock_client.table.return_value.update.assert_called_with(
+        {"is_active": False}, returning="minimal"
+    )
 
 
 def test_india_jobs_priority():

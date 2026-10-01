@@ -76,6 +76,8 @@ _PROBE_CACHE_LAST_SEEN: dict[str, bool] = {}
 _PROBE_CACHE_PROVENANCE: dict[str, bool] = {}
 _PROBE_CACHE_MASS_HIRING: dict[str, bool] = {}
 _PROBE_CACHE_RPC_BATCH: dict[str, bool] = {}
+_PROBE_CACHE_MISS_RPC: dict[str, bool] = {}
+_PROBE_CACHE_RPC_IDS: dict[str, bool] = {}
 
 
 class JobRepository:
@@ -94,6 +96,8 @@ class JobRepository:
         # changing any result-dict contract.
         self._db_requests = 0
         self.last_db_requests = 0
+        self.last_inserted_ids: list[str] = []
+        self.last_content_hash: Optional[str] = None
 
     @property
     def _client(self) -> Client:
@@ -121,6 +125,8 @@ class JobRepository:
         _PROBE_CACHE_PROVENANCE.clear()
         _PROBE_CACHE_MASS_HIRING.clear()
         _PROBE_CACHE_RPC_BATCH.clear()
+        _PROBE_CACHE_MISS_RPC.clear()
+        _PROBE_CACHE_RPC_IDS.clear()
 
     def _probe_has_rpc_batch(self) -> bool:
         """Check whether the bulk upsert/deactivate RPCs exist."""
@@ -489,6 +495,8 @@ class JobRepository:
         cancel_event: Optional[threading.Event] = None,
     ) -> dict[str, int]:
         """Upsert a batch of normalized jobs."""
+        self.last_inserted_ids: list[str] = []
+        self.last_content_hash: str | None = None
         import os
         import json
         if cancel_event is not None and cancel_event.is_set():
@@ -504,6 +512,7 @@ class JobRepository:
         content_hash = None
         if source and slug and not force_full:
             content_hash = self._compute_job_hash(jobs)
+            self.last_content_hash = content_hash
             try:
                 self._db_requests += 1
                 history = self._client.table("crawl_run_history").select("content_hash").eq("source_platform", source).eq("company_slug", slug).order("crawled_at", desc=True).limit(1).execute()
@@ -520,6 +529,7 @@ class JobRepository:
                     
                     self.last_path = "unchanged"
                     self.last_db_requests = self._db_requests
+                    self.last_content_hash = content_hash
                     return {
                         "discovered": len(jobs),
                         "inserted": 0,
@@ -532,6 +542,7 @@ class JobRepository:
                 logger.warning(f"Failed to check crawl history for {source}:{slug}: {e}")
 
         inserted = 0
+        inserted_ids: list[str] = []
         updated = 0
         unchanged = 0
         deduplicated = 0
@@ -558,6 +569,20 @@ class JobRepository:
             pending.append((key, row))
             
         if has_rpc_batch:
+            prechecked_new_ids: list[str] = []
+            probe_key = self._probe_key(self._client)
+            rpc_ids_supported = _PROBE_CACHE_RPC_IDS.get(probe_key) is True
+            if not rpc_ids_supported:
+                grouped_ids: dict[str, list[str]] = {}
+                for (external_id, platform), _row in pending:
+                    grouped_ids.setdefault(platform, []).append(external_id)
+                for platform, ids in grouped_ids.items():
+                    present = self._find_many_by_identity(platform, ids, cancel_event=cancel_event)
+                    prechecked_new_ids.extend(
+                        external_id for external_id in ids
+                        if (external_id, platform) not in present
+                    )
+                logger.warning("upsert RPC lacks inserted_ids; using pre-check fallback")
             # RPC path
             json_rows = [row for _, row in pending]
             for start in range(0, len(json_rows), _UPSERT_WRITE_CHUNK):
@@ -571,6 +596,11 @@ class JobRepository:
                         inserted += res.data.get("inserted", 0)
                         updated += res.data.get("updated", 0)
                         unchanged += res.data.get("unchanged", 0)
+                        if isinstance(res.data.get("inserted_ids"), list):
+                            rpc_ids_supported = True
+                            inserted_ids.extend(res.data["inserted_ids"])
+                        else:
+                            rpc_ids_supported = False
                 except Exception as exc:
                     logger.warning("RPC upsert_jobs_batch failed, falling back to legacy: %s", exc)
                     # Safe fallback... we can just set has_rpc_batch = False for the rest of this request
@@ -578,6 +608,10 @@ class JobRepository:
                     # The prompt says: "if not, fall back to the current per-row path so deploying before the migration is applied does not break crawling. Log which path was used."
                     # We already probed, so if it fails here, it's a real error. Let's raise.
                     raise
+
+            _PROBE_CACHE_RPC_IDS[probe_key] = rpc_ids_supported
+            if not rpc_ids_supported:
+                inserted_ids.extend(prechecked_new_ids[:inserted])
             
             if source and slug and content_hash:
                 try:
@@ -592,6 +626,8 @@ class JobRepository:
                 except Exception as e:
                     logger.warning(f"Failed to record crawl history for {source}:{slug}: {e}")
                     
+            self.last_inserted_ids = inserted_ids
+            self.last_content_hash = content_hash
             self.last_path = "rpc"
             self.last_db_requests = self._db_requests
             return {
@@ -662,6 +698,7 @@ class JobRepository:
                 self._db_requests += 1
                 self._client.table("jobs").insert(chunk, returning="minimal").execute()
                 inserted += len(chunk)
+                inserted_ids.extend(key[0] for key in chunk_keys)
             except APIError as exc:
                 args = str(getattr(exc, "args", ""))
                 code = str(getattr(exc, "code", "") or "")
@@ -673,6 +710,7 @@ class JobRepository:
                     outcome = self._upsert_single(key, row, now_iso, has_last_seen)
                     if outcome == "inserted":
                         inserted += 1
+                        inserted_ids.append(key[0])
                     elif outcome == "updated":
                         updated += 1
                     elif outcome == "deduplicated":
@@ -716,6 +754,7 @@ class JobRepository:
             outcome = self._upsert_single(key, row, now_iso, has_last_seen)
             if outcome == "inserted":
                 inserted += 1
+                inserted_ids.append(key[0])
             elif outcome == "updated":
                 updated += 1
             elif outcome == "deduplicated":
@@ -738,6 +777,8 @@ class JobRepository:
 
         self.last_path = "legacy"
         self.last_db_requests = self._db_requests
+        self.last_inserted_ids = inserted_ids
+        self.last_content_hash = content_hash
         return {
             "discovered": len(jobs),
             "inserted": inserted,
@@ -869,6 +910,7 @@ class JobRepository:
         careers_url: Optional[str] = None,
         company: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
+        miss_threshold: int = 2,
     ) -> int:
         """Deactivate active jobs from a source NOT observed since ``since_iso``.
 
@@ -894,38 +936,69 @@ class JobRepository:
         if not self._probe_has_last_seen_at():
             return 0
 
-        self._db_requests = 0
-        query = (
-            self._client.table("jobs")
-            .select("id")
-            .eq("is_active", True)
-            .eq("source_platform", source_platform)
-            .lt("last_seen_at", since_iso)
-        )
-        if careers_url:
-            query = query.eq("careers_url", careers_url)
-        if company:
-            query = query.eq("company", company)
-
-        try:
-            self._db_requests += 1
-            result = query.execute()
-        except APIError:
-            logger.warning("deactivate_not_seen_since: query failed", exc_info=True)
-            return 0
-
-        ids = [
-            row["id"] for row in (result.data or [])
-            if isinstance(row, dict) and row.get("id")
-        ]
-        count = self._bulk_set_inactive(ids, what="deactivate_not_seen_since", cancel_event=cancel_event)
-        if count:
-            logger.info(
-                "deactivate_not_seen_since: %d rows deactivated (source=%s company=%s since=%s careers_url=%s)",
-                count, source_platform, company or "-", since_iso, careers_url or "-",
+        key = self._probe_key(self._client)
+        has_miss_rpc = _PROBE_CACHE_MISS_RPC.get(key)
+        if has_miss_rpc is None:
+            try:
+                probe = self._client.rpc("deactivate_unseen_jobs_batch", {
+                    "p_source": "__schema_probe__", "p_company": None,
+                    "p_careers_url": None, "p_since": "2999-01-01T00:00:00+00:00",
+                    "p_threshold": 2,
+                }).execute()
+                # PostgREST scalar RPC returns an integer. Treat mock/invalid
+                # responses as unavailable so legacy clients keep fallback.
+                has_miss_rpc = isinstance(getattr(probe, "data", None), (int, float))
+            except Exception:
+                has_miss_rpc = False
+            _PROBE_CACHE_MISS_RPC[key] = has_miss_rpc
+        if not has_miss_rpc:
+            logger.warning("deactivate_unseen_jobs_batch RPC unavailable; using legacy one-crawl deactivation")
+            self._db_requests = 0
+            query = (
+                self._client.table("jobs")
+                .select("id")
+                .eq("is_active", True)
+                .eq("source_platform", source_platform)
+                .lt("last_seen_at", since_iso)
             )
-        self.last_db_requests = self._db_requests
-        return count
+            if careers_url:
+                query = query.eq("careers_url", careers_url)
+            if company:
+                query = query.eq("company", company)
+            try:
+                self._db_requests += 1
+                result = query.execute()
+                stale_ids = [row["id"] for row in (result.data or []) if row.get("id")]
+                count = self._bulk_set_inactive(
+                    stale_ids, what="deactivate_not_seen_since", cancel_event=cancel_event
+                )
+                self.last_db_requests = self._db_requests
+                return count
+            except APIError:
+                logger.warning("legacy deactivate_not_seen_since failed", exc_info=True)
+                return 0
+
+        # Migration 025 owns the consecutive-success threshold. If absent,
+        # skip this destructive reconciliation and keep age-based expiry.
+        try:
+            self._db_requests = 0
+            self._db_requests += 1
+            result = self._client.rpc("deactivate_unseen_jobs_batch", {
+                "p_source": source_platform,
+                "p_company": company,
+                "p_careers_url": careers_url,
+                "p_since": since_iso,
+                "p_threshold": max(1, miss_threshold),
+            }).execute()
+            self.last_db_requests = self._db_requests
+            return int(result.data or 0)
+        except Exception as exc:
+            logger.warning(
+                "deactivate_unseen_jobs_batch unavailable; skipping not-seen deactivation (%s)",
+                type(exc).__name__,
+            )
+            self.last_db_requests = self._db_requests
+            return 0
 
     def count_active(self) -> int:
         """Return the number of active jobs."""
