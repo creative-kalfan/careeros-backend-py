@@ -26,6 +26,7 @@ class NormalizedJob(BaseModel):
     id: Optional[str] = None
     external_job_id: Optional[str] = None
     source_platform: Optional[str] = None
+    crawl_target_slug: Optional[str] = None
 
     # Core content
     title: str
@@ -183,6 +184,7 @@ class NormalizedJob(BaseModel):
             "mass_hiring",
             "mass_hiring_status",
             "mass_hiring_details",
+            "crawl_target_slug",
         }
     )
 
@@ -232,5 +234,6 @@ class NormalizedJob(BaseModel):
             "mass_hiring": self.mass_hiring,
             "mass_hiring_status": self.mass_hiring_status,
             "mass_hiring_details": self.mass_hiring_details,
+            "crawl_target_slug": self.crawl_target_slug,
         }
         return {k: v for k, v in row.items() if k in self._DB_COLUMNS and v is not None}

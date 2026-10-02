@@ -171,8 +171,14 @@ def _deactivate_after_success(
         if company:
             not_seen_kwargs["company"] = company
             stale_kwargs["company"] = company
+        if slug:
+            not_seen_kwargs["slug"] = slug
+            stale_kwargs["slug"] = slug
     elif source in ("ashby", "greenhouse", "lever", "smartrecruiters"):
-        # Single-board ATS sources: scope reconciliation to this company
+        # Single-board ATS sources: scope reconciliation to this company & slug
+        if slug:
+            not_seen_kwargs["slug"] = slug
+            stale_kwargs["slug"] = slug
         company = _resolve_company_scope(source, slug)
         if company:
             not_seen_kwargs["company"] = company
@@ -365,7 +371,9 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                 .eq("is_active", True)
                 .eq("source_platform", source)
             )
-            if source == "firecrawl":
+            if slug and source in ("ashby", "greenhouse", "lever", "smartrecruiters", "firecrawl"):
+                prev_active_query = prev_active_query.eq("crawl_target_slug", slug)
+            elif source == "firecrawl":
                 comp_part, _, url_part = slug.partition("|")
                 if comp_part:
                     prev_active_query = prev_active_query.ilike("company", comp_part)
@@ -378,6 +386,28 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             prev_active_res = prev_active_query.execute()
             count_val = getattr(prev_active_res, "count", 0)
             prev_active_count = int(count_val) if isinstance(count_val, (int, float)) else 0
+            if prev_active_count == 0 and slug and source in ("ashby", "greenhouse", "lever", "smartrecruiters", "firecrawl"):
+                # Fallback to legacy company/url scope if crawl_target_slug has no matches (un-backfilled rows)
+                fallback_query = (
+                    ingestion.job_repository._client.table("jobs")
+                    .select("id", count="exact")
+                    .eq("is_active", True)
+                    .eq("source_platform", source)
+                )
+                if source == "firecrawl":
+                    comp_part, _, url_part = slug.partition("|")
+                    if comp_part:
+                        fallback_query = fallback_query.ilike("company", comp_part)
+                    if url_part:
+                        fallback_query = fallback_query.eq("careers_url", url_part)
+                else:
+                    comp = _resolve_company_scope(source, slug)
+                    if comp:
+                        fallback_query = fallback_query.ilike("company", comp)
+                fallback_res = fallback_query.execute()
+                fallback_val = getattr(fallback_res, "count", 0)
+                if isinstance(fallback_val, (int, float)) and fallback_val > 0:
+                    prev_active_count = int(fallback_val)
         except Exception:
             prev_active_count = 0
             
@@ -470,6 +500,7 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                             chunk,
                             _job_id=batch_job_id,
                             _defer_by=jitter_sec,
+                            _queue_name=settings.analysis_queue_name,
                         )
                 except Exception as exc:
                     logger.warning("batch analysis enqueue failed (%s)", type(exc).__name__)

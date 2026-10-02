@@ -33,6 +33,7 @@ _CONTENT_FIELDS = (
     "role_category", "application_deadline", "employment_type",
     "salary_min", "salary_max", "skills", "experience_level", "remote",
     "mass_hiring", "mass_hiring_status", "mass_hiring_details",
+    "crawl_target_slug",
 )
 
 _MASS_HIRING_FIELDS = ("mass_hiring", "mass_hiring_status", "mass_hiring_details")
@@ -560,7 +561,11 @@ class JobRepository:
                 deduplicated += 1
                 continue
             seen_keys.add(key)
+            if slug and not getattr(job, "crawl_target_slug", None):
+                job.crawl_target_slug = slug
             row = job.to_db_row()
+            if slug and not row.get("crawl_target_slug"):
+                row["crawl_target_slug"] = slug
             if not has_mass_hiring:
                 for f in _MASS_HIRING_FIELDS:
                     row.pop(f, None)
@@ -798,6 +803,7 @@ class JobRepository:
         max_age_days: int = 30,
         company: Optional[str] = None,
         careers_url: Optional[str] = None,
+        slug: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
     ) -> int:
         """Deactivate active jobs from a source that are no longer fresh."""
@@ -830,14 +836,19 @@ class JobRepository:
             .select("id, posted_at, last_seen_at")
             .eq("is_active", True)
         )
-        if source_platform in ("firecrawl", "ashby", "greenhouse", "lever", "smartrecruiters") and not company and not careers_url:
-            logger.warning("Refusing unscoped stale deactivation for multi-company source %s", source_platform)
+        if source_platform in ("firecrawl", "ashby", "greenhouse", "lever", "smartrecruiters") and not company and not careers_url and not slug:
+            logger.warning(
+                "Refusing unscoped stale deactivation for multi-company source %s (slug=%s)",
+                source_platform, slug
+            )
             return 0
         if source_platform:
             query = query.eq("source_platform", source_platform)
-        if company:
+        if slug:
+            query = query.eq("crawl_target_slug", slug)
+        elif company:
             query = query.ilike("company", company)
-        if careers_url:
+        if not slug and careers_url:
             query = query.eq("careers_url", careers_url)
 
         try:
@@ -912,6 +923,7 @@ class JobRepository:
         since_iso: str,
         careers_url: Optional[str] = None,
         company: Optional[str] = None,
+        slug: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
         miss_threshold: int = 2,
     ) -> int:
@@ -957,8 +969,11 @@ class JobRepository:
         if not has_miss_rpc:
             logger.warning("deactivate_unseen_jobs_batch RPC unavailable; using legacy one-crawl deactivation")
             self._db_requests = 0
-            if source_platform in ("firecrawl", "ashby", "greenhouse", "lever", "smartrecruiters") and not company and not careers_url:
-                logger.warning("Refusing unscoped not-seen deactivation for multi-company source %s", source_platform)
+            if source_platform in ("firecrawl", "ashby", "greenhouse", "lever", "smartrecruiters") and not company and not careers_url and not slug:
+                logger.warning(
+                    "Refusing unscoped not-seen deactivation for multi-company source %s (slug=%s)",
+                    source_platform, slug
+                )
                 return 0
             query = (
                 self._client.table("jobs")
@@ -967,9 +982,11 @@ class JobRepository:
                 .eq("source_platform", source_platform)
                 .lt("last_seen_at", since_iso)
             )
-            if careers_url:
+            if slug:
+                query = query.eq("crawl_target_slug", slug)
+            elif careers_url:
                 query = query.eq("careers_url", careers_url)
-            if company:
+            if not slug and company:
                 query = query.ilike("company", company)
             try:
                 self._db_requests += 1
@@ -981,7 +998,10 @@ class JobRepository:
                 self.last_db_requests = self._db_requests
                 return count
             except APIError:
-                logger.warning("legacy deactivate_not_seen_since failed", exc_info=True)
+                logger.warning(
+                    "legacy deactivate_not_seen_since failed source=%s slug=%s",
+                    source_platform, slug, exc_info=True
+                )
                 return 0
 
         # Migration 025 owns the consecutive-success threshold. If absent,
@@ -989,19 +1009,29 @@ class JobRepository:
         try:
             self._db_requests = 0
             self._db_requests += 1
-            result = self._client.rpc("deactivate_unseen_jobs_batch", {
+            rpc_params = {
                 "p_source": source_platform,
                 "p_company": company,
                 "p_careers_url": careers_url,
                 "p_since": since_iso,
                 "p_threshold": max(1, miss_threshold),
-            }).execute()
+            }
+            if slug is not None:
+                rpc_params["p_slug"] = slug
+            try:
+                result = self._client.rpc("deactivate_unseen_jobs_batch", rpc_params).execute()
+            except Exception:
+                if "p_slug" in rpc_params:
+                    rpc_params.pop("p_slug")
+                    result = self._client.rpc("deactivate_unseen_jobs_batch", rpc_params).execute()
+                else:
+                    raise
             self.last_db_requests = self._db_requests
             return int(result.data or 0)
         except Exception as exc:
             logger.warning(
-                "deactivate_unseen_jobs_batch unavailable; skipping not-seen deactivation (%s)",
-                type(exc).__name__,
+                "deactivate_unseen_jobs_batch unavailable; skipping not-seen deactivation (%s) source=%s slug=%s",
+                type(exc).__name__, source_platform, slug,
             )
             self.last_db_requests = self._db_requests
             return 0
