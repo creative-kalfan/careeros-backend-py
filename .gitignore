@@ -23,3 +23,4 @@ server.*
 # Ephemeral visual-debug outputs (regenerated scratch, never baselines)
 tests/artifacts/**/*_BEFORE.png
 tests/artifacts/**/*_AFTER*.png
+firecrawl_ats_overlap_report.json
