@@ -202,7 +202,9 @@ async def test_stale_deactivation_guard_zero_discovered():
             mock_client = MagicMock()
             res = MagicMock()
             res.count = 25  # previously 25 active jobs
-            mock_client.table().select().eq().eq().execute.return_value = res
+            q = mock_client.table().select().eq().eq()
+            q.execute.return_value = res
+            q.ilike.return_value.execute.return_value = res
             instance.job_repository._client = mock_client
 
             res_job = await crawl_company_job(ctx, "ashby", "acme")
@@ -221,7 +223,9 @@ async def test_stale_deactivation_guard_partial_drop():
             mock_client = MagicMock()
             res = MagicMock()
             res.count = 20
-            mock_client.table().select().eq().eq().execute.return_value = res
+            q = mock_client.table().select().eq().eq()
+            q.execute.return_value = res
+            q.ilike.return_value.execute.return_value = res
             instance.job_repository._client = mock_client
 
             res_job = await crawl_company_job(ctx, "ashby", "acme")

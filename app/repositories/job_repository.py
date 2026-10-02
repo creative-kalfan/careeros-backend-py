@@ -830,10 +830,13 @@ class JobRepository:
             .select("id, posted_at, last_seen_at")
             .eq("is_active", True)
         )
+        if source_platform in ("firecrawl", "ashby", "greenhouse", "lever", "smartrecruiters") and not company and not careers_url:
+            logger.warning("Refusing unscoped stale deactivation for multi-company source %s", source_platform)
+            return 0
         if source_platform:
             query = query.eq("source_platform", source_platform)
         if company:
-            query = query.eq("company", company)
+            query = query.ilike("company", company)
         if careers_url:
             query = query.eq("careers_url", careers_url)
 
@@ -954,6 +957,9 @@ class JobRepository:
         if not has_miss_rpc:
             logger.warning("deactivate_unseen_jobs_batch RPC unavailable; using legacy one-crawl deactivation")
             self._db_requests = 0
+            if source_platform in ("firecrawl", "ashby", "greenhouse", "lever", "smartrecruiters") and not company and not careers_url:
+                logger.warning("Refusing unscoped not-seen deactivation for multi-company source %s", source_platform)
+                return 0
             query = (
                 self._client.table("jobs")
                 .select("id")
@@ -964,7 +970,7 @@ class JobRepository:
             if careers_url:
                 query = query.eq("careers_url", careers_url)
             if company:
-                query = query.eq("company", company)
+                query = query.ilike("company", company)
             try:
                 self._db_requests += 1
                 result = query.execute()
@@ -1147,6 +1153,43 @@ class JobRepository:
             return rows[0] if rows else None
         except Exception:
             return None
+
+    def diagnose_job_missing(self, job_id: str) -> str:
+        """Diagnose why get_job(job_id) returned None.
+
+        Returns one of:
+            - 'inactive': row exists in jobs, but is_active=False
+            - 'ambiguous_source': multiple active or inactive rows exist with this external_job_id across different platforms
+            - 'missing': no row exists in jobs with this id or external_job_id
+        """
+        try:
+            # Check by primary key UUID
+            try:
+                res_id = self._client.table("jobs").select("id, is_active, source_platform").eq("id", job_id).execute()
+                rows_id = res_id.data or []
+                if rows_id:
+                    if not rows_id[0].get("is_active"):
+                        return "inactive"
+                    return "missing"
+            except Exception:
+                pass
+
+            # Check by external_job_id
+            res_ext = self._client.table("jobs").select("id, is_active, source_platform").eq("external_job_id", job_id).execute()
+            rows_ext = res_ext.data or []
+            if not rows_ext:
+                return "missing"
+
+            platforms = {r.get("source_platform") for r in rows_ext if r.get("source_platform")}
+            if len(platforms) > 1:
+                return "ambiguous_source"
+
+            if any(not r.get("is_active") for r in rows_ext):
+                return "inactive"
+
+            return "missing"
+        except Exception:
+            return "missing"
 
     def get_priority_candidates(
         self,
