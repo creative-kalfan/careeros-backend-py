@@ -29,18 +29,22 @@ async def _get_redis() -> ArqRedis:
 async def enqueue(
     job_name: str,
     *args: Any,
+    _defer_by: Optional[int] = None,
     _defer_until: Optional[Any] = None,
     timeout: Optional[int] = None,
     _defer: Optional[int] = None,
+    _queue_name: Optional[str] = None,
 ) -> Optional[str]:
     """Enqueue a CareerOS background job.
 
     Args:
         job_name: Registered job name (see ``app.workers.registry``).
         *args: Positional payload arguments forwarded to the job callable.
+        _defer_by: Defer execution by N seconds (passed to ARQ as ``_defer_by``).
         _defer_until: Schedule the job to run after a given UNIX timestamp.
         timeout: Override the default timeout for this enqueue (seconds).
-        _defer: Defer execution by N seconds (passed to ARQ as ``_defer_by``).
+        _defer: Legacy alias for ``_defer_by``.
+        _queue_name: Target ARQ queue name.
 
     Returns:
         The ARQ ``job_id`` string, or ``None`` if enqueue failed.
@@ -53,17 +57,25 @@ async def enqueue(
     job_kwargs: dict[str, Any] = {}
     if _defer_until is not None:
         job_kwargs["_defer_until"] = _defer_until
-    if _defer is not None:
-        job_kwargs["_defer_by"] = _defer
+    effective_defer_by = _defer_by if _defer_by is not None else _defer
+    if effective_defer_by is not None:
+        job_kwargs["_defer_by"] = effective_defer_by
     if timeout is not None:
         job_kwargs["timeout"] = timeout
+
+    from app.config import get_settings as _get_settings
+    target_queue = _queue_name
+    if not target_queue and job_name in ("analyze_job_intelligence", "analyze_jobs_batch"):
+        target_queue = _get_settings().analysis_queue_name
+    if target_queue:
+        job_kwargs["_queue_name"] = target_queue
 
     job = await redis.enqueue_job(job_name, *args, **job_kwargs)
     if job is None:
         logger.error("Failed to enqueue job_name=%s", job_name)
         return None
 
-    logger.info("Enqueued job_name=%s job_id=%s", job_name, job.job_id)
+    logger.info("Enqueued job_name=%s job_id=%s queue=%s", job_name, job.job_id, target_queue or "default")
     return job.job_id
 
 
@@ -78,7 +90,11 @@ async def enqueue_resume_parse(resume_id: str, user_id: str, storage_path: str) 
 
 
 async def enqueue_crawl_company(
-    source: str, slug: str, _defer: Optional[int] = None
+    source: str,
+    slug: str,
+    _defer_by: Optional[int] = None,
+    _defer_until: Optional[Any] = None,
+    _defer: Optional[int] = None,
 ) -> Optional[str]:
     """Enqueue a job-crawling job, with a simple Redis concurrency lock.
 
@@ -99,8 +115,11 @@ async def enqueue_crawl_company(
         return None
 
     job_kwargs: dict[str, Any] = {}
-    if _defer is not None and _defer > 0:
-        job_kwargs["_defer_by"] = _defer
+    effective_defer = _defer_by if _defer_by is not None else _defer
+    if effective_defer is not None and effective_defer > 0:
+        job_kwargs["_defer_by"] = effective_defer
+    if _defer_until is not None:
+        job_kwargs["_defer_until"] = _defer_until
     job_kwargs["_job_id"] = job_id
 
     try:

@@ -36,6 +36,8 @@ _settings = get_settings()
 _crawl_runner = None
 _dispatcher_task: asyncio.Task | None = None
 _health_server: asyncio.Server | None = None
+_analysis_worker: Worker | None = None
+_analysis_worker_task: asyncio.Task | None = None
 
 
 def normalize_redis_dsn(dsn: str) -> str:
@@ -120,6 +122,29 @@ async def worker_startup(ctx: dict[str, Any]) -> None:
         from app.services.jobs.crawl_dispatcher import dispatcher_loop
         _dispatcher_task = asyncio.create_task(dispatcher_loop(ctx), name="crawl-dispatcher")
 
+    if settings.worker_consume_analysis_queue and settings.analysis_queue_name != getattr(WorkerSettings, "queue_name", "arq:queue"):
+        try:
+            analysis_funcs = [
+                func(analyze_job_intelligence_job, name="analyze_job_intelligence", timeout=300, max_tries=2),
+                func(analyze_jobs_batch, name="analyze_jobs_batch", timeout=300, max_tries=2),
+            ]
+            global _analysis_worker, _analysis_worker_task
+            _analysis_worker = Worker(
+                functions=analysis_funcs,
+                queue_name=settings.analysis_queue_name,
+                redis_pool=ctx.get("redis"),
+                redis_settings=redis_settings,
+                max_jobs=max(1, settings.persistence_max_concurrency),
+                poll_delay=settings.arq_poll_delay,
+                job_timeout=300,
+                keep_result=5,
+                retry_jobs=True,
+            )
+            _analysis_worker_task = asyncio.create_task(_analysis_worker.main(), name="analysis-worker")
+            logger.info("analysis worker loop started queue=%s", settings.analysis_queue_name)
+        except Exception as exc:
+            logger.warning("Failed to start embedded analysis worker loop (%s)", exc)
+
     if settings.worker_http_health:
         async def health(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             try:
@@ -139,7 +164,20 @@ async def worker_startup(ctx: dict[str, Any]) -> None:
 
 async def worker_shutdown(ctx: dict[str, Any]) -> None:
     """Stop scheduler, dispatcher, and optional health listener."""
-    global _crawl_runner, _dispatcher_task, _health_server
+    global _crawl_runner, _dispatcher_task, _health_server, _analysis_worker, _analysis_worker_task
+    if _analysis_worker_task is not None:
+        _analysis_worker_task.cancel()
+        try:
+            await _analysis_worker_task
+        except asyncio.CancelledError:
+            pass
+        _analysis_worker_task = None
+    if _analysis_worker is not None:
+        try:
+            await _analysis_worker.close()
+        except Exception:
+            pass
+        _analysis_worker = None
     if _dispatcher_task is not None:
         _dispatcher_task.cancel()
         try:
@@ -165,6 +203,28 @@ class WorkerSettings:
     redis_settings = redis_settings
     on_startup = worker_startup
     on_shutdown = worker_shutdown
+    job_timeout = 300
+    keep_result = 5
+    max_jobs = max(1, _settings.persistence_max_concurrency)
+    poll_delay = _settings.arq_poll_delay
+    health_check_interval = 3600
+    retry_jobs = True
+
+
+class AnalysisWorkerSettings:
+    """Dedicated worker configuration for intelligence analysis jobs.
+
+    Run via: `arq app.workers.settings.AnalysisWorkerSettings`
+    Consumes ONLY the analysis queue (env ANALYSIS_QUEUE_NAME, default 'arq:queue:analysis').
+    When a dedicated analysis worker process is running, set
+    `WORKER_CONSUME_ANALYSIS_QUEUE=false` on the crawl worker.
+    """
+    functions = [
+        func(analyze_job_intelligence_job, name="analyze_job_intelligence", timeout=300, max_tries=2),
+        func(analyze_jobs_batch, name="analyze_jobs_batch", timeout=300, max_tries=2),
+    ]
+    redis_settings = redis_settings
+    queue_name = _settings.analysis_queue_name
     job_timeout = 300
     keep_result = 5
     max_jobs = max(1, _settings.persistence_max_concurrency)

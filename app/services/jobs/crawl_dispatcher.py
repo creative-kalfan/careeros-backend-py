@@ -318,13 +318,104 @@ async def complete_target(
         logger.warning("crawl target completion unavailable (%s)", type(exc).__name__)
 
 
+async def backfill_missing_intelligence(ctx: dict[str, Any]) -> int:
+    """Analyze active jobs missing intelligence fields, bounded per tick."""
+    import hashlib
+    import random
+    from app.workers.dispatcher import _get_redis
+
+    settings = get_settings()
+    limit = max(0, int(settings.analysis_backfill_limit_per_tick))
+    if limit <= 0:
+        return 0
+
+    missing_jobs: list[dict[str, Any]] = []
+    # 1. Try RPC from migration 028
+    try:
+        data = await asyncio.to_thread(_rpc, "get_active_jobs_missing_intelligence", {"p_limit": limit})
+        if isinstance(data, list):
+            missing_jobs = data
+    except Exception:
+        missing_jobs = []
+
+    # 2. Fallback to direct client query if RPC unavailable
+    if not missing_jobs:
+        try:
+            client = get_service_client()
+            res = await asyncio.to_thread(
+                lambda: client.table("jobs")
+                .select("id, external_job_id")
+                .eq("is_active", True)
+                .order("created_at", desc=True)
+                .limit(limit * 3)
+                .execute()
+            )
+            candidates = res.data or []
+            cand_ids = [c["id"] for c in candidates if c.get("id")]
+            if cand_ids:
+                intel_res = await asyncio.to_thread(
+                    lambda: client.table("job_intelligence")
+                    .select("job_id")
+                    .in_("job_id", cand_ids)
+                    .execute()
+                )
+                existing_ids = {r["job_id"] for r in (intel_res.data or []) if r.get("job_id")}
+                missing_jobs = [c for c in candidates if c["id"] not in existing_ids][:limit]
+        except Exception as exc:
+            logger.warning("backfill candidate lookup failed (%s)", type(exc).__name__)
+            return 0
+
+    if not missing_jobs:
+        return 0
+
+    job_ids = [
+        str(m.get("id") or m.get("external_job_id"))
+        for m in missing_jobs
+        if m.get("id") or m.get("external_job_id")
+    ]
+    if not job_ids:
+        return 0
+
+    chunk_size = max(1, int(settings.analysis_batch_chunk_size))
+    redis = await _get_redis()
+    enqueued = 0
+    now_ts = int(time.time())
+
+    for chunk_idx, i in enumerate(range(0, len(job_ids), chunk_size)):
+        chunk = job_ids[i:i + chunk_size]
+        chunk_hash = hashlib.sha1(":".join(chunk).encode()).hexdigest()[:8]
+        batch_job_id = f"analyze_backfill:{now_ts}:{chunk_idx}:{chunk_hash}"
+        jitter_sec = int(chunk_idx * 2 + random.uniform(1, 3))
+        try:
+            await redis.enqueue_job(
+                "analyze_jobs_batch",
+                chunk,
+                _job_id=batch_job_id,
+                _defer_by=jitter_sec,
+                _queue_name=settings.analysis_queue_name,
+            )
+            enqueued += len(chunk)
+        except Exception as exc:
+            logger.warning("backfill analysis enqueue chunk failed (%s)", type(exc).__name__)
+
+    if enqueued > 0:
+        logger.info(
+            "BACKFILL_ANALYSIS enqueued=%d chunks=%d queue=%s",
+            enqueued,
+            (len(job_ids) + chunk_size - 1) // chunk_size,
+            settings.analysis_queue_name,
+        )
+    return enqueued
+
+
 async def dispatcher_loop(ctx: dict[str, Any]) -> None:
-    """Run crawl dispatch and hourly SLO/heartbeat checks until cancelled."""
+    """Run crawl dispatch, periodic intelligence backfill, and hourly checks until cancelled."""
     settings = get_settings()
     last_slo = 0.0
     last_discovery_date = ""
     while True:
         await dispatch_due_targets(ctx)
+        await backfill_missing_intelligence(ctx)
         now = asyncio.get_running_loop().time()
         if now - last_slo >= 3600:
             await check_crawl_slo()

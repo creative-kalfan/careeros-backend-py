@@ -203,6 +203,15 @@ class Settings(BaseSettings):
     firecrawl_min_interval_hours: int = Field(
         default=72, alias="FIRECRAWL_MIN_INTERVAL_HOURS"
     )
+    analysis_queue_name: str = Field(
+        default="arq:queue:analysis", alias="ANALYSIS_QUEUE_NAME"
+    )
+    analysis_backfill_limit_per_tick: int = Field(
+        default=50, alias="ANALYSIS_BACKFILL_LIMIT_PER_TICK"
+    )
+    worker_consume_analysis_queue: bool = Field(
+        default=True, alias="WORKER_CONSUME_ANALYSIS_QUEUE"
+    )
 
 
 @lru_cache
