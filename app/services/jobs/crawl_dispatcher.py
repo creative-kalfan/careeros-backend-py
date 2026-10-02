@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
@@ -16,6 +17,7 @@ from app.db.supabase import get_service_client
 
 logger = logging.getLogger(__name__)
 _migration_available: bool | None = None
+_migration_probed_at: float = 0.0
 
 
 def adaptive_interval_minutes(
@@ -45,15 +47,55 @@ def _rpc(name: str, params: dict[str, Any]) -> Any:
     return get_service_client().rpc(name, params).execute().data
 
 
+def _reset_migration_probe() -> None:
+    """Clear the cached migration probe result so the next check re-probes."""
+    global _migration_available, _migration_probed_at
+    _migration_available = None
+    _migration_probed_at = 0.0
+
+
 def _migration_probe() -> bool:
-    global _migration_available
-    if _migration_available is None:
-        try:
-            get_service_client().table("crawl_targets").select("id").limit(0).execute()
-            _migration_available = True
-        except Exception as exc:
-            _migration_available = False
-            logger.warning("crawl_targets migration unavailable; DB dispatcher disabled (%s)", type(exc).__name__)
+    """Report whether the crawl_targets table (migration 025) is usable.
+
+    The result is cached, but re-probed once it is older than
+    ``settings.migration_probe_recheck_seconds`` so that applying migration 025
+    after a deploy restores dispatch without a process restart. A cached value of
+    ``None`` always forces a fresh probe.
+    """
+    global _migration_available, _migration_probed_at
+
+    recheck = max(int(get_settings().migration_probe_recheck_seconds), 0)
+    fresh = _migration_available is not None and (time.monotonic() - _migration_probed_at) < recheck
+    if fresh:
+        if not _migration_available:
+            logger.critical(
+                "crawl_targets migration 025 is still unavailable; DB crawl dispatch is "
+                "DISABLED (no crawl targets will be dispatched). Apply migration 025 to "
+                "restore dispatch; the probe retries every %ss.",
+                recheck,
+            )
+        return _migration_available
+
+    previously_available = _migration_available
+    try:
+        get_service_client().table("crawl_targets").select("id").limit(0).execute()
+        _migration_available = True
+    except Exception as exc:
+        _migration_available = False
+        logger.critical(
+            "crawl_targets migration 025 is unavailable; DB crawl dispatch is DISABLED "
+            "(no crawl targets will be dispatched, error=%s). Apply migration 025; the "
+            "probe retries every %ss.",
+            type(exc).__name__,
+            recheck,
+        )
+    _migration_probed_at = time.monotonic()
+
+    if _migration_available and previously_available is False:
+        logger.warning(
+            "crawl_targets migration 025 is now available; DB crawl dispatch is re-enabled "
+            "without a restart."
+        )
     return _migration_available
 
 
@@ -111,12 +153,100 @@ def _parse_dt(value: Any) -> datetime | None:
         return None
 
 
+# crawl_company_job is registered with timeout=300 (app/workers/jobs/crawl_jobs.py).
+_CRAWL_JOB_TIMEOUT_SECONDS = 300
+
+
+def _crawl_job_timeout_seconds() -> int:
+    try:
+        from app.workers.registry import get_job_definition
+
+        return int(get_job_definition("crawl_company_job").timeout)
+    except Exception:
+        return _CRAWL_JOB_TIMEOUT_SECONDS
+
+
+def _worker_capacity() -> int:
+    """Return the ARQ worker's real ``max_jobs``.
+
+    ARQ injects only ``ctx['redis']`` (arq/worker.py:356); there is no
+    ``ctx['worker']``, so capacity must come from WorkerSettings. Imported
+    lazily because app.workers.settings reaches this module through
+    app.workers.jobs.crawl_jobs.
+    """
+    try:
+        from app.workers.settings import WorkerSettings
+
+        return max(1, int(getattr(WorkerSettings, "max_jobs", 1)))
+    except Exception:
+        return max(1, int(get_settings().persistence_max_concurrency))
+
+
+async def _queue_depth() -> int | None:
+    """Return ARQ queue depth (waiting + running), or None when unknown.
+
+    ponytail: one ZCARD per dispatch tick only -- no continuous sampling, so a
+    burst between ticks is not observed. Depth is an upper bound on in-flight
+    work (ARQ only removes on finish), which is the safe direction for a guard.
+    """
+    try:
+        from app.workers.dispatcher import _get_redis
+
+        redis = await _get_redis()
+        return int(await redis.zcard(redis.default_queue_name))
+    except Exception as exc:
+        logger.warning("crawl queue depth unavailable (%s)", type(exc).__name__)
+        return None
+
+
+def _check_lease_coverage(settings: Any, capacity: int) -> None:
+    """Warn when the lease cannot outlive the worst-case queue wait.
+
+    The admission guard below only admits while depth < capacity, so at most
+    ``capacity`` jobs are ever ahead of a newly claimed one and every one of
+    them completes within a single job timeout. Worst-case wait is therefore one
+    job timeout. A lease at or below that lets the next tick re-claim the same
+    still-queued target.
+    """
+    timeout = _crawl_job_timeout_seconds()
+    worst_case_wait = timeout
+    if settings.crawl_lease_seconds <= worst_case_wait:
+        logger.warning(
+            "crawl lease does not cover worst-case queue wait: lease=%ss <= "
+            "worst_case_wait=%ss (capacity=%s x timeout=%ss). Targets can be "
+            "re-claimed while still queued, causing double dispatch.",
+            settings.crawl_lease_seconds,
+            worst_case_wait,
+            capacity,
+            timeout,
+        )
+
+
 async def dispatch_due_targets(ctx: dict[str, Any]) -> int:
     """Claim and enqueue one bounded batch; leases recover crashed dispatchers."""
     if not _migration_probe():
         return 0
     settings = get_settings()
-    limit = max(1, min(settings.dispatch_batch, getattr(ctx.get("worker"), "max_jobs", settings.dispatch_batch)))
+    capacity = _worker_capacity()
+    _check_lease_coverage(settings, capacity)
+    depth = await _queue_depth()
+    if depth is None:
+        limit = max(1, min(settings.dispatch_batch, capacity))
+        logger.warning(
+            "crawl queue depth unknown; admission guard DEGRADED to capacity=%s only "
+            "(no backpressure on a backed-up queue).",
+            capacity,
+        )
+    else:
+        free = capacity - depth
+        if free <= 0:
+            logger.info(
+                "crawl admission backpressure: queue_depth=%s >= capacity=%s; claiming nothing.",
+                depth,
+                capacity,
+            )
+            return 0
+        limit = max(1, min(settings.dispatch_batch, free))
     try:
         rows = await asyncio.to_thread(_rpc, "claim_due_crawl_targets", {
             "p_limit": limit, "p_lease_seconds": settings.crawl_lease_seconds,

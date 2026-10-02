@@ -212,7 +212,7 @@ async def test_5_concurrent_upserts_complete_without_timeout():
         jobs = [_job(f"c{idx}-{i}") for i in range(n)]
         result = await service._persist_offloop(jobs, timeout_seconds=30.0)
         gate = persistence_gate_snapshot()
-        return {"result": result, "executes": client.executes, "gate": gate}
+        return {"result": result, "executes": client.executes, "gate": gate, "metrics": getattr(service, "last_persistence_metrics", {})}
 
     async def _monitor() -> None:
         nonlocal max_async_holding, max_sync_holding
@@ -233,8 +233,8 @@ async def test_5_concurrent_upserts_complete_without_timeout():
     assert len(results) == 5
     for r in results:
         assert r["result"]["inserted"] > 0
-        assert "async_wait_ms" in r["result"] and "async_hold_ms" in r["result"]
-        assert "to_thread_ms" in r["result"] and "db_thread_ms" in r["result"]
+        assert "async_wait_ms" in r["metrics"] and "async_hold_ms" in r["metrics"]
+        assert "to_thread_ms" in r["metrics"] and "db_thread_ms" in r["metrics"]
     # Benchmark A: holders never exceed concurrency
     assert max_async_holding <= 2, max_async_holding
     assert max_sync_holding <= 2, max_sync_holding
@@ -268,15 +268,16 @@ async def test_wait_hold_reconciles_with_total():
     total_start = time.monotonic()
     result = await service._persist_offloop(jobs, timeout_seconds=30.0)
     total_ms = (time.monotonic() - total_start) * 1000.0
+    metrics = service.last_persistence_metrics
 
     # async_wait + async_hold covers the whole gated section; the ungated
     # prefix (raw nullify + snapshot) is small overhead.
-    accounted = result["async_wait_ms"] + result["async_hold_ms"]
+    accounted = metrics["async_wait_ms"] + metrics["async_hold_ms"]
     assert accounted <= total_ms + 1.0
-    assert total_ms - accounted < 150.0, (total_ms, accounted, result)
+    assert total_ms - accounted < 150.0, (total_ms, accounted, metrics)
     # sync section lives inside to_thread; DB thread time <= to_thread time
-    assert result["db_thread_ms"] <= result["to_thread_ms"] + 1.0
-    assert result["to_thread_ms"] <= result["async_hold_ms"] + 1.0
+    assert metrics["db_thread_ms"] <= metrics["to_thread_ms"] + 1.0
+    assert metrics["to_thread_ms"] <= metrics["async_hold_ms"] + 1.0
 
 
 # ---------------------------------------------------------------------------

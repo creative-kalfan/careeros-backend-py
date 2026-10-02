@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from app.llm.gateway import get_llm_gateway
 from app.llm.sync_bridge import run_coro_sync
 from app.llm.types import LLMRequest, LLMTask
+from .education_parser import normalize_degree
 from .models import (
     ParsedContact,
     ParsedEducation,
@@ -23,6 +24,23 @@ from .models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_degree_value(raw_degree: Any) -> str:
+    """Normalize an LLM-provided degree like the deterministic education parser does.
+
+    Falls back to the plain stripped value when normalization fails or yields
+    nothing, so a malformed LLM response can never lose a parsed degree.
+    """
+    stripped = str(raw_degree or "").strip()
+    if not stripped:
+        return ""
+    try:
+        normalized = normalize_degree(stripped)
+    except Exception:  # noqa: BLE001
+        logger.warning("normalize_degree failed for %r; using raw value", stripped, exc_info=True)
+        return stripped
+    return normalized or stripped
 
 
 class LLMStructuringService:
@@ -192,7 +210,7 @@ class LLMStructuringService:
                 continue
             education_list.append(
                 ParsedEducation(
-                    degree=str(edu.get("degree") or "").strip(),
+                    degree=_normalize_degree_value(edu.get("degree")),
                     field=str(edu.get("field") or "").strip() or None,
                     institution=str(edu.get("institution") or "").strip(),
                     start_date=edu.get("start_date"),

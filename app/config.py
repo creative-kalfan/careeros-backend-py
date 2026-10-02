@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     dispatch_tick_seconds: int = Field(default=60, alias="DISPATCH_TICK_SECONDS")
     dispatch_batch: int = Field(default=2, alias="DISPATCH_BATCH")
     crawl_lease_seconds: int = Field(default=900, alias="CRAWL_LEASE_SECONDS")
+    # crawl_targets migration 025 re-probe interval (seconds). The dispatcher
+    # re-probes the table once the cached result is this old, so applying
+    # migration 025 after deploy re-enables dispatch without a restart.
+    migration_probe_recheck_seconds: int = Field(default=300, alias="MIGRATION_PROBE_RECHECK_SECONDS")
     crawl_dead_after_failures: int = Field(default=10, alias="CRAWL_DEAD_AFTER_FAILURES")
     crawl_min_interval_minutes: int = Field(default=360, alias="CRAWL_MIN_INTERVAL_MINUTES")
     crawl_max_interval_minutes: int = Field(default=2880, alias="CRAWL_MAX_INTERVAL_MINUTES")
@@ -59,6 +63,9 @@ class Settings(BaseSettings):
     admin_status_token: str = Field(default="", alias="ADMIN_STATUS_TOKEN")
     alert_webhook_url: str = Field(default="", alias="ALERT_WEBHOOK_URL")
     heartbeat_url: str = Field(default="", alias="HEARTBEAT_URL")
+    # In-worker HTTP health listener on $PORT. Defaults to false and must stay false on
+    # Render worker services, where start.sh already binds $PORT -- enabling both
+    # double-binds the same port. Only true when the worker runs without start.sh.
     worker_http_health: bool = Field(default=False, alias="WORKER_HTTP_HEALTH")
 
     # LLM Gateway (backend-only credentials; empty key = provider unconfigured).

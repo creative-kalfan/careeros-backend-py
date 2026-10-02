@@ -4,6 +4,9 @@ set -e
 PORT="${PORT:-10000}"
 export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
 
+# Worker service: this script already binds $PORT below with a dummy listener,
+# so WORKER_HTTP_HEALTH must stay false here -- the in-worker listener from
+# app/workers/settings.py would try to bind the same port a second time.
 if [ "$SERVICE_TYPE" = "worker" ]; then
   echo "Starting ARQ worker service..."
   echo "Binding HTTP dummy health listener on port ${PORT} for Render..."

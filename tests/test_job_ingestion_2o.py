@@ -157,7 +157,7 @@ async def test_jobspy_ingest_flows_through_canonical_pipeline():
     finally:
         jobspy_mod.JobSpyAdapter = orig
     assert result["inserted"] == 2
-    assert "async_wait_ms" in result
+    assert "async_wait_ms" in service.last_persistence_metrics
     rows = service.job_repository.upsert_jobs.call_args.args[0]
     assert len(rows) == 1 and isinstance(rows[0], NormalizedJob)
     assert rows[0].source_platform == "jobspy"

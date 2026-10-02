@@ -121,6 +121,7 @@ class JobIngestionService:
     ) -> None:
         self.job_repository = job_repository or JobRepository()
         self.job_service = job_service or JobService()
+        self.last_persistence_metrics: dict[str, int] = {}
 
     async def _persist_offloop(
         self,
@@ -240,6 +241,20 @@ class JobIngestionService:
         )
         # Keep the public ingestion result contract count-only. Operational
         # metrics and insert identity stay on the repository side-channel.
+        # Public result stays count-only; operational metrics ride a side-channel
+        # so forensics/gating tests can reconcile them without widening the
+        # ingestion contract that routes consume.
+        self.last_persistence_metrics = {
+            "async_wait_ms": async_wait_ms,
+            "async_hold_ms": async_hold_ms,
+            "to_thread_ms": to_thread_ms,
+            "db_thread_ms": int(thread_box.get("db_ms", 0)),
+            "persistence_wait_ms": sync_wait_delta,
+            "persistence_hold_ms": sync_hold_delta,
+            "upsert_ms": total_ms,
+            "total_ms": total_ms,
+            "path": getattr(self.job_repository, "last_path", "legacy"),
+        }
         return result
 
     async def ingest_ashby_jobs(
