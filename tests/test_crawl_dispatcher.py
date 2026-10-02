@@ -208,10 +208,10 @@ async def test_admission_guard_blocks_when_queue_at_capacity(monkeypatch):
     monkeypatch.setattr(crawl_dispatcher, "_migration_probe", lambda: True)
     monkeypatch.setattr(crawl_dispatcher, "_worker_capacity", lambda: 2)
 
-    async def _queue_depth_at_capacity():
+    async def _in_flight_at_capacity():
         return 2
 
-    monkeypatch.setattr(crawl_dispatcher, "_queue_depth", _queue_depth_at_capacity)
+    monkeypatch.setattr(crawl_dispatcher, "_in_flight_crawls", _in_flight_at_capacity)
 
     def _claim_must_not_run(_name, _params):
         raise AssertionError("claim rpc must not run under backpressure")
@@ -229,16 +229,58 @@ async def test_admission_guard_blocks_when_queue_at_capacity(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_admission_guard_claims_despite_many_queued_analysis_jobs(monkeypatch):
+    """100 queued analysis jobs in Redis must NOT block crawl dispatch."""
+    from app.services.jobs import crawl_dispatcher
+
+    monkeypatch.setattr(crawl_dispatcher, "_migration_probe", lambda: True)
+    monkeypatch.setattr(crawl_dispatcher, "_worker_capacity", lambda: 2)
+
+    # In-flight crawls are 0 even though Redis might have 100 analysis jobs queued
+    async def _zero_in_flight():
+        return 0
+
+    monkeypatch.setattr(crawl_dispatcher, "_in_flight_crawls", _zero_in_flight)
+
+    claimed_params = {}
+
+    def _mock_claim(name, params):
+        claimed_params["name"] = name
+        claimed_params["params"] = params
+        return [{"source": "greenhouse", "slug": "testco", "next_run_at": "2026-04-10T12:00:00Z"}]
+
+    monkeypatch.setattr(crawl_dispatcher, "_rpc", _mock_claim)
+    monkeypatch.setattr(
+        crawl_dispatcher,
+        "get_settings",
+        lambda: SimpleNamespace(dispatch_batch=2, crawl_lease_seconds=900),
+    )
+
+    async def _mock_enqueue(source, slug, run_id):
+        return f"job_{source}_{slug}"
+
+    import app.workers.dispatcher
+    monkeypatch.setattr(app.workers.dispatcher, "enqueue_scheduled_crawl", _mock_enqueue)
+
+    try:
+        claimed = await crawl_dispatcher.dispatch_due_targets({})
+        assert claimed == 1
+        assert claimed_params["params"]["p_limit"] == 2
+    finally:
+        crawl_dispatcher._reset_migration_probe()
+
+
+@pytest.mark.asyncio
 async def test_admission_guard_claims_only_free_slots(monkeypatch):
     from app.services.jobs import crawl_dispatcher
 
     monkeypatch.setattr(crawl_dispatcher, "_migration_probe", lambda: True)
     monkeypatch.setattr(crawl_dispatcher, "_worker_capacity", lambda: 2)
 
-    async def _queue_depth_one_free():
+    async def _in_flight_one():
         return 1
 
-    monkeypatch.setattr(crawl_dispatcher, "_queue_depth", _queue_depth_one_free)
+    monkeypatch.setattr(crawl_dispatcher, "_in_flight_crawls", _in_flight_one)
 
     captured = {}
 
@@ -260,6 +302,44 @@ async def test_admission_guard_claims_only_free_slots(monkeypatch):
 
     assert captured["params"]["p_limit"] == 1
     assert captured["params"]["p_lease_seconds"] == 900
+
+
+@pytest.mark.asyncio
+async def test_admission_guard_claims_crawls_even_with_100_queued_analysis_jobs(monkeypatch):
+    """Analysis jobs in Redis queue must never block crawl target admission."""
+    from unittest.mock import AsyncMock
+    from app.services.jobs import crawl_dispatcher
+
+    monkeypatch.setattr(crawl_dispatcher, "_migration_probe", lambda: True)
+    monkeypatch.setattr(crawl_dispatcher, "_worker_capacity", lambda: 2)
+
+    # In-flight crawls is 0 (active crawls) even if Redis queue has 100 analysis jobs
+    async def _in_flight_zero():
+        return 0
+
+    monkeypatch.setattr(crawl_dispatcher, "_in_flight_crawls", _in_flight_zero)
+
+    captured = {}
+
+    def _capture_claim(name, params):
+        captured["name"] = name
+        captured["params"] = params
+        return [{"source": "greenhouse", "slug": "stripe", "next_run_at": "2026-10-02T12:00:00+00:00"}]
+
+    monkeypatch.setattr(crawl_dispatcher, "_rpc", _capture_claim)
+    from app.workers import dispatcher
+    monkeypatch.setattr(dispatcher, "enqueue_scheduled_crawl", AsyncMock(return_value="job-1"))
+    monkeypatch.setattr(
+        crawl_dispatcher,
+        "get_settings",
+        lambda: SimpleNamespace(dispatch_batch=2, crawl_lease_seconds=900),
+    )
+    try:
+        claimed = await crawl_dispatcher.dispatch_due_targets({})
+        assert claimed == 1
+        assert captured["params"]["p_limit"] == 2
+    finally:
+        crawl_dispatcher._reset_migration_probe()
 
 
 def test_lease_warning_when_lease_below_worst_case(caplog):

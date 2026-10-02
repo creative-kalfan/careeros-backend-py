@@ -1,0 +1,55 @@
+{
+  "overlapping_targets": [
+    {
+      "company": "CRED",
+      "firecrawl_slug": "CRED|https://careers.cred.club/",
+      "firecrawl_url": "https://careers.cred.club/",
+      "ats_source": "lever",
+      "ats_slug": "cred",
+      "ats_url": "https://jobs.lever.co/cred"
+    },
+    {
+      "company": "PostHog",
+      "firecrawl_slug": "PostHog|https://posthog.com/careers",
+      "firecrawl_url": "https://posthog.com/careers",
+      "ats_source": "ashby",
+      "ats_slug": "posthog",
+      "ats_url": "https://jobs.ashbyhq.com/posthog"
+    },
+    {
+      "company": "Linear",
+      "firecrawl_slug": "Linear|https://linear.app/careers",
+      "firecrawl_url": "https://linear.app/careers",
+      "ats_source": "ashby",
+      "ats_slug": "linear",
+      "ats_url": "https://jobs.ashbyhq.com/linear"
+    }
+  ],
+  "exclusive_firecrawl_targets": [
+    {
+      "company": "Razorpay",
+      "firecrawl_slug": "Razorpay|https://razorpay.com/jobs/",
+      "firecrawl_url": "https://razorpay.com/jobs/"
+    },
+    {
+      "company": "PhonePe",
+      "firecrawl_slug": "PhonePe|https://www.phonepe.com/careers/job-openings/",
+      "firecrawl_url": "https://www.phonepe.com/careers/job-openings/"
+    },
+    {
+      "company": "Zerodha",
+      "firecrawl_slug": "Zerodha|https://zerodha.com/careers",
+      "firecrawl_url": "https://zerodha.com/careers"
+    },
+    {
+      "company": "Swiggy",
+      "firecrawl_slug": "Swiggy|https://careers.swiggy.com",
+      "firecrawl_url": "https://careers.swiggy.com"
+    },
+    {
+      "company": "BrowserStack",
+      "firecrawl_slug": "BrowserStack|https://www.browserstack.com/careers",
+      "firecrawl_url": "https://www.browserstack.com/careers"
+    }
+  ]
+}

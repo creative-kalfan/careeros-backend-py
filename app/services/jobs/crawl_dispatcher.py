@@ -182,20 +182,23 @@ def _worker_capacity() -> int:
         return max(1, int(get_settings().persistence_max_concurrency))
 
 
-async def _queue_depth() -> int | None:
-    """Return ARQ queue depth (waiting + running), or None when unknown.
-
-    ponytail: one ZCARD per dispatch tick only -- no continuous sampling, so a
-    burst between ticks is not observed. Depth is an upper bound on in-flight
-    work (ARQ only removes on finish), which is the safe direction for a guard.
-    """
+async def _in_flight_crawls() -> int | None:
+    """Return count of currently leased in-flight crawl targets (lease_until > now())."""
     try:
-        from app.workers.dispatcher import _get_redis
-
-        redis = await _get_redis()
-        return int(await redis.zcard(redis.default_queue_name))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        res = await asyncio.to_thread(
+            lambda: get_service_client().table("crawl_targets")
+            .select("id", count="exact")
+            .gt("lease_until", now_iso)
+            .execute()
+        )
+        count_val = getattr(res, "count", None)
+        if isinstance(count_val, (int, float)):
+            return int(count_val)
+        data = getattr(res, "data", [])
+        return len(data) if isinstance(data, list) else 0
     except Exception as exc:
-        logger.warning("crawl queue depth unavailable (%s)", type(exc).__name__)
+        logger.warning("in-flight crawl count unavailable (%s)", type(exc).__name__)
         return None
 
 
@@ -229,20 +232,20 @@ async def dispatch_due_targets(ctx: dict[str, Any]) -> int:
     settings = get_settings()
     capacity = _worker_capacity()
     _check_lease_coverage(settings, capacity)
-    depth = await _queue_depth()
-    if depth is None:
+    in_flight = await _in_flight_crawls()
+    if in_flight is None:
         limit = max(1, min(settings.dispatch_batch, capacity))
         logger.warning(
-            "crawl queue depth unknown; admission guard DEGRADED to capacity=%s only "
-            "(no backpressure on a backed-up queue).",
+            "in-flight crawl count unknown; admission guard DEGRADED to capacity=%s only "
+            "(no backpressure on in-flight crawls).",
             capacity,
         )
     else:
-        free = capacity - depth
+        free = capacity - in_flight
         if free <= 0:
             logger.info(
-                "crawl admission backpressure: queue_depth=%s >= capacity=%s; claiming nothing.",
-                depth,
+                "crawl admission backpressure: in_flight=%s >= capacity=%s; claiming nothing.",
+                in_flight,
                 capacity,
             )
             return 0
@@ -282,7 +285,11 @@ async def complete_target(
         return
     settings = get_settings()
     priority = 1
-    interval = settings.crawl_min_interval_minutes
+    min_interval = settings.crawl_min_interval_minutes
+    if source == "firecrawl":
+        firecrawl_floor_minutes = max(1, int(settings.firecrawl_min_interval_hours * 60))
+        min_interval = max(min_interval, firecrawl_floor_minutes)
+    interval = min_interval
     try:
         record = await asyncio.to_thread(
             lambda: get_service_client().table("crawl_targets").select(
@@ -296,14 +303,14 @@ async def complete_target(
                 changed=content_hash is not None and content_hash != record[0].get("content_hash"),
                 unchanged_streak=int(record[0].get("hash_unchanged_streak", 0)) + 1,
                 priority=priority,
-                minimum=settings.crawl_min_interval_minutes,
+                minimum=min_interval,
                 maximum=settings.crawl_max_interval_minutes,
             )
         await asyncio.to_thread(_rpc, "complete_crawl_target", {
             "p_source": source, "p_slug": slug, "p_success": success,
             "p_interval_minutes": interval, "p_job_count": job_count,
             "p_content_hash": content_hash, "p_error": error, "p_not_found": not_found,
-            "p_min_interval_minutes": settings.crawl_min_interval_minutes,
+            "p_min_interval_minutes": min_interval,
             "p_max_interval_minutes": settings.crawl_max_interval_minutes,
             "p_dead_after_failures": settings.crawl_dead_after_failures,
         })
