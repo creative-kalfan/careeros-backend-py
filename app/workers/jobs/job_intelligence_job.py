@@ -31,12 +31,28 @@ async def analyze_job_intelligence_job(ctx: dict[str, Any], job_id: str) -> dict
             "job_id": "<uuid>"
         }
     """
-    job_logger = JobLogger(job_id=ctx.get("job_id", "unknown"), job_type="job_intelligence", source_job_id=job_id)
     job_start = time.monotonic()
+    now_ms = int(time.time() * 1000)
+
+    score = ctx.get("score")
+    queue_delay_ms = (
+        int(now_ms - score)
+        if isinstance(score, (int, float))
+        else None
+    )
+    job_try = int(ctx.get("job_try", 1))
+    analysis_job_id = str(ctx.get("job_id", "unknown"))
+
+    job_logger = JobLogger(
+        job_id=analysis_job_id,
+        job_type="job_intelligence",
+        source_job_id=job_id,
+        job_try=job_try,
+        queue_delay_ms=queue_delay_ms if queue_delay_ms is not None else "unknown",
+    )
 
     job_logger.started()
 
-    repo = JobRepository()
     job_repo = JobRepository()
     intelligence_repo = JobIntelligenceRepository()
     service = JobIntelligenceService()
@@ -44,8 +60,15 @@ async def analyze_job_intelligence_job(ctx: dict[str, Any], job_id: str) -> dict
     job_row = job_repo.get_job(job_id)
     if not job_row:
         duration_ms = int((time.monotonic() - job_start) * 1000)
-        job_logger.failed(duration_ms=duration_ms, error_type="JobNotFound")
-        return {"success": False, "job_id": job_id, "error": "job not found"}
+        job_logger.failed(duration_ms=duration_ms, error_type="JobNotFound", result="failed")
+        return {
+            "success": False,
+            "job_id": job_id,
+            "error": "job not found",
+            "duration_ms": duration_ms,
+            "queue_delay_ms": queue_delay_ms,
+            "job_try": job_try,
+        }
 
     canonical_job_id = str(job_row.get("id") or job_id)
     job = NormalizedJob(**job_row)
@@ -53,7 +76,7 @@ async def analyze_job_intelligence_job(ctx: dict[str, Any], job_id: str) -> dict
         intelligence = service.analyze_job(job, job_id=canonical_job_id)
     except Exception as exc:
         duration_ms = int((time.monotonic() - job_start) * 1000)
-        job_logger.failed(duration_ms=duration_ms, error_type=exc.__class__.__name__)
+        job_logger.failed(duration_ms=duration_ms, error_type=exc.__class__.__name__, result="failed")
         raise
 
     intelligence_repo.upsert(intelligence)
@@ -61,6 +84,7 @@ async def analyze_job_intelligence_job(ctx: dict[str, Any], job_id: str) -> dict
     duration_ms = int((time.monotonic() - job_start) * 1000)
     job_logger.completed(
         duration_ms=duration_ms,
+        result="completed",
         skills_count=len(intelligence.skills),
         requirements_count=len(intelligence.requirements),
         keywords_count=len(intelligence.keywords),
@@ -73,4 +97,6 @@ async def analyze_job_intelligence_job(ctx: dict[str, Any], job_id: str) -> dict
         "requirements": len(intelligence.requirements),
         "keywords": len(intelligence.keywords),
         "duration_ms": duration_ms,
+        "queue_delay_ms": queue_delay_ms,
+        "job_try": job_try,
     }

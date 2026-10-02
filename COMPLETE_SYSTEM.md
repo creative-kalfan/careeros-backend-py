@@ -1620,3 +1620,27 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   (verified statically). Live-production index-existence check was NOT available from this environment
   (no Supabase credentials in shell); no production data touched. Recommend a read-only
   `pg_indexes` check from an environment with service-role access before closing §6.
+
+### 9.33 ARQ Analysis Queue Backlog & JobNotFound Forensic Investigation (2026-10-02)
+
+- **Queue Topology & Worker Concurrency:**
+  - ARQ version: `0.26.1`. Single shared queue: `arq:queue` (Redis ZSET, scored by `timestamp_ms`).
+  - Registered jobs sharing queue: `crawl_company_job`, `parse_resume_job`, `analyze_job_intelligence`, `generate_interview_prep_job`, `discover_ats_targets`, `careeros_worker_health`.
+  - Worker concurrency: `WorkerSettings.max_jobs = max(1, persistence_max_concurrency) = 2`.
+- **Observed Queue Delay Behavior (~196–232s delay, ~0.3–0.7s execution):**
+  - Producer burst: After crawl ingestion (`crawl_jobs.py`), an unthrottled loop iterates over all `inserted_ids` and synchronously enqueues `analyze_job_intelligence` for every newly inserted job.
+  - Rate mismatch: Large aggregator crawls (e.g. Adzuna) enqueue $N \approx 400\text{--}800$ jobs in $<1$s. With concurrency $c = 2$ and execution duration $\approx 0.5$s, worker service rate is $c\mu = 4$ jobs/s.
+  - Queue drain time is $T = \frac{N}{c\mu} = \frac{800}{4} = 200$s. Delays for jobs sitting in the tail of the ZSET progressively reach 196–232s.
+  - Crawl job queue delays later showed only ~1–4s because `crawl_dispatcher.dispatch_due_targets` enforces queue-depth backpressure (`free = capacity - depth`). Crawls were held back from admission until the analysis backlog cleared; once drained, new crawls executed immediately.
+- **`JobNotFound` Lifecycle Findings:**
+  - `analyze_job_intelligence_job` calls `job_repo.get_job(job_id)`.
+  - `get_job` explicitly filters `.eq("is_active", True)`.
+  - Lifecycle race: During the ~200s queue wait, a subsequent crawl or deactivation reconciliation (`deactivate_unseen_jobs_batch` or `deactivate_not_seen_since`) marked jobs inactive (`is_active = False`). When the analysis job finally dequeued, `get_job` returned `None`, emitting `error_type=JobNotFound`.
+  - Retries: `JobNotFound` returns `{"success": False, "error": "job not found"}` without raising or retrying; retries do NOT contribute to the backlog.
+- **Instrumentation Added:**
+  - In `app/workers/jobs/job_intelligence_job.py`, added payload-free forensic telemetry logging `queue_delay_ms`, `job_try`, `duration_ms`, and `result` via `JobLogger`.
+- **Confirmed Root Cause:**
+  - Unbounded burst enqueue of background analysis tasks from post-crawl hooks into a single-queue, low-concurrency (`max_jobs=2`) ARQ worker pool.
+- **Unresolved Questions:**
+  - None. All behavior aligns with queueing math and observed production telemetry.
+
