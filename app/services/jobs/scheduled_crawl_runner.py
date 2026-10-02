@@ -60,14 +60,22 @@ class ScheduledCrawlRunner:
         self._enqueue_fn = enqueue_fn
         self._scheduler: Optional[AsyncIOScheduler] = None
 
-    async def _enqueue_crawl(self, source: str, slug: str, _defer: Optional[int] = None) -> None:
+    async def _enqueue_crawl(
+        self,
+        source: str,
+        slug: str,
+        _defer_by: Optional[int] = None,
+        _defer_until: Optional[Any] = None,
+        _defer: Optional[int] = None,
+    ) -> None:
         """Enqueue a single crawl job via the ARQ dispatcher (Redis-locked)."""
         if self._enqueue_fn is not None:
             await self._enqueue_fn(source, slug)
             return
         from app.workers.dispatcher import enqueue_crawl_company
 
-        job_id = await enqueue_crawl_company(source, slug, _defer=_defer)
+        effective_defer_by = _defer_by if _defer_by is not None else _defer
+        job_id = await enqueue_crawl_company(source, slug, _defer_by=effective_defer_by)
         if job_id is None:
             logger.info("dispatcher skipped or returned no job id for %s:%s", source, slug)
 
@@ -145,7 +153,10 @@ class ScheduledCrawlRunner:
             try:
                 try:
                     if defer_s:
-                        await self._enqueue_crawl(source, slug, _defer=defer_s)
+                        try:
+                            await self._enqueue_crawl(source, slug, _defer_by=defer_s)
+                        except TypeError:
+                            await self._enqueue_crawl(source, slug, defer_s)
                     else:
                         await self._enqueue_crawl(source, slug)
                 except TypeError:
