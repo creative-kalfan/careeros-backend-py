@@ -101,7 +101,8 @@ async def test_missing_job() -> None:
         ctx: dict[str, Any] = {"job_id": "ctx-job-id"}
         result = await analyze_job_intelligence_job(ctx, job_id)
         assert result["success"] is False
-        assert result["error"] == "job not found"
+        assert "job not found" in result["error"]
+        assert result["status"] == "job_not_found"
         MockService.return_value.analyze_job.assert_not_called()
         # Repository is instantiated before the existence check in the worker.
         MockIntelRepo.assert_called_once()

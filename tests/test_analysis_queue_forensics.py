@@ -131,39 +131,39 @@ async def test_scenario_c_job_not_found_lifecycle_race() -> None:
         result = await analyze_job_intelligence_job(ctx, job_id)
 
         assert result["success"] is False
-        assert result["error"] == "job not found"
-        # Verify JobNotFound was logged
-        MockLogger.return_value.failed.assert_called_once()
-        failed_kwargs = MockLogger.return_value.failed.call_args[1]
-        assert failed_kwargs["error_type"] == "JobNotFound"
+        assert "job not found" in result["error"]
+        assert result["status"] == "job_not_found"
+        assert "cause" in result
+        # Verify no failed status on JobLogger
+        MockLogger.return_value.failed.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_scenario_d_crawl_admission_backpressure_and_queue_fairness() -> None:
-    """Scenario D: When queue depth >= capacity, crawl dispatcher admits 0 crawls,
+    """Scenario D: When in-flight crawls >= capacity, crawl dispatcher admits 0 crawls.
 
-    preventing crawls from queuing behind analysis jobs. Once backlog clears, crawls run.
+    In-flight crawl targets (leases), not Redis queue depth, guard admission.
     """
     from app.services.jobs.crawl_dispatcher import dispatch_due_targets
 
     # Mock settings & environment
     mock_ctx = {"worker": MagicMock(max_jobs=2)}
 
-    # When queue depth is 50 (backlogged with analysis jobs)
+    # When in-flight crawls count is 2 (at capacity)
     with patch("app.services.jobs.crawl_dispatcher._migration_probe", return_value=True), \
          patch("app.services.jobs.crawl_dispatcher._worker_capacity", return_value=2), \
-         patch("app.services.jobs.crawl_dispatcher._queue_depth", return_value=50), \
+         patch("app.services.jobs.crawl_dispatcher._in_flight_crawls", AsyncMock(return_value=2)), \
          patch("app.services.jobs.crawl_dispatcher._rpc") as mock_rpc:
 
         admitted = await dispatch_due_targets(mock_ctx)
-        # Admitted must be 0 because 2 - 50 <= 0
+        # Admitted must be 0 because 2 - 2 <= 0
         assert admitted == 0
         mock_rpc.assert_not_called()
 
-    # When queue depth drops to 0 (all analysis jobs completed)
+    # When in-flight crawls count drops to 0
     with patch("app.services.jobs.crawl_dispatcher._migration_probe", return_value=True), \
          patch("app.services.jobs.crawl_dispatcher._worker_capacity", return_value=2), \
-         patch("app.services.jobs.crawl_dispatcher._queue_depth", return_value=0), \
+         patch("app.services.jobs.crawl_dispatcher._in_flight_crawls", AsyncMock(return_value=0)), \
          patch("app.services.jobs.crawl_dispatcher._rpc", return_value=[{"source": "adzuna", "slug": "eng"}]) as mock_rpc, \
          patch("app.workers.dispatcher.enqueue_scheduled_crawl", return_value="crawl-123"):
 

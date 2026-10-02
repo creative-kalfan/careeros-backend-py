@@ -194,6 +194,15 @@ class Settings(BaseSettings):
     persistence_telemetry_verbose: bool = Field(
         default=False, alias="PERSISTENCE_TELEMETRY_VERBOSE"
     )
+    analysis_max_ids_per_crawl: int = Field(
+        default=200, alias="ANALYSIS_MAX_IDS_PER_CRAWL"
+    )
+    analysis_batch_chunk_size: int = Field(
+        default=25, alias="ANALYSIS_BATCH_CHUNK_SIZE"
+    )
+    firecrawl_min_interval_hours: int = Field(
+        default=72, alias="FIRECRAWL_MIN_INTERVAL_HOURS"
+    )
 
 
 @lru_cache

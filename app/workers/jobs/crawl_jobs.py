@@ -359,7 +359,23 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         
         discovered = result.get("discovered", 0)
         try:
-            prev_active_res = ingestion.job_repository._client.table("jobs").select("id", count="exact").eq("is_active", True).eq("source_platform", source).execute()
+            prev_active_query = (
+                ingestion.job_repository._client.table("jobs")
+                .select("id", count="exact")
+                .eq("is_active", True)
+                .eq("source_platform", source)
+            )
+            if source == "firecrawl":
+                comp_part, _, url_part = slug.partition("|")
+                if comp_part:
+                    prev_active_query = prev_active_query.ilike("company", comp_part)
+                if url_part:
+                    prev_active_query = prev_active_query.eq("careers_url", url_part)
+            elif source in ("ashby", "greenhouse", "lever", "smartrecruiters"):
+                comp = _resolve_company_scope(source, slug)
+                if comp:
+                    prev_active_query = prev_active_query.ilike("company", comp)
+            prev_active_res = prev_active_query.execute()
             count_val = getattr(prev_active_res, "count", 0)
             prev_active_count = int(count_val) if isinstance(count_val, (int, float)) else 0
         except Exception:
@@ -431,14 +447,32 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                     jobs_processed=1,
                     metadata={"external_job_id": external_id, "inserted": True},
                 ))
+            if inserted_ids:
                 try:
                     from app.workers.settings import get_redis_pool
-                    redis = await get_redis_pool()
+                    from app.config import get_settings
                     import hashlib
-                    analysis_id = "analyze:" + hashlib.sha1(f"{source}:{external_id}".encode()).hexdigest()
-                    await redis.enqueue_job("analyze_job_intelligence", external_id, _job_id=analysis_id)
+                    import random
+
+                    settings = get_settings()
+                    max_cap = max(1, int(settings.analysis_max_ids_per_crawl))
+                    chunk_size = max(1, int(settings.analysis_batch_chunk_size))
+                    capped_ids = inserted_ids[:max_cap]
+
+                    redis = await get_redis_pool()
+                    for chunk_idx, i in enumerate(range(0, len(capped_ids), chunk_size)):
+                        chunk = capped_ids[i:i + chunk_size]
+                        chunk_hash = hashlib.sha1(":".join(chunk).encode()).hexdigest()[:10]
+                        batch_job_id = f"analyze_batch:{source}:{slug}:{chunk_idx}:{chunk_hash}"
+                        jitter_sec = int(chunk_idx * 3 + random.uniform(1, 5))
+                        await redis.enqueue_job(
+                            "analyze_jobs_batch",
+                            chunk,
+                            _job_id=batch_job_id,
+                            _defer_by=jitter_sec,
+                        )
                 except Exception as exc:
-                    logger.warning("new-job analysis enqueue failed (%s)", type(exc).__name__)
+                    logger.warning("batch analysis enqueue failed (%s)", type(exc).__name__)
             if not inserted_ids and int(result.get("inserted", 0)) > 0:
                 # Compatibility for alternate repositories without ID side-channel.
                 await get_event_bus().publish(JobIngested(

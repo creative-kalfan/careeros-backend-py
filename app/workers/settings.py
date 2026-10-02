@@ -14,7 +14,7 @@ from app.config import get_settings
 from app.workers import functions
 from app.workers.jobs.crawl_jobs import crawl_company_job
 from app.workers.jobs.interview_prep_jobs import generate_interview_prep_job  # noqa: F401 — registration side effect
-from app.workers.jobs.job_intelligence_job import analyze_job_intelligence_job
+from app.workers.jobs.job_intelligence_job import analyze_job_intelligence_job, analyze_jobs_batch
 from app.workers.registry import JobDefinition, get_registered_jobs
 
 logger = logging.getLogger(__name__)
@@ -106,8 +106,8 @@ async def worker_startup(ctx: dict[str, Any]) -> None:
                 value = policy.get("maxmemory-policy") if isinstance(policy, dict) else None
                 if value and value != "noeviction":
                     logger.critical("Redis maxmemory-policy=%s; ARQ jobs may be evicted", value)
-        except Exception:
-            logger.warning("Unable to inspect Redis maxmemory-policy; continuing", exc_info=True)
+        except Exception as exc:
+            logger.warning("Unable to inspect Redis maxmemory-policy: %s", exc)
     if settings.job_crawl_enabled and settings.legacy_apscheduler_enabled:
         try:
             from app.services.jobs.scheduled_crawl_runner import ScheduledCrawlRunner
