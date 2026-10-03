@@ -11,6 +11,8 @@ canonical-list order, empty input -> [].
 
 from __future__ import annotations
 
+__all__ = ["KNOWN_SKILLS", "extract_known_skills"]
+
 KNOWN_SKILLS: list[str] = [
     "typescript", "javascript", "react", "next.js", "node", "python",
     "java", "sql", "postgresql", "aws", "docker", "kubernetes", "graphql",
