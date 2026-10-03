@@ -22,17 +22,11 @@ from app.crawlers.ats_http import get_json_response, request_semaphore, timeout_
 from app.crawlers.base import BaseCrawler
 from app.crawlers.errors import BoardNotFoundError
 from app.crawlers.models import CrawledJob
+from app.crawlers.skills import KNOWN_SKILLS as _KNOWN_SKILLS
+from app.crawlers.skills import extract_known_skills as _canonical_extract_skills
 from app.services.jobs.india_geography import is_india_job
 
 GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs"
-
-_KNOWN_SKILLS = [
-    "typescript", "javascript", "react", "next.js", "node", "python",
-    "java", "sql", "postgresql", "aws", "docker", "kubernetes", "graphql",
-    "rest", "agile", "leadership", "communication", "product", "figma",
-    "tailwind", "supabase", "redis", "mongodb", "machine learning",
-    "data analysis", "project management",
-]
 
 
 def _coalesce(*values: Any) -> Optional[str]:
@@ -47,8 +41,7 @@ def _is_remote(location: str) -> bool:
 
 
 def _extract_known_skills(text: str) -> list[str]:
-    normalized = text.lower()
-    return [s for s in _KNOWN_SKILLS if s in normalized]
+    return _canonical_extract_skills(text)
 
 
 def _extract_list(text: str, kind: str) -> list[str]:

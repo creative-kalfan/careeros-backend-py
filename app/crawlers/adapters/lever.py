@@ -12,16 +12,10 @@ from app.crawlers.ats_http import get_json_response, request_semaphore, timeout_
 from app.crawlers.base import BaseCrawler
 from app.crawlers.errors import BoardNotFoundError
 from app.crawlers.models import CrawledJob
+from app.crawlers.skills import KNOWN_SKILLS as _KNOWN_SKILLS
+from app.crawlers.skills import extract_known_skills as _canonical_extract_skills
 
 LEVER_API = "https://api.lever.co/v0/postings/{slug}?mode=json"
-
-_KNOWN_SKILLS = [
-    "typescript", "javascript", "react", "next.js", "node", "python",
-    "java", "sql", "postgresql", "aws", "docker", "kubernetes", "graphql",
-    "rest", "agile", "leadership", "communication", "product", "figma",
-    "tailwind", "supabase", "redis", "mongodb", "machine learning",
-    "data analysis", "project management",
-]
 
 def _coalesce(*values: Any) -> Optional[str]:
     for value in values:
@@ -36,8 +30,7 @@ def _is_remote(location: str, workplace_type: str = "") -> bool:
     return bool(re.search(r"remote", location, re.IGNORECASE))
 
 def _extract_known_skills(text: str) -> list[str]:
-    normalized = text.lower()
-    return [s for s in _KNOWN_SKILLS if s in normalized]
+    return _canonical_extract_skills(text)
 
 def _extract_list(text: str, kind: str) -> list[str]:
     if not text:
