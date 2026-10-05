@@ -239,6 +239,15 @@ AGGREGATOR_TARGETS: list[CrawlTarget] = [
     CrawlTarget("adzuna", "software engineer", "aggregator", 4, tier="P0",
                 notes="Slug is the primary search query; adapter rotates India-first queries.",
                 source_type="aggregator"),
+    CrawlTarget("instahyre", "software engineer", "aggregator", 4, tier="P0",
+                notes="Instahyre India tech job aggregator.",
+                source_type="aggregator"),
+    CrawlTarget("hirist", "software engineer", "aggregator", 4, tier="P0",
+                notes="Hirist India premium tech hiring aggregator.",
+                source_type="aggregator"),
+    CrawlTarget("naukri", "software engineer", "aggregator", 4, tier="P0",
+                notes="Naukri India tech jobs scraper (Firecrawl + Playwright fallback).",
+                source_type="aggregator"),
     CrawlTarget("jobspy", "data analyst India", "aggregator", 4, tier="P2",
                 notes="JobSpy broad discovery layer (python-jobspy 1.1.82): the "
                       "worker runs the bounded rotation batch (query families x "

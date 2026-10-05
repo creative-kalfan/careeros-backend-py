@@ -7,6 +7,9 @@ import os
 from pathlib import Path
 import fitz
 import pytest
+
+pytestmark = pytest.mark.visual
+
 from PIL import Image
 
 from app.models.resume import BulletItem, ExperienceItem, PersonalInfo, ResumeContent, ResumeProfile, SkillCategory

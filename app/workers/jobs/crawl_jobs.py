@@ -8,7 +8,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from app.services.jobs.job_ingestion_service import JobIngestionService
 from app.workers.logging import JobLogger
@@ -59,7 +59,7 @@ _COMPLETE_INVENTORY_SOURCES = frozenset(
 # cull otherwise-fresh jobs (observed Adzuna churn: 1066 inactive, 0 active).
 # The age-based stale window (JOB_STALE_AFTER_DAYS) remains the deactivation
 # boundary for these providers.
-_QUERY_BASED_SOURCES = frozenset({"adzuna", "jobspy"})
+_QUERY_BASED_SOURCES = frozenset({"adzuna", "jobspy", "instahyre", "hirist", "naukri"})
 
 
 def _uses_complete_inventory(source: str) -> bool:
@@ -330,6 +330,30 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                 ingestion.ingest_ycombinator_jobs,
                 cancel_event=cancel_event,
             )
+        elif source == "instahyre":
+            result = await _dispatch_ingest(
+                ingestion.ingest_instahyre_jobs,
+                query=slug or "software engineer",
+                cancel_event=cancel_event,
+                source=source,
+                slug=slug,
+            )
+        elif source == "hirist":
+            result = await _dispatch_ingest(
+                ingestion.ingest_hirist_jobs,
+                query=slug or "software engineer",
+                cancel_event=cancel_event,
+                source=source,
+                slug=slug,
+            )
+        elif source == "naukri":
+            result = await _dispatch_ingest(
+                ingestion.ingest_naukri_jobs,
+                query=slug or "software-engineer",
+                cancel_event=cancel_event,
+                source=source,
+                slug=slug,
+            )
         elif source == "firecrawl":
             company, _, careers_url = slug.partition("|")
             if not careers_url:
@@ -477,9 +501,14 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                     jobs_processed=1,
                     metadata={"external_job_id": external_id, "inserted": True},
                 ))
-            if inserted_ids:
+            if hasattr(ingestion.job_repository, "last_analysis_ids"):
+                analysis_ids = ingestion.job_repository.last_analysis_ids
+            else:
+                analysis_ids = inserted_ids
+
+            if analysis_ids:
                 try:
-                    from app.workers.settings import get_redis_pool
+                    from app.workers.dispatcher import enqueue
                     from app.config import get_settings
                     import hashlib
                     import random
@@ -487,20 +516,18 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                     settings = get_settings()
                     max_cap = max(1, int(settings.analysis_max_ids_per_crawl))
                     chunk_size = max(1, int(settings.analysis_batch_chunk_size))
-                    capped_ids = inserted_ids[:max_cap]
+                    capped_ids = analysis_ids[:max_cap]
 
-                    redis = await get_redis_pool()
                     for chunk_idx, i in enumerate(range(0, len(capped_ids), chunk_size)):
                         chunk = capped_ids[i:i + chunk_size]
                         chunk_hash = hashlib.sha1(":".join(chunk).encode()).hexdigest()[:10]
                         batch_job_id = f"analyze_batch:{source}:{slug}:{chunk_idx}:{chunk_hash}"
                         jitter_sec = int(chunk_idx * 3 + random.uniform(1, 5))
-                        await redis.enqueue_job(
+                        await enqueue(
                             "analyze_jobs_batch",
                             chunk,
                             _job_id=batch_job_id,
                             _defer_by=jitter_sec,
-                            _queue_name=settings.analysis_queue_name,
                         )
                 except Exception as exc:
                     logger.warning("batch analysis enqueue failed (%s)", type(exc).__name__)

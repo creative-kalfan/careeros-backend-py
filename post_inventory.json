@@ -1,0 +1,34 @@
+{
+  "label": "POST_INGESTION",
+  "timestamp": "2026-09-16T11:20:23.321657+00:00",
+  "total_jobs": 5900,
+  "active_jobs": 2952,
+  "inactive_jobs": 2948,
+  "active_india_jobs": 416,
+  "active_foreign_jobs": 2100,
+  "ambiguous_jobs": 65,
+  "unknown_jobs": 371,
+  "active_target_role_jobs": 346,
+  "active_analytics_jobs": 144,
+  "active_backend_jobs": 57,
+  "active_ai_ml_jobs": 85,
+  "active_data_engineering_jobs": 40,
+  "active_sap_jobs": 20,
+  "distinct_companies": 199,
+  "jobs_by_provider": {
+    "greenhouse": 1351,
+    "ashby": 1070,
+    "adzuna": 269,
+    "lever": 242,
+    "ycombinator": 19,
+    "firecrawl": 1
+  },
+  "freshness_distribution": {
+    "date_unavailable": 2683,
+    "15-30d": 96,
+    "1-7d": 76,
+    "8-14d": 59,
+    "<= 24h": 36,
+    "> 30d (stale)": 2
+  }
+}

@@ -23,6 +23,9 @@ from typing import Any, Dict, List
 
 import fitz  # PyMuPDF
 import pytest
+
+pytestmark = pytest.mark.visual
+
 from PIL import Image, ImageChops, ImageStat
 
 from app.models.resume import (

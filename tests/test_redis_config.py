@@ -25,10 +25,11 @@ def _clear_settings_cache():
     get_settings.cache_clear()
 
 
-def test_settings_exposes_redis_url_contract():
+def test_settings_exposes_redis_url_contract(monkeypatch):
     # _env_file=None isolates from the local .env REDIS_URL (Upstash) so the
     # documented default remains redis://localhost:6379 when no env is set.
     # Aliased names are required when dotenv is disabled.
+    monkeypatch.delenv("REDIS_URL", raising=False)
     settings = Settings(
         _env_file=None,
         NEXT_PUBLIC_SUPABASE_URL="https://example.supabase.co",

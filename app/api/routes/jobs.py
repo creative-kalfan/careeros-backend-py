@@ -350,6 +350,31 @@ async def get_job_intelligence(
     if not intelligence:
         return SuccessResponse(data={"job_id": job_id, "status": "not_analyzed"})
     return SuccessResponse(data=intelligence)
+
+@router.get(
+    "/{job_id}/viability",
+    response_model=SuccessResponse[dict],
+    responses={404: {"model": ErrorResponse}},
+)
+async def get_job_viability(
+    job_id: str,
+    auth: AuthContext = Depends(get_current_user),
+    service: JobRelevanceService = Depends(get_job_relevance_service),
+) -> SuccessResponse[dict]:
+    """Calculate and return job viability score (ghost job & high ROI)."""
+    job = service.get_job(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+    job_out = JobOut.from_db_row(job.model_dump())
+    return SuccessResponse(data={
+        "is_ghost_job": job_out.is_ghost_job,
+        "is_high_roi": job_out.is_high_roi,
+        "viability_score": job_out.viability_score,
+    })
+
 @router.post(
     "/{job_id}/apply",
     response_model=SuccessResponse[dict],

@@ -1,0 +1,1418 @@
+{
+  "Profile A": {
+    "profile": {
+      "id": "Profile A",
+      "name": "Data Analyst",
+      "desired_role": "Data Analyst",
+      "skills": [
+        "Python",
+        "SQL",
+        "Excel",
+        "Power BI"
+      ],
+      "location": "Bangalore, India",
+      "expected_family": "analytics"
+    },
+    "top_20_count": 20,
+    "role_family_distribution": {
+      "analytics": 20
+    },
+    "india_distribution": {
+      "INDIA": 19,
+      "AMBIGUOUS": 1
+    },
+    "distinct_companies": 18,
+    "score_range": {
+      "min": 75,
+      "max": 85
+    },
+    "top_5_sample": [
+      {
+        "rank": 1,
+        "title": "Data Analyst",
+        "company": "Ignisov Consulting Services",
+        "location": "Bengaluru, India",
+        "role_family": "analytics",
+        "overall": 85,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 2,
+        "title": "Data Analyst",
+        "company": "Innova ESI",
+        "location": "Hyderabad, India",
+        "role_family": "analytics",
+        "overall": 85,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 3,
+        "title": "Data Analyst",
+        "company": "Innodata Inc.",
+        "location": "Noida, India",
+        "role_family": "analytics",
+        "overall": 85,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 4,
+        "title": "Data Analyst",
+        "company": "HCLTech",
+        "location": "Hyderabad, India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 5,
+        "title": "Data Analyst",
+        "company": "WhiteLotus Talent Partners",
+        "location": "Hyderabad, India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      }
+    ],
+    "top_20_full": [
+      {
+        "rank": 1,
+        "title": "Data Analyst",
+        "company": "Ignisov Consulting Services",
+        "location": "Bengaluru, India",
+        "role_family": "analytics",
+        "overall": 85,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 2,
+        "title": "Data Analyst",
+        "company": "Innova ESI",
+        "location": "Hyderabad, India",
+        "role_family": "analytics",
+        "overall": 85,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 3,
+        "title": "Data Analyst",
+        "company": "Innodata Inc.",
+        "location": "Noida, India",
+        "role_family": "analytics",
+        "overall": 85,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 4,
+        "title": "Data Analyst",
+        "company": "HCLTech",
+        "location": "Hyderabad, India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 5,
+        "title": "Data Analyst",
+        "company": "WhiteLotus Talent Partners",
+        "location": "Hyderabad, India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 6,
+        "title": "Data Analyst",
+        "company": "HTC Global Services",
+        "location": "Hyderabad, India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 7,
+        "title": "Data Analyst",
+        "company": "Persistent Systems",
+        "location": "India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 8,
+        "title": "Data Analyst",
+        "company": "Delta Analytics AI",
+        "location": "India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 9,
+        "title": "Data Analyst",
+        "company": "Innodata Inc.",
+        "location": "India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 10,
+        "title": "Data Analyst",
+        "company": "EXL",
+        "location": "Chennai, India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 11,
+        "title": "Data Analyst",
+        "company": "Mastek",
+        "location": "Noida, India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 12,
+        "title": "GCP Data Analyst",
+        "company": "Persistent Systems",
+        "location": "Hyderabad, India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 13,
+        "title": "Litigation Data Analyst",
+        "company": "KLDiscovery",
+        "location": "India",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 14,
+        "title": "Data Analyst, User Operations",
+        "company": "Cursor",
+        "location": "Remote",
+        "role_family": "analytics",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 15,
+        "title": "Senior Data Analyst",
+        "company": "Aspire, Jordan",
+        "location": "India",
+        "role_family": "analytics",
+        "overall": 76,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 16,
+        "title": "Data Analyst",
+        "company": "Nians",
+        "location": "India",
+        "role_family": "analytics",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 17,
+        "title": "Data Analyst",
+        "company": "Straive",
+        "location": "India",
+        "role_family": "analytics",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 18,
+        "title": "Data Analyst",
+        "company": "Edwagon",
+        "location": "Bengaluru, India",
+        "role_family": "analytics",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 19,
+        "title": "Data Analyst",
+        "company": "Pharmanovia",
+        "location": "Mumbai, India",
+        "role_family": "analytics",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 20,
+        "title": "Data Analyst",
+        "company": "EaseMyTrip.com",
+        "location": "India",
+        "role_family": "analytics",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      }
+    ]
+  },
+  "Profile B": {
+    "profile": {
+      "id": "Profile B",
+      "name": "Backend Engineer",
+      "desired_role": "Backend Engineer",
+      "skills": [
+        "Python",
+        "FastAPI",
+        "PostgreSQL",
+        "Docker"
+      ],
+      "location": "Bangalore, India",
+      "expected_family": "backend"
+    },
+    "top_20_count": 20,
+    "role_family_distribution": {
+      "backend": 7,
+      "other": 13
+    },
+    "india_distribution": {
+      "AMBIGUOUS": 1,
+      "FOREIGN": 4,
+      "INDIA": 14,
+      "UNKNOWN": 1
+    },
+    "distinct_companies": 5,
+    "score_range": {
+      "min": 55,
+      "max": 71
+    },
+    "top_5_sample": [
+      {
+        "rank": 1,
+        "title": "Senior/Staff Backend Engineer",
+        "company": "Bluecargo",
+        "location": "Remote",
+        "role_family": "backend",
+        "overall": 71,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 2,
+        "title": "Backend Engineer, Consumer Devices",
+        "company": "Openai",
+        "location": "San Francisco",
+        "role_family": "backend",
+        "overall": 70,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 3,
+        "title": "Application Engineer",
+        "company": "MongoDB",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 60,
+        "role_match": 50,
+        "skill_match": 50
+      },
+      {
+        "rank": 4,
+        "title": "Software Engineer 3, AI Framework Integrations",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 60,
+        "role_match": 50,
+        "skill_match": 50
+      },
+      {
+        "rank": 5,
+        "title": "Senior Software Engineer, AI Framework Integrations",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 56,
+        "role_match": 50,
+        "skill_match": 50
+      }
+    ],
+    "top_20_full": [
+      {
+        "rank": 1,
+        "title": "Senior/Staff Backend Engineer",
+        "company": "Bluecargo",
+        "location": "Remote",
+        "role_family": "backend",
+        "overall": 71,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 2,
+        "title": "Backend Engineer, Consumer Devices",
+        "company": "Openai",
+        "location": "San Francisco",
+        "role_family": "backend",
+        "overall": 70,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 3,
+        "title": "Application Engineer",
+        "company": "MongoDB",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 60,
+        "role_match": 50,
+        "skill_match": 50
+      },
+      {
+        "rank": 4,
+        "title": "Software Engineer 3, AI Framework Integrations",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 60,
+        "role_match": 50,
+        "skill_match": 50
+      },
+      {
+        "rank": 5,
+        "title": "Senior Software Engineer, AI Framework Integrations",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 56,
+        "role_match": 50,
+        "skill_match": 50
+      },
+      {
+        "rank": 6,
+        "title": "Senior Software Engineer - Backend",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "backend",
+        "overall": 56,
+        "role_match": 65,
+        "skill_match": 25
+      },
+      {
+        "rank": 7,
+        "title": "Senior Software Engineer (Backend)",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "backend",
+        "overall": 56,
+        "role_match": 65,
+        "skill_match": 25
+      },
+      {
+        "rank": 8,
+        "title": "Senior Software Engineer - Data + AI Observability",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 56,
+        "role_match": 50,
+        "skill_match": 50
+      },
+      {
+        "rank": 9,
+        "title": "Sr Software Engineer - Backend",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "backend",
+        "overall": 56,
+        "role_match": 65,
+        "skill_match": 25
+      },
+      {
+        "rank": 10,
+        "title": "Backend Software Engineer - Codex for Finance",
+        "company": "Openai",
+        "location": "San Francisco",
+        "role_family": "backend",
+        "overall": 56,
+        "role_match": 65,
+        "skill_match": 25
+      },
+      {
+        "rank": 11,
+        "title": "Data Center Controls Network Engineer",
+        "company": "Openai",
+        "location": "San Francisco",
+        "role_family": "other",
+        "overall": 56,
+        "role_match": 50,
+        "skill_match": 50
+      },
+      {
+        "rank": 12,
+        "title": "Backend Software Engineer, Applied Foundations",
+        "company": "Openai",
+        "location": "San Francisco",
+        "role_family": "backend",
+        "overall": 56,
+        "role_match": 65,
+        "skill_match": 25
+      },
+      {
+        "rank": 13,
+        "title": "Senior Devops Engineer",
+        "company": "paytm",
+        "location": "IN",
+        "role_family": "other",
+        "overall": 56,
+        "role_match": 50,
+        "skill_match": 50
+      },
+      {
+        "rank": 14,
+        "title": "Advisory Partner Solutions Architect",
+        "company": "MongoDB",
+        "location": "India",
+        "role_family": "other",
+        "overall": 55,
+        "role_match": 50,
+        "skill_match": 25
+      },
+      {
+        "rank": 15,
+        "title": "Advisory Solutions Architect",
+        "company": "MongoDB",
+        "location": "Mumbai, India",
+        "role_family": "other",
+        "overall": 55,
+        "role_match": 50,
+        "skill_match": 25
+      },
+      {
+        "rank": 16,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 55,
+        "role_match": 50,
+        "skill_match": 25
+      },
+      {
+        "rank": 17,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 55,
+        "role_match": 50,
+        "skill_match": 25
+      },
+      {
+        "rank": 18,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 55,
+        "role_match": 50,
+        "skill_match": 25
+      },
+      {
+        "rank": 19,
+        "title": "Software Engineer 2",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 55,
+        "role_match": 50,
+        "skill_match": 25
+      },
+      {
+        "rank": 20,
+        "title": "Software Engineer 3, AI Builder Experience ",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 55,
+        "role_match": 50,
+        "skill_match": 25
+      }
+    ]
+  },
+  "Profile C": {
+    "profile": {
+      "id": "Profile C",
+      "name": "Data Engineer",
+      "desired_role": "Data Engineer",
+      "skills": [
+        "Python",
+        "SQL",
+        "Spark",
+        "Airflow"
+      ],
+      "location": "Bangalore, India",
+      "expected_family": "data_engineering"
+    },
+    "top_20_count": 20,
+    "role_family_distribution": {
+      "data_engineering": 19,
+      "analytics": 1
+    },
+    "india_distribution": {
+      "INDIA": 14,
+      "FOREIGN": 6
+    },
+    "distinct_companies": 11,
+    "score_range": {
+      "min": 75,
+      "max": 81
+    },
+    "top_5_sample": [
+      {
+        "rank": 1,
+        "title": "Senior Data Engineer (Technical Lead) - India",
+        "company": "Thakral One",
+        "location": "India",
+        "role_family": "data_engineering",
+        "overall": 81,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 2,
+        "title": "IT Controls Data Engineer",
+        "company": "Openai",
+        "location": "San Francisco",
+        "role_family": "data_engineering",
+        "overall": 81,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 3,
+        "title": "Data Engineer - INTL India",
+        "company": "Insight Global",
+        "location": "Hyderabad, India",
+        "role_family": "data_engineering",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 4,
+        "title": "Data Engineer - INTL India",
+        "company": "Insight Global",
+        "location": "Bengaluru, India",
+        "role_family": "data_engineering",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 5,
+        "title": "Databricks Data Engineer",
+        "company": "Berribot",
+        "location": "Karnataka, India",
+        "role_family": "data_engineering",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      }
+    ],
+    "top_20_full": [
+      {
+        "rank": 1,
+        "title": "Senior Data Engineer (Technical Lead) - India",
+        "company": "Thakral One",
+        "location": "India",
+        "role_family": "data_engineering",
+        "overall": 81,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 2,
+        "title": "IT Controls Data Engineer",
+        "company": "Openai",
+        "location": "San Francisco",
+        "role_family": "data_engineering",
+        "overall": 81,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 3,
+        "title": "Data Engineer - INTL India",
+        "company": "Insight Global",
+        "location": "Hyderabad, India",
+        "role_family": "data_engineering",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 4,
+        "title": "Data Engineer - INTL India",
+        "company": "Insight Global",
+        "location": "Bengaluru, India",
+        "role_family": "data_engineering",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 5,
+        "title": "Databricks Data Engineer",
+        "company": "Berribot",
+        "location": "Karnataka, India",
+        "role_family": "data_engineering",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 6,
+        "title": "Azure Fabric Data Engineer",
+        "company": "TCS",
+        "location": "Kolkata, India",
+        "role_family": "data_engineering",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 7,
+        "title": "Data Engineer \u2013 Databricks | Pharma Domain(Must)",
+        "company": "Virtual Labs",
+        "location": "India",
+        "role_family": "data_engineering",
+        "overall": 80,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 8,
+        "title": "Azure Data Engineer | 6 Yrs | Any UST India Location | Immediate Joiner",
+        "company": "UST",
+        "location": "Bengaluru, India",
+        "role_family": "data_engineering",
+        "overall": 76,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 9,
+        "title": "Senior Azure Data Engineer",
+        "company": "TCS",
+        "location": "India",
+        "role_family": "data_engineering",
+        "overall": 76,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 10,
+        "title": "Data Engineer",
+        "company": "Openai",
+        "location": "San Francisco",
+        "role_family": "data_engineering",
+        "overall": 76,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 11,
+        "title": "Data Engineer, Core Experimentation",
+        "company": "Openai",
+        "location": "Seattle",
+        "role_family": "data_engineering",
+        "overall": 76,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 12,
+        "title": "Data Engineer, People Innovation Labs",
+        "company": "Openai",
+        "location": "San Francisco",
+        "role_family": "data_engineering",
+        "overall": 76,
+        "role_match": 100,
+        "skill_match": 25
+      },
+      {
+        "rank": 13,
+        "title": "Data Analyst / Data Engineer",
+        "company": "DocOnline",
+        "location": "Hyderabad, India",
+        "role_family": "analytics",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 14,
+        "title": "Data Engineer-INTL India",
+        "company": "Insight Global",
+        "location": "Hyderabad, India",
+        "role_family": "data_engineering",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 15,
+        "title": "Data Engineer",
+        "company": "InterEx Group",
+        "location": "India",
+        "role_family": "data_engineering",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 16,
+        "title": "GCP Data Engineer",
+        "company": "Berribot",
+        "location": "Bengaluru, India",
+        "role_family": "data_engineering",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 17,
+        "title": "Data Engineer - INTL India",
+        "company": "Insight Global",
+        "location": "Pune, India",
+        "role_family": "data_engineering",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 18,
+        "title": "Data Engineer (Informatica IDMC)",
+        "company": "Vericence",
+        "location": "India",
+        "role_family": "data_engineering",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 0
+      },
+      {
+        "rank": 19,
+        "title": "Specialist Solutions Architect - Data Engineering & Warehousing (Digital Native Business) ",
+        "company": "Databricks",
+        "location": "United States",
+        "role_family": "data_engineering",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 50
+      },
+      {
+        "rank": 20,
+        "title": "Specialist Solutions Architect - Data Engineering & Warehousing (Financial Services) ",
+        "company": "Databricks",
+        "location": "United States",
+        "role_family": "data_engineering",
+        "overall": 75,
+        "role_match": 100,
+        "skill_match": 50
+      }
+    ]
+  },
+  "Profile D": {
+    "profile": {
+      "id": "Profile D",
+      "name": "AI/ML Engineer",
+      "desired_role": "AI/ML Engineer",
+      "skills": [
+        "Python",
+        "PyTorch",
+        "TensorFlow",
+        "ML"
+      ],
+      "location": "Bangalore, India",
+      "expected_family": "ai_ml"
+    },
+    "top_20_count": 20,
+    "role_family_distribution": {
+      "other": 17,
+      "ai_ml": 1,
+      "backend": 2
+    },
+    "india_distribution": {
+      "INDIA": 18,
+      "FOREIGN": 2
+    },
+    "distinct_companies": 5,
+    "score_range": {
+      "min": 62,
+      "max": 66
+    },
+    "top_5_sample": [
+      {
+        "rank": 1,
+        "title": "Application Engineer",
+        "company": "MongoDB",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 2,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 3,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 4,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 5,
+        "title": "Software Engineer 3, AI Framework Integrations",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      }
+    ],
+    "top_20_full": [
+      {
+        "rank": 1,
+        "title": "Application Engineer",
+        "company": "MongoDB",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 2,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 3,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 4,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 5,
+        "title": "Software Engineer 3, AI Framework Integrations",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 6,
+        "title": "Software Engineer 2",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 7,
+        "title": "Software Engineer 3, AI Builder Experience ",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 8,
+        "title": "Applied AI Engineer",
+        "company": "Openai",
+        "location": "Delhi NCR, India",
+        "role_family": "ai_ml",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 9,
+        "title": "Software Engineer, Full Stack (People Innovation)",
+        "company": "Openai",
+        "location": "US - Remote",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 10,
+        "title": "Software Engineer, Infrastructure Security",
+        "company": "Openai",
+        "location": "US - Remote",
+        "role_family": "other",
+        "overall": 66,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 11,
+        "title": "Software Engineer in Test",
+        "company": "InfoBeans",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 65,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 12,
+        "title": "Software Engineer I (Bangalore, India)",
+        "company": "AiPrise",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 65,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 13,
+        "title": "Software Engineer II (Bangalore, India)",
+        "company": "AiPrise",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 65,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 14,
+        "title": "Senior Software Engineer, AI Builder Experience (ABX)",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 62,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 15,
+        "title": "Senior Software Engineer, AI Framework Integrations",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 62,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 16,
+        "title": "Senior Software Engineer - Backend",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "backend",
+        "overall": 62,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 17,
+        "title": "Senior Software Engineer (Backend)",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "backend",
+        "overall": 62,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 18,
+        "title": "Senior Software Engineer - Data + AI Observability",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 62,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 19,
+        "title": "Senior Software Engineer (Infra)",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 62,
+        "role_match": 85,
+        "skill_match": 25
+      },
+      {
+        "rank": 20,
+        "title": "Senior Software Engineer - Ingestion",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 62,
+        "role_match": 85,
+        "skill_match": 25
+      }
+    ]
+  },
+  "Profile E": {
+    "profile": {
+      "id": "Profile E",
+      "name": "SAP Consultant / SAP ABAP",
+      "desired_role": "SAP Consultant",
+      "skills": [
+        "SAP ABAP",
+        "SAP",
+        "SQL"
+      ],
+      "location": "India",
+      "expected_family": "sap"
+    },
+    "top_20_count": 20,
+    "role_family_distribution": {
+      "sap": 10,
+      "other": 10
+    },
+    "india_distribution": {
+      "INDIA": 18,
+      "FOREIGN": 2
+    },
+    "distinct_companies": 10,
+    "score_range": {
+      "min": 59,
+      "max": 74
+    },
+    "top_5_sample": [
+      {
+        "rank": 1,
+        "title": "SAP ABAP Consultant \u2013 Fiori",
+        "company": "Dautom",
+        "location": "Hyderabad, India",
+        "role_family": "sap",
+        "overall": 74,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 2,
+        "title": "SAP ABAP consultant",
+        "company": "NTT America, Inc.",
+        "location": "India",
+        "role_family": "sap",
+        "overall": 74,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 3,
+        "title": "SAP ABAP Technical - ODATA",
+        "company": "NTT America, Inc.",
+        "location": "Bengaluru, India",
+        "role_family": "sap",
+        "overall": 74,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 4,
+        "title": "SAP ABAP Consultant",
+        "company": "NTT America, Inc.",
+        "location": "Bengaluru, India",
+        "role_family": "sap",
+        "overall": 74,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 5,
+        "title": "SAP ABAP Dveloper",
+        "company": "Diensten Tech Limited",
+        "location": "Bengaluru, India",
+        "role_family": "sap",
+        "overall": 74,
+        "role_match": 85,
+        "skill_match": 67
+      }
+    ],
+    "top_20_full": [
+      {
+        "rank": 1,
+        "title": "SAP ABAP Consultant \u2013 Fiori",
+        "company": "Dautom",
+        "location": "Hyderabad, India",
+        "role_family": "sap",
+        "overall": 74,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 2,
+        "title": "SAP ABAP consultant",
+        "company": "NTT America, Inc.",
+        "location": "India",
+        "role_family": "sap",
+        "overall": 74,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 3,
+        "title": "SAP ABAP Technical - ODATA",
+        "company": "NTT America, Inc.",
+        "location": "Bengaluru, India",
+        "role_family": "sap",
+        "overall": 74,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 4,
+        "title": "SAP ABAP Consultant",
+        "company": "NTT America, Inc.",
+        "location": "Bengaluru, India",
+        "role_family": "sap",
+        "overall": 74,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 5,
+        "title": "SAP ABAP Dveloper",
+        "company": "Diensten Tech Limited",
+        "location": "Bengaluru, India",
+        "role_family": "sap",
+        "overall": 74,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 6,
+        "title": "Sr. Developer, SAP ABAP",
+        "company": "Rimini Street",
+        "location": "Hyderabad, India",
+        "role_family": "sap",
+        "overall": 70,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 7,
+        "title": "Sr SAP ABAP Technical - Workflow",
+        "company": "NTT America, Inc.",
+        "location": "Bengaluru, India",
+        "role_family": "sap",
+        "overall": 70,
+        "role_match": 85,
+        "skill_match": 67
+      },
+      {
+        "rank": 8,
+        "title": "SAP HANA Infrastructure",
+        "company": "Logic Software Solutions",
+        "location": "India",
+        "role_family": "sap",
+        "overall": 67,
+        "role_match": 85,
+        "skill_match": 33
+      },
+      {
+        "rank": 9,
+        "title": "Application Engineer",
+        "company": "MongoDB",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 63,
+        "role_match": 70,
+        "skill_match": 33
+      },
+      {
+        "rank": 10,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 63,
+        "role_match": 70,
+        "skill_match": 33
+      },
+      {
+        "rank": 11,
+        "title": "Software Engineer 3",
+        "company": "MongoDB",
+        "location": "Gurugram, India",
+        "role_family": "other",
+        "overall": 63,
+        "role_match": 70,
+        "skill_match": 33
+      },
+      {
+        "rank": 12,
+        "title": "Software Engineer, Full Stack (People Innovation)",
+        "company": "Openai",
+        "location": "US - Remote",
+        "role_family": "other",
+        "overall": 63,
+        "role_match": 70,
+        "skill_match": 33
+      },
+      {
+        "rank": 13,
+        "title": "Software Engineer- PLSQL -ACP",
+        "company": "Avaloq",
+        "location": "Pune, India",
+        "role_family": "other",
+        "overall": 62,
+        "role_match": 70,
+        "skill_match": 33
+      },
+      {
+        "rank": 14,
+        "title": "IN_Senior Associate_ SAP ABAP_SAP_Advisory_Kolkata",
+        "company": "PwC",
+        "location": "India",
+        "role_family": "sap",
+        "overall": 60,
+        "role_match": 40,
+        "skill_match": 67
+      },
+      {
+        "rank": 15,
+        "title": "IN_Associate_ SAP ABAP_SAP_Advisory_Ahmedabad",
+        "company": "PwC",
+        "location": "Ahmedabad, India",
+        "role_family": "sap",
+        "overall": 60,
+        "role_match": 40,
+        "skill_match": 67
+      },
+      {
+        "rank": 16,
+        "title": "Senior Software Engineer - Search",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 59,
+        "role_match": 70,
+        "skill_match": 33
+      },
+      {
+        "rank": 17,
+        "title": "Senior Software Engineer - Ingestion",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 59,
+        "role_match": 70,
+        "skill_match": 33
+      },
+      {
+        "rank": 18,
+        "title": "Senior Software Engineer - Partner Ecosystem",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 59,
+        "role_match": 70,
+        "skill_match": 33
+      },
+      {
+        "rank": 19,
+        "title": "Senior Staff Software Engineer- Search Quality",
+        "company": "Databricks",
+        "location": "Bengaluru, India",
+        "role_family": "other",
+        "overall": 59,
+        "role_match": 70,
+        "skill_match": 33
+      },
+      {
+        "rank": 20,
+        "title": "Forward Deployed Software Engineer - SF",
+        "company": "Openai",
+        "location": "San Francisco",
+        "role_family": "other",
+        "overall": 59,
+        "role_match": 70,
+        "skill_match": 33
+      }
+    ]
+  }
+}

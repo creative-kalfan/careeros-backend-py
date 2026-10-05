@@ -1,0 +1,30 @@
+{
+  "label": "BASELINE",
+  "timestamp": "2026-09-16T10:53:46.576774+00:00",
+  "total_jobs": 3211,
+  "active_jobs": 207,
+  "inactive_jobs": 3004,
+  "active_india_jobs": 122,
+  "active_foreign_jobs": 60,
+  "ambiguous_jobs": 7,
+  "unknown_jobs": 18,
+  "active_target_role_jobs": 124,
+  "active_analytics_jobs": 100,
+  "active_backend_jobs": 6,
+  "active_ai_ml_jobs": 4,
+  "active_data_engineering_jobs": 0,
+  "active_sap_jobs": 14,
+  "distinct_companies": 141,
+  "jobs_by_provider": {
+    "adzuna": 188,
+    "ycombinator": 19
+  },
+  "freshness_distribution": {
+    "15-30d": 66,
+    "<= 24h": 54,
+    "8-14d": 41,
+    "1-7d": 25,
+    "date_unavailable": 19,
+    "> 30d (stale)": 2
+  }
+}

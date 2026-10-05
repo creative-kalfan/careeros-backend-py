@@ -1,0 +1,9 @@
+{
+  "p0_count": 33,
+  "p1_count": 53,
+  "p2_count": 19,
+  "simulated_ats_pass_enqueued_count": 43,
+  "p0_in_pass": 28,
+  "rotation_working": true,
+  "scheduler_chain": "ScheduledCrawlRunner -> run_provider_pass (P0 + day-of-year slice) -> enqueue_crawl_company -> ARQ Worker crawl_company_job -> JobIngestionService -> JobRepository -> Supabase"
+}

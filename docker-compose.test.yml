@@ -1,0 +1,18 @@
+
+services:
+  visual-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.test.visual
+    # We mount the tests folder so that golden images / diffs can be written back to the host if needed
+    volumes:
+      - ./tests:/app/tests
+    # By default, run pytest with the visual marker
+    command: ["pytest", "-m", "visual", "-v"]
+    # Provide the mocked API keys for tests
+    environment:
+      - GROQ_API_KEY=test-groq-api-key
+      - REDIS_URL=redis://localhost:6379
+      - SUPABASE_SERVICE_ROLE_KEY=test-supabase-service-role
+      - NEXT_PUBLIC_SUPABASE_URL=https://test.supabase.co
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon

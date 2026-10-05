@@ -104,3 +104,12 @@ pytest -v
 The critical test is `test_rls_authenticated_client_returns_own_row` — it must
 pass (return the user's own profile row, non-null) for this feature to be
 considered done.
+
+## Visual Regression Testing
+
+Visual regression tests (`pytest.mark.visual`) verify layout, font rendering, and pixel-perfect generation (e.g. PDF/DOCX compile paths). Due to font rendering differences between Windows and Linux, you must run these tests within a standardized container:
+
+```bash
+# Run only visual regression tests in isolated Playwright Linux container
+docker-compose -f docker-compose.test.yml up --build --abort-on-container-exit
+```

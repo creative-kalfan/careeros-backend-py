@@ -65,9 +65,11 @@ def test_register_endpoint_reachable_and_unauthenticated_error_has_cors(
     assert resp.status_code in (401, 403)
     assert resp.headers["access-control-allow-origin"] == FRONTEND_ORIGIN
     body = resp.json()
-    # AuthError handler returns {"detail": ...}; standard envelope is
-    # {"success": false, "error": {...}}. Both are real, surfaced errors.
-    assert body.get("success") is False or "detail" in body
+    # AuthError handler returns the standard envelope
+    # {"success": false, "error": {code, message}}.
+    assert body.get("success") is False
+    assert "detail" not in body
+    assert isinstance(body.get("error", {}).get("message"), str)
 
 
 def test_register_invalid_payload_returns_validation_error_with_cors(

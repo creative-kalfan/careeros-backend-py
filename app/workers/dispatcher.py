@@ -34,6 +34,7 @@ async def enqueue(
     timeout: Optional[int] = None,
     _defer: Optional[int] = None,
     _queue_name: Optional[str] = None,
+    _job_id: Optional[str] = None,
 ) -> Optional[str]:
     """Enqueue a CareerOS background job.
 
@@ -45,6 +46,7 @@ async def enqueue(
         timeout: Override the default timeout for this enqueue (seconds).
         _defer: Legacy alias for ``_defer_by``.
         _queue_name: Target ARQ queue name.
+        _job_id: Optional unique job ID for deduplication.
 
     Returns:
         The ARQ ``job_id`` string, or ``None`` if enqueue failed.
@@ -62,6 +64,8 @@ async def enqueue(
         job_kwargs["_defer_by"] = effective_defer_by
     if timeout is not None:
         job_kwargs["timeout"] = timeout
+    if _job_id is not None:
+        job_kwargs["_job_id"] = _job_id
 
     from app.config import get_settings as _get_settings
     target_queue = _queue_name
@@ -116,6 +120,17 @@ async def enqueue_crawl_company(
 
     job_kwargs: dict[str, Any] = {}
     effective_defer = _defer_by if _defer_by is not None else _defer
+
+    from app.utils.rate_limiter import check_rate_limit
+    allowed = await check_rate_limit(
+        source,
+        settings.crawl_rate_limit_tokens,
+        settings.crawl_rate_limit_window_seconds,
+    )
+    if not allowed:
+        logger.info("Rate limit exceeded for %s, deferring by %ds", source, settings.crawl_rate_limit_window_seconds)
+        effective_defer = max(effective_defer or 0, settings.crawl_rate_limit_window_seconds)
+
     if effective_defer is not None and effective_defer > 0:
         job_kwargs["_defer_by"] = effective_defer
     if _defer_until is not None:

@@ -497,6 +497,7 @@ class JobRepository:
     ) -> dict[str, int]:
         """Upsert a batch of normalized jobs."""
         self.last_inserted_ids: list[str] = []
+        self.last_analysis_ids: list[str] = []
         self.last_content_hash: str | None = None
         import os
         import json
@@ -604,6 +605,8 @@ class JobRepository:
                         if isinstance(res.data.get("inserted_ids"), list):
                             rpc_ids_supported = True
                             inserted_ids.extend(res.data["inserted_ids"])
+                            if "analysis_ids" in res.data and isinstance(res.data["analysis_ids"], list):
+                                getattr(self, "last_analysis_ids", []).extend(res.data["analysis_ids"])
                         else:
                             rpc_ids_supported = False
                 except Exception as exc:
@@ -663,6 +666,7 @@ class JobRepository:
         reactivate_ids: list[str] = []
         full_updates: list[tuple[str, dict[str, Any]]] = []
         singles: list[tuple[tuple[str, str], dict[str, Any]]] = []
+        updated_external_ids: list[str] = []
         for key, row in pending:
             action, *payload = self._classify_row(
                 key, row, existing_map.get(key), now_iso, has_last_seen
@@ -688,6 +692,7 @@ class JobRepository:
                     singles.append((key, row))
                 else:
                     full_updates.append((payload[0], payload[1]))
+                    updated_external_ids.append(key[0])
                     updated += 1
             else:  # noop: same content, nothing to refresh
                 unchanged += 1
@@ -718,6 +723,7 @@ class JobRepository:
                         inserted_ids.append(key[0])
                     elif outcome == "updated":
                         updated += 1
+                        updated_external_ids.append(key[0])
                     elif outcome == "deduplicated":
                         deduplicated += 1
                     else:
@@ -762,6 +768,7 @@ class JobRepository:
                 inserted_ids.append(key[0])
             elif outcome == "updated":
                 updated += 1
+                updated_external_ids.append(key[0])
             elif outcome == "deduplicated":
                 deduplicated += 1
             else:
@@ -783,6 +790,7 @@ class JobRepository:
         self.last_path = "legacy"
         self.last_db_requests = self._db_requests
         self.last_inserted_ids = inserted_ids
+        self.last_analysis_ids = inserted_ids + updated_external_ids
         self.last_content_hash = content_hash
         return {
             "discovered": len(jobs),

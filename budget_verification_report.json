@@ -1,0 +1,18 @@
+{
+  "observed_run": {
+    "targets_crawled": 14,
+    "total_duration_s": 1558.94,
+    "avg_duration_s": 111.35,
+    "firecrawl_credits_used": 3
+  },
+  "monthly_projections": {
+    "estimated_daily_crawls": 29,
+    "estimated_monthly_http_requests": 1740,
+    "estimated_monthly_firecrawl_credits": 30,
+    "firecrawl_budget_cap": 500,
+    "firecrawl_budget_percent": 6.0,
+    "estimated_monthly_redis_requests": 8700,
+    "redis_daily_budget_cap": 10000
+  },
+  "within_budgets": true
+}

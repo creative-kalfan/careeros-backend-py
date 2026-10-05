@@ -1,0 +1,24 @@
+{
+  "requests_made": 3,
+  "jobs_discovered": 1,
+  "jobs_enriched": 1,
+  "successful_enrichments": 1,
+  "failed_enrichments": 0,
+  "duplicate_discoveries": 0,
+  "estimated_credits": 3,
+  "role_assessment": "Strictly selective; used only for verified un-boarded Indian unicorns and targeted single-page enrichment.",
+  "enrichment_test": {
+    "apply_url": "https://razorpay.com/jobs/",
+    "enriched_fields": [
+      "description",
+      "employment_type",
+      "remote",
+      "posted_date",
+      "skills",
+      "enriched_via",
+      "enriched_at"
+    ],
+    "success": true,
+    "duration_s": 3.02
+  }
+}

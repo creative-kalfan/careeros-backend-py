@@ -1,0 +1,960 @@
+{
+  "total_targets": 105,
+  "status_distribution": {
+    "NOT_TESTED": 89,
+    "ACTIVE": 15,
+    "NO_JOBS": 1
+  },
+  "targets_actually_crawled": 14,
+  "targets_producing_jobs": 15,
+  "targets_producing_india_jobs": 9,
+  "targets_producing_target_role_jobs": 8,
+  "targets_failing_repeatedly": 0,
+  "targets": [
+    {
+      "source": "ycombinator",
+      "slug": "",
+      "company": "",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "firecrawl",
+      "slug": "Razorpay|https://razorpay.com/jobs/",
+      "company": "Razorpay",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "firecrawl",
+      "slug": "PhonePe|https://www.phonepe.com/careers/job-openings/",
+      "company": "PhonePe",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "firecrawl",
+      "slug": "CRED|https://careers.cred.club/",
+      "company": "CRED",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "firecrawl",
+      "slug": "Zerodha|https://zerodha.com/careers",
+      "company": "Zerodha",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "firecrawl",
+      "slug": "Swiggy|https://careers.swiggy.com",
+      "company": "Swiggy",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "firecrawl",
+      "slug": "BrowserStack|https://www.browserstack.com/careers",
+      "company": "BrowserStack",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "firecrawl",
+      "slug": "PostHog|https://posthog.com/careers",
+      "company": "PostHog",
+      "tier": "P1",
+      "status": "ACTIVE",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "firecrawl",
+      "slug": "Linear|https://linear.app/careers",
+      "company": "Linear",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "notion",
+      "company": "Notion",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": true,
+      "has_target_role_jobs": true
+    },
+    {
+      "source": "ashby",
+      "slug": "openai",
+      "company": "OpenAI",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": true,
+      "has_target_role_jobs": true
+    },
+    {
+      "source": "ashby",
+      "slug": "elevenlabs",
+      "company": "ElevenLabs",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "cursor",
+      "company": "Cursor",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": true,
+      "has_target_role_jobs": true
+    },
+    {
+      "source": "ashby",
+      "slug": "cognition",
+      "company": "Cognition",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "perplexity",
+      "company": "Perplexity",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "stripe",
+      "company": "Stripe",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": true,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "databricks",
+      "company": "Databricks",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": true,
+      "has_target_role_jobs": true
+    },
+    {
+      "source": "greenhouse",
+      "slug": "mongodb",
+      "company": "MongoDB",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": true,
+      "has_target_role_jobs": true
+    },
+    {
+      "source": "greenhouse",
+      "slug": "okta",
+      "company": "Okta",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "zscaler",
+      "company": "Zscaler",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "inmobi",
+      "company": "InMobi",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "gitlab",
+      "company": "GitLab",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "rubrik",
+      "company": "Rubrik",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "elastic",
+      "company": "Elastic",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "druva",
+      "company": "Druva",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "twilio",
+      "company": "Twilio",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "fivetran",
+      "company": "Fivetran",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "coinbase",
+      "company": "Coinbase",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "samsara",
+      "company": "Samsara",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "airbnb",
+      "company": "Airbnb",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "datadog",
+      "company": "Datadog",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "groww",
+      "company": "Groww",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": true,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "postman",
+      "company": "Postman",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": true,
+      "has_target_role_jobs": true
+    },
+    {
+      "source": "lever",
+      "slug": "paytm",
+      "company": "Paytm",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": false,
+      "has_target_role_jobs": true
+    },
+    {
+      "source": "lever",
+      "slug": "cred",
+      "company": "CRED",
+      "tier": "P0",
+      "status": "ACTIVE",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "lever",
+      "slug": "coupa",
+      "company": "Coupa",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "smartrecruiters",
+      "slug": "servicenow",
+      "company": "ServiceNow",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "ramp",
+      "company": "Ramp",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "linear",
+      "company": "Linear",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "sentry",
+      "company": "Sentry",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "vanta",
+      "company": "Vanta",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "synthesia",
+      "company": "Synthesia",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "hex",
+      "company": "Hex",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "modal",
+      "company": "Modal",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "posthog",
+      "company": "PostHog",
+      "tier": "P1",
+      "status": "ACTIVE",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "render",
+      "company": "Render",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "cohere",
+      "company": "Cohere",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "replit",
+      "company": "Replit",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "deepgram",
+      "company": "Deepgram",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "supabase",
+      "company": "Supabase",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "langchain",
+      "company": "LangChain",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "baseten",
+      "company": "Baseten",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "figma",
+      "company": "Figma",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "cloudflare",
+      "company": "Cloudflare",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "yugabyte",
+      "company": "Yugabyte",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "cockroachlabs",
+      "company": "Cockroach Labs",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "pingidentity",
+      "company": "Ping Identity",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "amplitude",
+      "company": "Amplitude",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "mixpanel",
+      "company": "Mixpanel",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "starburst",
+      "company": "Starburst",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "gusto",
+      "company": "Gusto",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "instacart",
+      "company": "Instacart",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "affirm",
+      "company": "Affirm",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "discord",
+      "company": "Discord",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "robinhood",
+      "company": "Robinhood",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "brex",
+      "company": "Brex",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "chime",
+      "company": "Chime",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "lyft",
+      "company": "Lyft",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "pinterest",
+      "company": "Pinterest",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "reddit",
+      "company": "Reddit",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "pagerduty",
+      "company": "PagerDuty",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "qualtrics",
+      "company": "Qualtrics",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "checkr",
+      "company": "Checkr",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "carta",
+      "company": "Carta",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "braze",
+      "company": "Braze",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "confluent",
+      "company": "Confluent",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "snowflake",
+      "company": "Snowflake",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "paloaltonetworks",
+      "company": "Palo Alto Networks",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "crowdstrike",
+      "company": "CrowdStrike",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "splunk",
+      "company": "Splunk",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "box",
+      "company": "Box",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "lever",
+      "slug": "pocketfm",
+      "company": "Pocket FM",
+      "tier": "P1",
+      "status": "ACTIVE",
+      "has_india_jobs": true,
+      "has_target_role_jobs": true
+    },
+    {
+      "source": "lever",
+      "slug": "outreach",
+      "company": "Outreach",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "lever",
+      "slug": "palantir",
+      "company": "Palantir",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "lever",
+      "slug": "spotify",
+      "company": "Spotify",
+      "tier": "P1",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "anyscale",
+      "company": "Anyscale",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "pinecone",
+      "company": "Pinecone",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "resend",
+      "company": "Resend",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "tavily",
+      "company": "Tavily",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "e2b",
+      "company": "E2B",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "warp",
+      "company": "Warp",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "graphite",
+      "company": "Graphite",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "railway",
+      "company": "Railway",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "suno",
+      "company": "Suno",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "lattice",
+      "company": "Lattice",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "dremio",
+      "company": "Dremio",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "slice",
+      "company": "Slice",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "greenhouse",
+      "slug": "porter",
+      "company": "Porter",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "fly",
+      "company": "Fly.io",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "sourcegraph",
+      "company": "Sourcegraph",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "ashby",
+      "slug": "midjourney",
+      "company": "Midjourney",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "lever",
+      "slug": "wealthfront",
+      "company": "Wealthfront",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "smartrecruiters",
+      "slug": "averydennison",
+      "company": "Avery Dennison",
+      "tier": "P2",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "adzuna",
+      "slug": "software engineer",
+      "company": "",
+      "tier": "P0",
+      "status": "NOT_TESTED",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    },
+    {
+      "source": "jobspy",
+      "slug": "data analyst India",
+      "company": "",
+      "tier": "P2",
+      "status": "NO_JOBS",
+      "has_india_jobs": false,
+      "has_target_role_jobs": false
+    }
+  ]
+}

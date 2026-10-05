@@ -46,6 +46,9 @@ class JobOut(BaseModel):
     mass_hiring_status: Optional[str] = None
     mass_hiring_details: Optional[dict[str, Any]] = None
     raw: Optional[dict[str, Any]] = None
+    is_ghost_job: Optional[bool] = None
+    is_high_roi: Optional[bool] = None
+    viability_score: Optional[int] = None
 
     @classmethod
     def from_db_row(cls, row: dict[str, Any]) -> "JobOut":
@@ -55,6 +58,47 @@ class JobOut(BaseModel):
         SDK aliases) fields so the response can be consumed by either the
         existing TypeScript callers or new Python clients.
         """
+        import datetime
+        
+        is_ghost_job = False
+        is_high_roi = False
+        viability_score = 100
+        
+        posted_date = row.get("posted_at") or row.get("posted_date")
+        last_seen_at = row.get("last_seen_at")
+        content_updated_at = row.get("content_updated_at")
+        
+        if posted_date and last_seen_at:
+            try:
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+                posted = datetime.datetime.fromisoformat(str(posted_date).replace("Z", "+00:00"))
+                seen = datetime.datetime.fromisoformat(str(last_seen_at).replace("Z", "+00:00"))
+                if posted.tzinfo is None:
+                    posted = posted.replace(tzinfo=datetime.timezone.utc)
+                if seen.tzinfo is None:
+                    seen = seen.replace(tzinfo=datetime.timezone.utc)
+                
+                age_days = (seen - posted).total_seconds() / 86400
+                if age_days > 60:
+                    if content_updated_at:
+                        updated = datetime.datetime.fromisoformat(str(content_updated_at).replace("Z", "+00:00"))
+                        if updated.tzinfo is None:
+                            updated = updated.replace(tzinfo=datetime.timezone.utc)
+                        if (now_utc - updated).total_seconds() / 86400 > 30:
+                            is_ghost_job = True
+                    else:
+                        is_ghost_job = True
+                        
+                if (now_utc - posted).total_seconds() / 86400 < 2:
+                    is_high_roi = True
+            except Exception:
+                pass
+                
+        if is_ghost_job:
+            viability_score -= 50
+        if is_high_roi:
+            viability_score += 20
+
         return cls(
             id=row.get("id") or row.get("external_job_id"),
             external_job_id=row.get("external_job_id"),
@@ -92,4 +136,7 @@ class JobOut(BaseModel):
             mass_hiring_status=row.get("mass_hiring_status"),
             mass_hiring_details=row.get("mass_hiring_details"),
             raw=row.get("raw"),
+            is_ghost_job=is_ghost_job,
+            is_high_roi=is_high_roi,
+            viability_score=viability_score,
         )

@@ -7,11 +7,12 @@ import asyncio
 import os
 from typing import Any
 
+from arq import cron
 from arq.connections import ArqRedis, RedisSettings, create_pool
 from arq.worker import Worker, check_health, func, run_worker
 
 from app.config import get_settings
-from app.workers import functions
+from app.workers.functions import aggregate_market_skill_trends_job
 from app.workers.jobs.crawl_jobs import crawl_company_job
 from app.workers.jobs.interview_prep_jobs import generate_interview_prep_job  # noqa: F401 — registration side effect
 from app.workers.jobs.job_intelligence_job import analyze_job_intelligence_job, analyze_jobs_batch
@@ -209,6 +210,9 @@ class WorkerSettings:
     poll_delay = _settings.arq_poll_delay
     health_check_interval = 3600
     retry_jobs = True
+    cron_jobs = [
+        cron(aggregate_market_skill_trends_job, hour=0, minute=0, run_at_startup=True)
+    ]
 
 
 class AnalysisWorkerSettings:

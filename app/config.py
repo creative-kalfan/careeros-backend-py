@@ -212,7 +212,20 @@ class Settings(BaseSettings):
     worker_consume_analysis_queue: bool = Field(
         default=True, alias="WORKER_CONSUME_ANALYSIS_QUEUE"
     )
+    crawl_rate_limit_tokens: int = Field(
+        default=5, alias="CRAWL_RATE_LIMIT_TOKENS"
+    )
+    crawl_rate_limit_window_seconds: int = Field(
+        default=300, alias="CRAWL_RATE_LIMIT_WINDOW_SECONDS"
+    )
 
+    # WhatsApp-Native Alert System (Twilio or Meta WhatsApp API)
+    whatsapp_provider: str = Field(default="twilio", alias="WHATSAPP_PROVIDER")
+    twilio_account_sid: str = Field(default="", alias="TWILIO_ACCOUNT_SID")
+    twilio_auth_token: str = Field(default="", alias="TWILIO_AUTH_TOKEN")
+    twilio_whatsapp_from: str = Field(default="whatsapp:+14155238886", alias="TWILIO_WHATSAPP_FROM")
+    meta_whatsapp_token: str = Field(default="", alias="META_WHATSAPP_TOKEN")
+    meta_whatsapp_phone_number_id: str = Field(default="", alias="META_WHATSAPP_PHONE_NUMBER_ID")
 
 @lru_cache
 def get_settings() -> Settings:

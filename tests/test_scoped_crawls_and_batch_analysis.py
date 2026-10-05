@@ -189,6 +189,7 @@ async def test_crawl_job_enqueues_chunked_analysis_batches(monkeypatch):
     }
     inserted_ids_list = [f"ext_{i}" for i in range(55)]
     mock_ingestion.job_repository.last_inserted_ids = inserted_ids_list
+    mock_ingestion.job_repository.last_analysis_ids = inserted_ids_list
     mock_ingestion.job_repository._client.table().select().eq().eq().execute.return_value = MagicMock(count=0)
 
     monkeypatch.setattr(crawl_mod, "JobIngestionService", MagicMock(return_value=mock_ingestion))
@@ -289,3 +290,55 @@ def test_firecrawl_interval_floor():
         maximum=settings.crawl_max_interval_minutes,
     )
     assert interval >= 4320
+
+@pytest.mark.asyncio
+async def test_crawl_job_skips_enqueue_when_no_content_hash_changed(monkeypatch):
+    """Crawl discovering jobs but with unchanged content hashes should not enqueue to analysis."""
+    enqueued_jobs = []
+    
+    mock_redis = MagicMock()
+    async def _mock_enqueue(job_name, *args, **kwargs):
+        enqueued_jobs.append((job_name, args, kwargs))
+        
+    mock_redis.enqueue_job = _mock_enqueue
+    
+    from app.workers import settings
+    monkeypatch.setattr(settings, "get_redis_pool", AsyncMock(return_value=mock_redis))
+    
+    import app.workers.jobs.crawl_jobs as crawl_mod
+    monkeypatch.setattr(crawl_mod, "_uses_complete_inventory", lambda s: True)
+    monkeypatch.setattr(crawl_mod, "_india_only_for", lambda s, slug: False)
+    monkeypatch.setattr(crawl_mod, "_record_crawl_status", AsyncMock())
+    
+    from app.services.jobs import crawl_dispatcher
+    monkeypatch.setattr(crawl_dispatcher, "complete_target", AsyncMock())
+    
+    mock_crawler = MagicMock()
+    mock_crawler.crawl = AsyncMock(return_value=[
+        NormalizedJob(title="Job 1", company="Acme", source_platform="lever", external_job_id="ext_1")
+    ])
+    mock_crawler.enrich = None
+    
+    mock_ingestion = MagicMock()
+    mock_ingestion.crawler_factory = MagicMock(return_value=mock_crawler)
+    mock_ingestion.normalize_and_filter = MagicMock(side_effect=lambda jobs: (jobs, 0))
+    mock_ingestion.ingest_lever_jobs = AsyncMock(return_value={
+        "discovered": 1, "inserted": 0, "updated": 1, "unchanged": 0, "deduplicated": 0, "skipped": 0,
+    })
+    
+    # Simulate upsert where the job was updated but content hash didn't change (analysis_ids is empty)
+    mock_ingestion.job_repository.upsert_jobs.return_value = {
+        "discovered": 1, "inserted": 0, "updated": 1, "unchanged": 0, "deduplicated": 0, "skipped": 0,
+    }
+    mock_ingestion.job_repository.last_inserted_ids = []
+    mock_ingestion.job_repository.last_analysis_ids = []
+    
+    monkeypatch.setattr(crawl_mod, "JobIngestionService", MagicMock(return_value=mock_ingestion))
+    monkeypatch.setattr(crawl_mod, "_deactivate_after_success", lambda *args, **kwargs: (0, 0, 0, 0))
+    
+    res = await crawl_company_job({}, "lever", "acme")
+    assert res["status"] == "success"
+    
+    # Verify no enqueue calls for analysis batches were made
+    batch_calls = [c for c in enqueued_jobs if c[0] == "analyze_jobs_batch"]
+    assert len(batch_calls) == 0

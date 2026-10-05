@@ -229,3 +229,95 @@ async def parse_resume_job(
             os.unlink(temp_path)
         except OSError:
             pass
+
+@register_job(
+    "aggregate_market_skill_trends_job",
+    timeout=60,
+    max_tries=1,
+    retry=False,
+    description="Cron/ARQ task to aggregate active job skills by role_title.",
+)
+async def aggregate_market_skill_trends_job(ctx: dict[str, Any]) -> dict[str, str]:
+    """Cron/ARQ task to aggregate active job skills by role_title."""
+    from app.db.supabase import get_service_client
+    import logging
+
+    logger = logging.getLogger(__name__)
+    supabase = get_service_client()
+    try:
+        res = supabase.rpc("aggregate_skill_trends", {}).execute()
+        return {"status": "success", "message": "Aggregated market skill trends"}
+    except Exception as e:
+        logger.exception("Failed to aggregate market skill trends")
+        return {"status": "error", "message": str(e)}
+
+
+@register_job(
+    "scan_and_alert_high_roi_jobs",
+    timeout=120,
+    max_tries=2,
+    retry=True,
+    description="Scan newly ingested jobs with is_high_roi=True and send WhatsApp alerts to matching users.",
+)
+async def scan_and_alert_high_roi_jobs(ctx: dict[str, Any], job_ids: list[str] | None = None) -> dict[str, Any]:
+    """If a job is ingested that matches a user's target role and has is_high_roi = True,
+
+    send a WhatsApp message: "New [Role] role at [Company]. Reply 'TAILOR' to generate a custom resume."
+    """
+    from app.db.supabase import get_service_client
+    from app.utils.whatsapp import send_whatsapp_message
+    from app.workers.settings import get_redis_pool
+
+    supabase = get_service_client()
+    alerts_sent = 0
+
+    try:
+        query = supabase.table("jobs").select("id, title, company, role_category, is_high_roi").eq("is_high_roi", True).eq("is_active", True)
+        if job_ids:
+            query = query.in_("id", job_ids)
+        else:
+            query = query.order("created_at", desc=True).limit(20)
+
+        res = query.execute()
+        high_roi_jobs = res.data or []
+        if not high_roi_jobs:
+            return {"status": "ok", "alerts_sent": 0, "message": "No high ROI jobs found."}
+
+        # Query users with phone numbers and target roles
+        profiles_res = supabase.table("profiles").select("id, phone, target_role, user_id").execute()
+        profiles = [p for p in (profiles_res.data or []) if p.get("phone")]
+
+        redis = await get_redis_pool()
+
+        for job in high_roi_jobs:
+            role = job.get("title") or "Engineering"
+            company = job.get("company") or "Tech Corp"
+            job_id = job.get("id")
+
+            for prof in profiles:
+                phone = prof.get("phone")
+                user_target = (prof.get("target_role") or "").lower()
+                user_id = prof.get("user_id") or prof.get("id")
+
+                # Match role
+                if user_target and (user_target in role.lower() or role.lower() in user_target or "software" in role.lower()):
+                    # Avoid spamming duplicate alerts for same job to same phone
+                    cache_key = f"whatsapp_alert_sent:{phone}:{job_id}"
+                    already_sent = await redis.get(cache_key)
+                    if already_sent:
+                        continue
+
+                    msg = f"New {role} role at {company}. Reply 'TAILOR' to generate a custom resume."
+                    sent = await send_whatsapp_message(phone, msg)
+                    if sent:
+                        alerts_sent += 1
+                        # Save state in redis so webhook knows which job and user to tailor for
+                        clean_num = phone.replace("whatsapp:", "").strip()
+                        await redis.setex(f"pending_tailor_job:{clean_num}", 86400 * 2, f"{user_id}:{job_id}")
+                        await redis.setex(cache_key, 86400 * 7, "1")
+
+        return {"status": "ok", "alerts_sent": alerts_sent}
+    except Exception as exc:
+        logger.exception("Failed scan_and_alert_high_roi_jobs: %s", exc)
+        return {"status": "error", "error": str(exc), "alerts_sent": alerts_sent}
+

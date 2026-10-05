@@ -57,7 +57,8 @@ from app.auth.router import router as auth_router
 
 from app.api.routes.export import router as export_router
 from app.api.routes.ats import router as ats_router
-from app.api.routes.resumes import router as resumes_router
+from app.api.routes.resumes import router as resumes_router, resume_singular_router
+from app.api.routes.insights import router as insights_router
 from app.api.routes.versions import router as versions_router
 from app.api.routes.improvement import router as improvement_router
 from app.api.routes.optimization import router as optimization_router
@@ -66,6 +67,8 @@ from app.api.routes.interview_prep import router as interview_prep_router
 from app.api.routes.resume_templates import router as templates_router
 from app.api.routes.dashboard import router as dashboard_router
 from app.api.routes.admin import router as admin_router
+from app.api.routes.outreach import router as outreach_router
+from app.api.routes.webhooks import router as webhooks_router
 from app.auth.service import AuthError
 from app.config import get_settings
 
@@ -192,10 +195,11 @@ app.add_middleware(
 
 @app.exception_handler(AuthError)
 async def auth_error_handler(request: Request, exc: AuthError) -> JSONResponse:
-    """Translate :class:`AuthError` into a JSON HTTP response."""
+    """Translate :class:`AuthError` into the standard CareerOS error envelope."""
+    code = {401: "unauthorized", 403: "forbidden"}.get(exc.status_code, str(exc.status_code))
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.message},
+        content={"success": False, "error": {"code": code, "message": exc.message}},
     )
 
 
@@ -274,6 +278,7 @@ app.include_router(profile_router)
 app.include_router(export_router)
 app.include_router(ats_router)
 app.include_router(resumes_router)
+app.include_router(resume_singular_router)
 app.include_router(versions_router)
 app.include_router(improvement_router)
 app.include_router(optimization_router)
@@ -281,6 +286,9 @@ app.include_router(tailoring_evidence_router)
 app.include_router(interview_prep_router)
 app.include_router(templates_router)
 app.include_router(dashboard_router)
+app.include_router(insights_router)
+app.include_router(outreach_router)
+app.include_router(webhooks_router)
 app.include_router(admin_router)
 
 

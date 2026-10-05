@@ -194,3 +194,13 @@ class ParsedExtracted(BaseModel):
     internships_count: int = 0
     achievements_count: int = 0
     languages_count: int = 0
+
+class TailorRequest(BaseModel):
+    resume_id: str
+    job_id: str
+
+
+class TranslateProjectRequest(BaseModel):
+    project_details: str = Field(description="Raw project details string")
+    role_title: str = Field(description="Target role title")
+

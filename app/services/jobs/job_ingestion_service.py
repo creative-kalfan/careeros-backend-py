@@ -985,4 +985,83 @@ class JobIngestionService:
 
         return results
 
+    async def ingest_instahyre_jobs(
+        self,
+        query: str = "software engineer",
+        location: str = "India",
+        cancel_event: Optional[threading.Event] = None,
+        source: str = "instahyre",
+        slug: Optional[str] = None,
+    ) -> dict[str, int]:
+        """Ingest jobs from Instahyre India adapter."""
+        from app.crawlers.adapters.instahyre import InstahyreAdapter
+
+        adapter = InstahyreAdapter(query=query, location=location)
+        crawled_jobs = await adapter.discover_jobs()
+        normalized_jobs = [
+            self._apply_source_quality(self.job_service.normalize_and_classify(j))
+            for j in crawled_jobs
+        ]
+        del crawled_jobs
+        effective_slug = slug or query
+        return await self._persist_offloop(
+            self._drop_invalid(normalized_jobs),
+            source=source,
+            slug=effective_slug,
+            cancel_event=cancel_event,
+        )
+
+    async def ingest_hirist_jobs(
+        self,
+        query: str = "software engineer",
+        location: str = "India",
+        cancel_event: Optional[threading.Event] = None,
+        source: str = "hirist",
+        slug: Optional[str] = None,
+    ) -> dict[str, int]:
+        """Ingest jobs from Hirist India adapter."""
+        from app.crawlers.adapters.hirist import HiristAdapter
+
+        adapter = HiristAdapter(query=query, location=location)
+        crawled_jobs = await adapter.discover_jobs()
+        normalized_jobs = [
+            self._apply_source_quality(self.job_service.normalize_and_classify(j))
+            for j in crawled_jobs
+        ]
+        del crawled_jobs
+        effective_slug = slug or query
+        return await self._persist_offloop(
+            self._drop_invalid(normalized_jobs),
+            source=source,
+            slug=effective_slug,
+            cancel_event=cancel_event,
+        )
+
+    async def ingest_naukri_jobs(
+        self,
+        query: str = "software-engineer",
+        location: str = "india",
+        cancel_event: Optional[threading.Event] = None,
+        source: str = "naukri",
+        slug: Optional[str] = None,
+    ) -> dict[str, int]:
+        """Ingest jobs from Naukri India adapter (Firecrawl/Playwright)."""
+        from app.crawlers.adapters.naukri import NaukriAdapter
+
+        adapter = NaukriAdapter(query=query, location=location)
+        crawled_jobs = await adapter.discover_jobs()
+        normalized_jobs = [
+            self._apply_source_quality(self.job_service.normalize_and_classify(j))
+            for j in crawled_jobs
+        ]
+        del crawled_jobs
+        effective_slug = slug or query
+        return await self._persist_offloop(
+            self._drop_invalid(normalized_jobs),
+            source=source,
+            slug=effective_slug,
+            cancel_event=cancel_event,
+        )
+
+
 

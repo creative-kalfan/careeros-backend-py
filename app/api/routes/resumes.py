@@ -26,6 +26,8 @@ from app.schemas.resume import (
     ResumeListResponse,
     ResumeRecordResponse,
     ResumeUpdate,
+    TailorRequest,
+    TranslateProjectRequest,
     UploadResumeResponse,
 )
 from app.services.resume_parsing import (
@@ -38,6 +40,7 @@ from app.workers.enqueue import enqueue_resume_parse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/resumes", tags=["resumes"])
+resume_singular_router = APIRouter(prefix="/api/resume", tags=["resume"])
 
 # Allowed extensions for resume files
 ALLOWED_EXTENSIONS = {".pdf", ".docx"}
@@ -606,3 +609,192 @@ async def get_completeness(
             recommendations=recommendations,
         )
     )
+
+@router.post(
+    "/tailor",
+    response_model=SuccessResponse[dict],
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+@resume_singular_router.post(
+    "/tailor",
+    response_model=SuccessResponse[dict],
+    responses={400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+async def tailor_resume_for_job(
+    body: TailorRequest,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[dict]:
+    """1-Click Auto-Tailor: Tailor a resume to a specific job."""
+    from app.repositories.resume_repository import ResumeRepository
+    from app.repositories.job_repository import JobRepository
+    from app.services.optimization.whole_resume_tailoring_service import WholeResumeTailoringService
+    from app.models.resume import ResumeContent
+
+    # Fetch Job
+    job = JobRepository().get_job(body.job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found",
+        )
+    
+    # Fetch Resume
+    resume_repo = ResumeRepository(auth.supabase)
+    resume = resume_repo.get_resume(auth.user.id, body.resume_id)
+    if not resume:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Resume not found",
+        )
+    
+    content_dict = resume.get("content") or {}
+    # Convert dict to ResumeContent model
+    try:
+        resume_content = ResumeContent.model_validate(content_dict)
+    except Exception as e:
+        logger.error(f"Failed to parse resume content: {e}")
+        raise HTTPException(status_code=400, detail="Invalid resume content")
+    
+    job_description = job.get("description") or ""
+    job_title = job.get("title") or ""
+    company = job.get("company") or ""
+
+    if not job_description:
+        raise HTTPException(status_code=400, detail="Job has no description to tailor against")
+
+    try:
+        service = WholeResumeTailoringService()
+        tailor_result = service.tailor_resume(
+            resume_content=resume_content,
+            job_description=job_description,
+            job_title=job_title,
+            company=company,
+        )
+        
+        return SuccessResponse(
+            data={
+                "success": tailor_result.success,
+                "plan": [p.model_dump() for p in tailor_result.plan],
+                "tailored_profile": tailor_result.tailored_profile,
+                "score_comparison": tailor_result.score_comparison.model_dump(),
+                "message": tailor_result.message,
+                "limited_alignment": tailor_result.limited_alignment,
+                "alignment_message": tailor_result.alignment_message,
+            }
+        )
+    except Exception as e:
+        logger.exception("Auto-tailoring failed")
+        raise HTTPException(status_code=500, detail="Failed to tailor resume")
+
+
+@router.post("/translate-project", response_model=SuccessResponse[dict[str, Any]])
+@resume_singular_router.post("/translate-project", response_model=SuccessResponse[dict[str, Any]])
+async def translate_project(
+    body: TranslateProjectRequest,
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[dict[str, Any]]:
+    """Convert raw personal project details into an ATS-optimized ExperienceNode AST node."""
+    return await _handle_translate_project(body, auth)
+
+
+async def _handle_translate_project(
+    body: TranslateProjectRequest,
+    auth: AuthContext,
+) -> SuccessResponse[dict[str, Any]]:
+    import json
+    from app.llm import get_llm_gateway
+    from app.llm.types import LLMRequest, LLMTask, LLMProvider
+    from app.models.resume_ast import ExperienceNode
+
+    # 1. Query market_skill_trends for the target role
+    trends_skills: list[str] = []
+    try:
+        res = (
+            auth.supabase.table("market_skill_trends")
+            .select("skill_name")
+            .eq("role_title", body.role_title)
+            .order("frequency", desc=True)
+            .limit(15)
+            .execute()
+        )
+        data = res.data or []
+        trends_skills = [d.get("skill_name") for d in data if d.get("skill_name")]
+    except Exception as exc:
+        logger.warning("Error fetching market_skill_trends: %s", exc)
+
+    if not trends_skills:
+        try:
+            res_gen = (
+                auth.supabase.table("market_skill_trends")
+                .select("skill_name")
+                .eq("role_title", "General")
+                .order("frequency", desc=True)
+                .limit(10)
+                .execute()
+            )
+            data_gen = res_gen.data or []
+            trends_skills = [d.get("skill_name") for d in data_gen if d.get("skill_name")]
+        except Exception:
+            pass
+
+    skills_context = ", ".join(trends_skills) if trends_skills else "Python, FastAPI, SQL, Docker, React, Git"
+
+    # 2. Construct LLM prompt for Groq to output typed ExperienceNode AST
+    prompt = (
+        f"You are an expert ATS Resume and Career Architect.\n"
+        f"Convert the following raw project details into an ATS-optimized work experience node for the target role: '{body.role_title}'.\n"
+        f"Highlight and prioritize the following high-demand market skills where applicable: {skills_context}.\n\n"
+        f"Raw Project Details:\n\"\"\"{body.project_details}\"\"\"\n\n"
+        f"Respond ONLY with a valid JSON object matching this exact schema (no markdown, no extra commentary):\n"
+        f"{{\n"
+        f'  "type": "experience",\n'
+        f'  "company": "Project / Freelance (or deduced organization/project name)",\n'
+        f'  "role": "{body.role_title}",\n'
+        f'  "description": "Short 1-2 sentence overview of the project impact and tech architecture",\n'
+        f'  "start_date": "YYYY-MM or null",\n'
+        f'  "end_date": "Present or YYYY-MM or null",\n'
+        f'  "bullets": [\n'
+        f'    "Action verb + engineered achievement + high-demand tech metric",\n'
+        f'    "Quantified outcome using market-aligned skills"\n'
+        f"  ]\n"
+        f"}}"
+    )
+
+    llm = get_llm_gateway()
+    try:
+        response = await llm.generate(
+            LLMRequest(
+                task=LLMTask.RESUME_SECTION_SUGGESTION,
+                prompt=prompt,
+                system_instruction="You are a strict JSON generator for ATS resume AST structures. Output raw JSON only.",
+                provider=LLMProvider.GROQ,
+                temperature=0.2,
+            )
+        )
+        content = response.content.strip()
+        if content.startswith("```"):
+            lines = content.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            content = "\n".join(lines).strip()
+
+        parsed = json.loads(content)
+        parsed["type"] = "experience"
+        # Validate against ExperienceNode
+        node = ExperienceNode.model_validate(parsed)
+        return SuccessResponse(data=node.model_dump(mode="json"))
+    except Exception as exc:
+        logger.exception("Failed to translate project into ExperienceNode AST: %s", exc)
+        # Deterministic fallback ExperienceNode
+        fallback_node = ExperienceNode(
+            company="Project",
+            role=body.role_title,
+            description=f"Developed technical project focused on {body.role_title} requirements.",
+            bullets=[
+                f"Implemented core project features focusing on {skills_context.split(',')[0].strip()}.",
+                f"Delivered production-ready implementation adhering to best engineering practices.",
+            ],
+        )
+        return SuccessResponse(data=fallback_node.model_dump(mode="json"))

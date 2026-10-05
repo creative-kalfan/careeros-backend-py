@@ -1,0 +1,10 @@
+{
+  "local_head": "476520f",
+  "origin_main": "476520f",
+  "production_version_endpoint": {
+    "version": "studio-qa-v2",
+    "commit": "90f2b3d"
+  },
+  "match": false,
+  "explanation": "Local HEAD and origin/main are on 476520f. Render production /version is reporting 90f2b3d."
+}
