@@ -214,6 +214,15 @@ class Settings(BaseSettings):
     analysis_backfill_limit_per_tick: int = Field(
         default=50, alias="ANALYSIS_BACKFILL_LIMIT_PER_TICK"
     )
+    analysis_backlog_threshold: int = Field(
+        default=100, alias="ANALYSIS_BACKLOG_THRESHOLD"
+    )
+    worker_soft_memory_limit_mb: float = Field(
+        default=420.0, alias="WORKER_SOFT_MEMORY_LIMIT_MB"
+    )
+    max_job_payload_bytes: int = Field(
+        default=262144, alias="MAX_JOB_PAYLOAD_BYTES"
+    )
     worker_consume_analysis_queue: bool = Field(
         default=True, alias="WORKER_CONSUME_ANALYSIS_QUEUE"
     )

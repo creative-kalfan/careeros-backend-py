@@ -36,7 +36,17 @@ _CONTENT_FIELDS = (
     "crawl_target_slug",
 )
 
+# Fields that require downstream intelligence re-analysis when changed.
+# Excludes: last_seen_at, last_crawled_at, updated_at, url, crawl_target_slug, application_deadline, etc.
+_ANALYSIS_RELEVANT_FIELDS = (
+    "title", "company", "location", "description",
+    "role_category", "employment_type", "salary_min", "salary_max",
+    "skills", "experience_level", "remote",
+    "mass_hiring", "mass_hiring_status", "mass_hiring_details",
+)
+
 _MASS_HIRING_FIELDS = ("mass_hiring", "mass_hiring_status", "mass_hiring_details")
+
 
 _DUPLICATE_KEY_CODE = "23505"
 
@@ -265,6 +275,17 @@ class JobRepository:
             if ex_val != row_val:
                 return False
         return True
+
+    @classmethod
+    def _has_analysis_content_changed(cls, existing: dict[str, Any], row: dict[str, Any]) -> bool:
+        """True when any analysis-relevant field differs between existing and new row."""
+        for field in _ANALYSIS_RELEVANT_FIELDS:
+            ex_val = cls._normalize_val(field, existing.get(field))
+            row_val = cls._normalize_val(field, row.get(field))
+            if ex_val != row_val:
+                return True
+        return False
+
 
     @staticmethod
     def _provenance_from_row(existing: dict[str, Any]) -> dict[str, Any]:
@@ -631,6 +652,8 @@ class JobRepository:
             _PROBE_CACHE_RPC_IDS[probe_key] = rpc_ids_supported
             if not rpc_ids_supported:
                 inserted_ids.extend(prechecked_new_ids[:inserted])
+            if not getattr(self, "last_analysis_ids", None):
+                self.last_analysis_ids = list(inserted_ids)
             
             if source and slug and content_hash:
                 try:
@@ -678,6 +701,7 @@ class JobRepository:
         full_updates: list[tuple[str, dict[str, Any]]] = []
         singles: list[tuple[tuple[str, str], dict[str, Any]]] = []
         updated_external_ids: list[str] = []
+        content_changed_external_ids: list[str] = []
         for key, row in pending:
             action, *payload = self._classify_row(
                 key, row, existing_map.get(key), now_iso, has_last_seen
@@ -704,9 +728,13 @@ class JobRepository:
                 else:
                     full_updates.append((payload[0], payload[1]))
                     updated_external_ids.append(key[0])
+                    existing_entry = existing_map.get(key)
+                    if existing_entry is None or self._has_analysis_content_changed(existing_entry, payload[1]):
+                        content_changed_external_ids.append(key[0])
                     updated += 1
             else:  # noop: same content, nothing to refresh
                 unchanged += 1
+
 
         # Phase 4a: bulk insert new rows (chunked); 23505 races fall back
         for start in range(0, len(to_insert), _UPSERT_WRITE_CHUNK):
@@ -801,7 +829,7 @@ class JobRepository:
         self.last_path = "legacy"
         self.last_db_requests = self._db_requests
         self.last_inserted_ids = inserted_ids
-        self.last_analysis_ids = inserted_ids + updated_external_ids
+        self.last_analysis_ids = inserted_ids + content_changed_external_ids
         self.last_content_hash = content_hash
         return {
             "discovered": len(jobs),

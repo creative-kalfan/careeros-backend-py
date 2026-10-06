@@ -7,7 +7,7 @@ from typing import Any
 
 from app.config import get_settings
 from app.repositories.observability_repository import ObservabilityRepository
-from app.workers.registry import register_job
+from app.workers.registry import WorkloadClass, register_job
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
     max_tries=1,
     retry=False,
     description="Prune old crawl_runs and job_events based on retention policy (default 90 days).",
+    workload_class=WorkloadClass.MAINTENANCE,
 )
 async def prune_crawl_observability_job(ctx: dict[str, Any]) -> dict[str, Any]:
     """Prune crawl_runs and job_events older than CRAWL_OBSERVABILITY_RETENTION_DAYS.

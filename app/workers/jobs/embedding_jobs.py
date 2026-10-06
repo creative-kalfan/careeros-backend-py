@@ -10,7 +10,7 @@ from app.config import get_settings
 from app.db.supabase import get_service_client
 from app.llm.embeddings import get_embedding_provider
 from app.repositories.job_embedding_repository import JobEmbeddingRepository
-from app.workers.registry import register_job
+from app.workers.registry import WorkloadClass, register_job
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ def _compute_job_text_and_hash(job_row: dict[str, Any]) -> tuple[str, str]:
     max_tries=2,
     retry=True,
     description="Embed a batch of active jobs into pgvector job_embeddings.",
+    workload_class=WorkloadClass.EMBEDDING,
 )
 async def embed_jobs_batch(ctx: dict[str, Any], job_ids: list[str]) -> dict[str, Any]:
     """Embed a list of jobs by primary key in a single batch."""
@@ -91,6 +92,7 @@ async def embed_jobs_batch(ctx: dict[str, Any], job_ids: list[str]) -> dict[str,
     max_tries=1,
     retry=False,
     description="Find active unembedded jobs within max age and enqueue embed batches.",
+    workload_class=WorkloadClass.MAINTENANCE,
 )
 async def backfill_job_embeddings(ctx: dict[str, Any], limit: int = 200) -> dict[str, Any]:
     """Backfill missing embeddings for active jobs."""

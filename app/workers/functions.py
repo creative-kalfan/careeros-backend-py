@@ -22,7 +22,7 @@ from app.services.resume_parsing import (
     is_file_too_large,
 )
 from app.workers.logging import JobLogger
-from app.workers.registry import register_job
+from app.workers.registry import WorkloadClass, register_job
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ if not logger.handlers:
     max_tries=2,
     retry=True,
     description="Discover and verify a bounded daily batch of ATS boards.",
+    workload_class=WorkloadClass.MAINTENANCE,
 )
 async def discover_ats_targets_job(ctx: dict[str, Any]) -> dict[str, int]:
     from app.services.jobs.source_discovery import discover_ats_targets
@@ -53,6 +54,7 @@ async def discover_ats_targets_job(ctx: dict[str, Any]) -> dict[str, int]:
     max_tries=1,
     retry=False,
     description="Minimal health check job to verify the ARQ pipeline is functional.",
+    workload_class=WorkloadClass.MAINTENANCE,
 )
 async def careeros_worker_health(ctx: dict[str, Any]) -> dict[str, str]:
     """Minimal health check job to verify the ARQ pipeline is functional."""
@@ -68,6 +70,7 @@ async def careeros_worker_health(ctx: dict[str, Any]) -> dict[str, str]:
     max_tries=2,
     retry=True,
     description="Parse an uploaded resume in the background.",
+    workload_class=WorkloadClass.CRITICAL_USER,
 )
 async def parse_resume_job(
     ctx: dict[str, Any],
@@ -236,6 +239,7 @@ async def parse_resume_job(
     max_tries=1,
     retry=False,
     description="Cron/ARQ task to aggregate active job skills by role_title.",
+    workload_class=WorkloadClass.MAINTENANCE,
 )
 async def aggregate_market_skill_trends_job(ctx: dict[str, Any]) -> dict[str, str]:
     """Cron/ARQ task to aggregate active job skills by role_title."""
@@ -258,6 +262,7 @@ async def aggregate_market_skill_trends_job(ctx: dict[str, Any]) -> dict[str, st
     max_tries=2,
     retry=True,
     description="Scan newly ingested jobs with is_high_roi=True and send WhatsApp alerts to matching users.",
+    workload_class=WorkloadClass.NOTIFICATION,
 )
 async def scan_and_alert_high_roi_jobs(ctx: dict[str, Any], job_ids: list[str] | None = None) -> dict[str, Any]:
     """If a job is ingested that matches a user's target role and has is_high_roi = True,

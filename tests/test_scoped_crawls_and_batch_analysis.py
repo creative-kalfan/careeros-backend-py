@@ -155,11 +155,17 @@ async def test_crawl_job_enqueues_chunked_analysis_batches(monkeypatch):
     mock_redis = MagicMock()
     async def _mock_enqueue(job_name, *args, **kwargs):
         enqueued_jobs.append((job_name, args, kwargs))
+        return MagicMock(job_id="mock_job_id")
 
     mock_redis.enqueue_job = _mock_enqueue
+    mock_redis.zcard = AsyncMock(return_value=0)
 
     from app.workers import settings
     monkeypatch.setattr(settings, "get_redis_pool", AsyncMock(return_value=mock_redis))
+    import app.workers.dispatcher as disp_mod
+    monkeypatch.setattr(disp_mod, "_get_redis", AsyncMock(return_value=mock_redis))
+
+
 
     # Mock crawl dependencies
     import app.workers.jobs.crawl_jobs as crawl_mod

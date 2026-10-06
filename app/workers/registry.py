@@ -6,6 +6,21 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional
 
 
+from enum import Enum
+
+
+class WorkloadClass(str, Enum):
+    """Centralized classification of background job workloads."""
+
+    CRITICAL_USER = "critical_user"
+    CRAWL = "crawl"
+    ANALYSIS = "analysis"
+    EMBEDDING = "embedding"
+    MAINTENANCE = "maintenance"
+    NOTIFICATION = "notification"
+    OTHER = "other"
+
+
 @dataclass(frozen=True)
 class JobDefinition:
     """Metadata for a registered background job."""
@@ -16,6 +31,7 @@ class JobDefinition:
     max_tries: int = 2
     retry: bool = True
     description: str = ""
+    workload_class: WorkloadClass = WorkloadClass.OTHER
 
 
 # Registry of all known CareerOS background jobs.
@@ -29,6 +45,7 @@ def register_job(
     max_tries: int = 2,
     retry: bool = True,
     description: str = "",
+    workload_class: WorkloadClass = WorkloadClass.OTHER,
 ) -> Callable[[Callable[..., Awaitable[dict[str, Any]]]], Callable[..., Awaitable[dict[str, Any]]]]:
     """Decorator to register a background job in the CareerOS registry."""
     def decorator(func: Callable[..., Awaitable[dict[str, Any]]]) -> Callable[..., Awaitable[dict[str, Any]]]:
@@ -39,6 +56,7 @@ def register_job(
             max_tries=max_tries,
             retry=retry,
             description=description or func.__doc__ or "",
+            workload_class=workload_class,
         )
         return func
     return decorator
@@ -59,3 +77,4 @@ def get_registered_jobs() -> list[JobDefinition]:
 def clear_registry() -> None:
     """Clear the registry (test helper)."""
     _REGISTRY.clear()
+

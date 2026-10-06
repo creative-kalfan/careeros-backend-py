@@ -11,7 +11,7 @@ from app.repositories.job_repository import JobRepository
 from app.repositories.job_intelligence_repository import JobIntelligenceRepository
 from app.services.jobs.job_intelligence_service import JobIntelligenceService
 from app.workers.logging import JobLogger
-from app.workers.registry import register_job
+from app.workers.registry import WorkloadClass, register_job
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
     max_tries=2,
     retry=True,
     description="Analyze a job and extract structured intelligence.",
+    workload_class=WorkloadClass.ANALYSIS,
 )
 async def analyze_job_intelligence_job(ctx: dict[str, Any], job_id: str) -> dict[str, Any]:
     """Analyze a job and persist structured intelligence.
@@ -119,6 +120,7 @@ async def analyze_job_intelligence_job(ctx: dict[str, Any], job_id: str) -> dict
     max_tries=2,
     retry=True,
     description="Analyze a batch of jobs for structured intelligence in chunks.",
+    workload_class=WorkloadClass.ANALYSIS,
 )
 async def analyze_jobs_batch(ctx: dict[str, Any], job_ids: list[str]) -> dict[str, Any]:
     """Analyze a batch of jobs in chunks to prevent queue backlog."""

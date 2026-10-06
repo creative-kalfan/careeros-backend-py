@@ -306,10 +306,81 @@ app.include_router(admin_router)
 
 
 
+import time
+
+_READINESS_CACHE: dict[str, Any] = {"status": "ok", "timestamp": 0.0, "details": {}}
+_READINESS_TTL_SECONDS = 15.0
+
+
 @app.get("/health")
-async def health() -> dict[str, str]:
-    """Simple liveness probe."""
+@app.get("/health/live")
+async def health_live() -> dict[str, str]:
+    """Fast, zero-dependency liveness probe."""
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready() -> JSONResponse:
+    """Readiness probe checking Supabase and Redis connectivity with short cache TTL."""
+    global _READINESS_CACHE
+    now = time.monotonic()
+    if now - _READINESS_CACHE["timestamp"] < _READINESS_TTL_SECONDS:
+        cached_status = _READINESS_CACHE["status"]
+        status_code = 200 if cached_status == "ok" else 503
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "status": cached_status,
+                "cached": True,
+                "details": _READINESS_CACHE["details"],
+            },
+        )
+
+    import asyncio
+    details: dict[str, str] = {}
+    is_ready = True
+
+    # 1. Supabase probe (short timeout, thread-isolated)
+    try:
+        from app.db.supabase import get_service_client
+        def _probe_db() -> bool:
+            client = get_service_client()
+            res = client.table("jobs").select("id").limit(1).execute()
+            return True
+        await asyncio.wait_for(asyncio.to_thread(_probe_db), timeout=3.0)
+        details["database"] = "ok"
+    except Exception as db_exc:
+        logger.warning("Readiness probe database error: %s", db_exc)
+        details["database"] = "degraded"
+        # We don't fail readiness completely if DB probe has transient network blip unless critical
+        details["database_error"] = str(type(db_exc).__name__)
+
+    # 2. Redis probe (short timeout)
+    try:
+        from app.workers.settings import get_redis_pool
+        redis = await asyncio.wait_for(get_redis_pool(), timeout=3.0)
+        await asyncio.wait_for(redis.ping(), timeout=2.0)
+        details["redis"] = "ok"
+    except Exception as redis_exc:
+        logger.warning("Readiness probe redis error: %s", redis_exc)
+        details["redis"] = "error"
+        is_ready = False
+
+    status_str = "ok" if is_ready else "unavailable"
+    _READINESS_CACHE = {
+        "status": status_str,
+        "timestamp": now,
+        "details": details,
+    }
+
+    return JSONResponse(
+        status_code=200 if is_ready else 503,
+        content={
+            "status": status_str,
+            "cached": False,
+            "details": details,
+        },
+    )
 
 
 @app.get("/version")
@@ -318,3 +389,4 @@ async def version() -> dict[str, str]:
     import os
     commit = os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_COMMIT") or "766f536"
     return {"version": "studio-qa-v2", "commit": commit[:7] if commit else "766f536"}
+

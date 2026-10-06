@@ -13,7 +13,7 @@ import logging
 from types import SimpleNamespace
 from typing import Any
 
-from app.workers.registry import register_job
+from app.workers.registry import WorkloadClass, register_job
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
     max_tries=2,
     retry=True,
     description="Generate interview preparation questions for a session in the background.",
+    workload_class=WorkloadClass.CRITICAL_USER,
 )
 async def generate_interview_prep_job(
     ctx: dict[str, Any],

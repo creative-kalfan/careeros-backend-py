@@ -1711,3 +1711,27 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - Frontend i18n string scaffolding in `src/lib/i18n.ts` supporting dictionary keys without unreviewed machine translations.
   - Placement cell architectural hypothesis documented in `docs/ideas/placement_cell.md` (hypothesis only, explicit non-goal to build placement-cell portal).
 
+### 9.40 Production Hardening & Throughput Engineering Pass (2026-10-06)
+
+- **Centralized Workload Classification:**
+  - Introduced `WorkloadClass` enum (`CRITICAL_USER`, `CRAWL`, `ANALYSIS`, `EMBEDDING`, `MAINTENANCE`, `NOTIFICATION`, `OTHER`) in `app/workers/registry.py`.
+  - Registered background jobs decorated with typed `workload_class` metadata.
+  - `app/workers/dispatcher.py` dynamically routes `WorkloadClass.ANALYSIS` jobs to `settings.analysis_queue_name` without string checks.
+- **Queue-Safe Dispatch & Bounded Payloads:**
+  - Added `MAX_JOB_PAYLOAD_BYTES` validation (default 256KB) in `app/workers/dispatcher.py` to prevent giant objects from polluting Redis.
+  - Retained deterministic job IDs across crawls and chunked analysis batches.
+- **Change-Driven Job Intelligence:**
+  - Extended `JobRepository` with `_ANALYSIS_RELEVANT_FIELDS` and `_has_analysis_content_changed` comparison helper.
+  - `last_analysis_ids` in legacy upsert path now strictly tracks `inserted_ids + content_changed_external_ids`.
+  - Timestamp-only touches (`last_seen_at` refresh) and non-semantic field updates produce 0 analysis tasks.
+- **Analysis Backlog Protection & Durable Recovery:**
+  - Added `ANALYSIS_BACKLOG_THRESHOLD` (default 100) producer-side backpressure in `crawl_company_job`.
+  - When Redis analysis queue depth exceeds threshold, immediate enqueue is skipped. Jobs remain persisted in Postgres and are safely backfilled via `get_active_jobs_missing_intelligence` by the scheduled dispatcher loop.
+- **Worker Memory Protection:**
+  - Added `WORKER_SOFT_MEMORY_LIMIT_MB` (default 420.0MB) guard in `app/services/jobs/crawl_dispatcher.py:dispatch_due_targets`.
+  - Throttles claiming due crawl targets when worker RSS approaches Render free-tier threshold, preventing OOM aborts.
+- **API Health Endpoints:**
+  - Added `GET /health/live` (zero-dependency liveness).
+  - Added `GET /health/ready` (checks Supabase and Redis connectivity with a 15s cache TTL and short timeouts, protecting dependencies from probe storms).
+
+

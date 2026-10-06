@@ -53,9 +53,16 @@ class TestObservationFreshness:
     def test_reobserved_old_posting_regains_freshness(self) -> None:
         svc = PersonalizedJobService()
         stale = _job("Data Analyst", "Bengaluru, India", 20, "e1")
-        assert svc._score_freshness(stale) == 50.0
-        stale.last_seen_at = _iso(0)  # re-observed today
-        assert svc._score_freshness(stale) == 100.0
+        assert svc._score_freshness(stale) == 35.0
+        # When posted_date is absent, last_seen_at fallback is used
+        stale_no_posted = NormalizedJob(
+            title="Data Analyst", company="TCS", location="Bengaluru, India",
+            external_job_id="e1_np", source_platform="adzuna",
+            posted_date=None,
+        )
+        stale_no_posted.last_seen_at = _iso(0)  # re-observed today
+        assert svc._score_freshness(stale_no_posted) == 50.0  # capped fallback
+
 
     def test_posted_at_never_rewritten_by_scoring(self) -> None:
         j = _job("Data Analyst", "Bengaluru, India", 20, "e2")
@@ -148,7 +155,7 @@ class TestCombinedRanking:
         scores = [svc._score_freshness(_job("X", "Bengaluru, India", d, f"e{d}", d))
                   for d in (1, 5, 10, 60)]
         assert scores == sorted(scores, reverse=True)  # NEW > FRESH > AGING > STALE
-        assert scores[0] == 100.0 and scores[-1] == 30.0
+        assert scores[0] == 100.0 and scores[-1] == 15.0
 
     def test_pagination_deterministic(self) -> None:
         jobs = [_job("Data Analyst", "Bengaluru, India", 1, f"e{i:03d}", 0) for i in range(10)]

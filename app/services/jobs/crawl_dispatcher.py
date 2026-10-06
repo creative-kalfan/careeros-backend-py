@@ -230,6 +230,22 @@ async def dispatch_due_targets(ctx: dict[str, Any]) -> int:
     if not _migration_probe():
         return 0
     settings = get_settings()
+
+    # Soft memory limit guard: protect 512MB Render free tier from memory exhaustion
+    try:
+        import psutil
+        rss_mb = psutil.Process().memory_info().rss / (1024.0 * 1024.0)
+        if rss_mb >= settings.worker_soft_memory_limit_mb:
+            logger.warning(
+                "MEMORY_BACKPRESSURE: worker RSS=%.1fMB >= soft limit=%.1fMB; deferring crawl target admission",
+                rss_mb,
+                settings.worker_soft_memory_limit_mb,
+            )
+            return 0
+    except Exception as mem_exc:
+        logger.debug("Failed to inspect process memory: %s", mem_exc)
+
+
     capacity = _worker_capacity()
     _check_lease_coverage(settings, capacity)
     in_flight = await _in_flight_crawls()

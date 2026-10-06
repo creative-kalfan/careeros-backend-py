@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from app.services.jobs.job_ingestion_service import JobIngestionService
 from app.workers.logging import JobLogger
-from app.workers.registry import register_job
+from app.workers.registry import WorkloadClass, register_job
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +244,7 @@ async def _dispatch_ingest(
     max_tries=3,
     retry=True,
     description="Crawl jobs for a single ATS source/company.",
+    workload_class=WorkloadClass.CRAWL,
 )
 async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict[str, Any]:
     """Crawl jobs for a single ATS source/company.
@@ -533,27 +534,46 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
 
             if analysis_ids:
                 try:
-                    from app.workers.dispatcher import enqueue
+                    from app.workers.dispatcher import _get_redis, enqueue
                     from app.config import get_settings
                     import hashlib
                     import random
 
                     settings = get_settings()
-                    max_cap = max(1, int(settings.analysis_max_ids_per_crawl))
-                    chunk_size = max(1, int(settings.analysis_batch_chunk_size))
-                    capped_ids = analysis_ids[:max_cap]
+                    backlog_threshold = int(settings.analysis_backlog_threshold)
 
-                    for chunk_idx, i in enumerate(range(0, len(capped_ids), chunk_size)):
-                        chunk = capped_ids[i:i + chunk_size]
-                        chunk_hash = hashlib.sha1(":".join(chunk).encode()).hexdigest()[:10]
-                        batch_job_id = f"analyze_batch:{source}:{slug}:{chunk_idx}:{chunk_hash}"
-                        jitter_sec = int(chunk_idx * 3 + random.uniform(1, 5))
-                        await enqueue(
-                            "analyze_jobs_batch",
-                            chunk,
-                            _job_id=batch_job_id,
-                            _defer_by=jitter_sec,
-                        )
+                    # Backlog protection: check analysis queue depth before enqueueing more
+                    skip_enqueue = False
+                    try:
+                        redis = await _get_redis()
+                        current_depth = await redis.zcard(settings.analysis_queue_name)
+                        if current_depth is not None and current_depth >= backlog_threshold:
+                            logger.info(
+                                "ANALYSIS_BACKPRESSURE: analysis queue depth=%d >= threshold=%d; deferring %d analysis tasks to durable DB recovery",
+                                current_depth,
+                                backlog_threshold,
+                                len(analysis_ids),
+                            )
+                            skip_enqueue = True
+                    except Exception as redis_exc:
+                        logger.debug("Failed to check analysis queue depth: %s", redis_exc)
+
+                    if not skip_enqueue:
+                        max_cap = max(1, int(settings.analysis_max_ids_per_crawl))
+                        chunk_size = max(1, int(settings.analysis_batch_chunk_size))
+                        capped_ids = analysis_ids[:max_cap]
+
+                        for chunk_idx, i in enumerate(range(0, len(capped_ids), chunk_size)):
+                            chunk = capped_ids[i:i + chunk_size]
+                            chunk_hash = hashlib.sha1(":".join(chunk).encode()).hexdigest()[:10]
+                            batch_job_id = f"analyze_batch:{source}:{slug}:{chunk_idx}:{chunk_hash}"
+                            jitter_sec = int(chunk_idx * 3 + random.uniform(1, 5))
+                            await enqueue(
+                                "analyze_jobs_batch",
+                                chunk,
+                                _job_id=batch_job_id,
+                                _defer_by=jitter_sec,
+                            )
                 except Exception as exc:
                     logger.warning("batch analysis enqueue failed (%s)", type(exc).__name__)
             if not inserted_ids and int(result.get("inserted", 0)) > 0:

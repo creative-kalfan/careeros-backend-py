@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from arq.connections import ArqRedis
 
-from app.workers.registry import get_job_definition, get_registered_jobs
+from app.workers.registry import WorkloadClass, get_job_definition, get_registered_jobs
 from app.workers.settings import get_redis_pool
 
 logger = logging.getLogger(__name__)
@@ -53,8 +53,26 @@ async def enqueue(
 
     Raises:
         KeyError: If *job_name* is not registered.
+        ValueError: If payload exceeds configured maximum bytes.
     """
-    get_job_definition(job_name)  # validate job_name exists
+    job_def = get_job_definition(job_name)  # validate job_name exists
+    from app.config import get_settings as _get_settings
+    settings = _get_settings()
+
+    # Bounded payload check
+    import json
+    try:
+        payload_bytes = len(json.dumps(args, default=str).encode("utf-8"))
+        if payload_bytes > settings.max_job_payload_bytes:
+            raise ValueError(
+                f"Payload size {payload_bytes} bytes exceeds maximum allowed "
+                f"{settings.max_job_payload_bytes} bytes for job {job_name}"
+            )
+    except (TypeError, ValueError) as exc:
+        if isinstance(exc, ValueError) and "exceeds maximum allowed" in str(exc):
+            raise
+        pass
+
     redis = await _get_redis()
     job_kwargs: dict[str, Any] = {}
     if _defer_until is not None:
@@ -67,10 +85,10 @@ async def enqueue(
     if _job_id is not None:
         job_kwargs["_job_id"] = _job_id
 
-    from app.config import get_settings as _get_settings
     target_queue = _queue_name
-    if not target_queue and job_name in ("analyze_job_intelligence", "analyze_jobs_batch"):
-        target_queue = _get_settings().analysis_queue_name
+    if not target_queue:
+        if job_def.workload_class == WorkloadClass.ANALYSIS or job_name in ("analyze_job_intelligence", "analyze_jobs_batch"):
+            target_queue = settings.analysis_queue_name
     if target_queue:
         job_kwargs["_queue_name"] = target_queue
 
@@ -81,6 +99,7 @@ async def enqueue(
 
     logger.info("Enqueued job_name=%s job_id=%s queue=%s", job_name, job.job_id, target_queue or "default")
     return job.job_id
+
 
 
 async def enqueue_resume_parse(resume_id: str, user_id: str, storage_path: str) -> Optional[str]:
