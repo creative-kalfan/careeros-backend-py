@@ -70,7 +70,11 @@ from app.api.routes.copilot import router as copilot_router
 from app.api.routes.admin import router as admin_router
 from app.api.routes.outreach import router as outreach_router
 from app.api.routes.webhooks import router as webhooks_router
+from app.api.routes.market_demand import router as market_demand_router
+from app.api.routes.apply_kit import router as apply_kit_router
+from app.api.routes.referrals import router as referrals_router
 from app.auth.service import AuthError
+
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -291,7 +295,11 @@ app.include_router(copilot_router)
 app.include_router(insights_router)
 app.include_router(outreach_router)
 app.include_router(webhooks_router)
+app.include_router(market_demand_router)
+app.include_router(apply_kit_router)
+app.include_router(referrals_router)
 app.include_router(admin_router)
+
 
 
 @app.get("/health")

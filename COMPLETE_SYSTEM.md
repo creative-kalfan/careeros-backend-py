@@ -1671,5 +1671,37 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - Pauses Firecrawl targets when an active, validated ATS target exists for the same company (e.g. PostHog, Linear, CRED).
   - Pauses Firecrawl targets when 0 jobs are returned for $N \ge 3$ consecutive crawls (`FIRECRAWL_CONSECUTIVE_ZERO_PAUSE`).
 
+### 9.38 Phase 5: Resume Editing Intelligence & ATS Audit Fidelity
 
+- **Evidence Bank:** Added migration `037_evidence_bank.sql` and `EvidenceRepository` with owner-only RLS and verification flags.
+- **ClaimGuard:** Implemented numeric claim enforcement supporting Indian denominations (₹, Rs, lakh, crore, 40%, 2x).
+- **ATS Simulation:** PyMuPDF-based structural audit detecting multi-column traps, unencoded glyphs, and unselectable text without vanity scoring.
+- **JSON Resume & LLM Cost Control:** Full bidirectional round-trip mapping for JSON Resume v1.0.0 and per-user daily token quota management.
 
+### 9.39 Phase 6: Product Features & Intelligence Expansion
+
+- **Job UI Intelligence & Verified-Live Filter:**
+  - Frontend `Job` model and `adaptJob` map `isVerifiedLive`, `ghostRisk`, `alsoListedOn`, and `preferredApplyUrl`.
+  - UI renders distinct neo-brutalist "Live", "High Ghost Risk", and "Also listed on" source provenance tags.
+  - "Verified Live" filter toggle added to `PrimaryFiltersBar` and serialized to backend API (`verified_live_only`).
+- **Market Demand Dashboard:**
+  - Added migration `039_phase6_product_features.sql` with table `market_snapshots` (service-role write, public read).
+  - Implemented `MarketDemandRepository` and `MarketDemandService` computing role family demand, top skills (frequency and %), fresher/internship share, salary distributions, and sample size $n$.
+  - Endpoints at `GET /api/market-demand` with skill gap comparison against user profile and curated static learning roadmaps.
+- **Evidence-Locked Apply Kit:**
+  - `ApplyKitService` and `POST /api/apply-kit/generate` generate targeted cover letters and 3-5 standard interview answers strictly grounded in candidate evidence IDs.
+  - ClaimGuard ensures zero metric hallucinations; plain text export bundle provided at `GET /api/apply-kit/export/{job_id}/{resume_id}/txt`.
+  - Always enforces human review prior to submission.
+- **Grounded Interview Prep & Bullet Defense:**
+  - Integrated candidate bullet points and evidence IDs into interview prep questioning to generate targeted "defend this bullet" probes.
+- **Application Analytics:**
+  - Added `resume_version_id` and `stage_timestamps` tracking to `applications` table in migration 039.
+  - Implemented `GET /api/applications/analytics` computing conversion funnels by resume version, source platform, and company, alongside time-in-stage metrics, displaying an explicit sample size disclaimer when $n < 10$.
+- **Notification Outbox & Indian Quiet Hours:**
+  - Added table `notification_outbox` with unique idempotency keys and retry limits.
+  - Multi-channel interface `NotificationChannel` with Telegram bot deep-link dispatch, Email, and stubbed WhatsApp.
+  - Automatic silence during Indian quiet hours (22:00 - 08:00 IST).
+- **Referral Assistant & LinkedIn CSV Import:**
+  - Added table `referral_connections` with owner-only RLS and index on `(user_id, company)`.
+  - `ReferralAssistantService` parses candidate LinkedIn Connections CSV exports, strictly dropping phone numbers and email addresses for privacy.
+  - Endpoints at `POST /api/referrals/upload-csv`, `GET /api/referrals/match`, and one-click `DELETE /api/referrals/all`.

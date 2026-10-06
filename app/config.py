@@ -243,6 +243,14 @@ class Settings(BaseSettings):
     semantic_top_k: int = Field(default=50, alias="SEMANTIC_TOP_K")
     semantic_min_similarity: float = Field(default=0.6, alias="SEMANTIC_MIN_SIMILARITY")
 
+    # Phase 6 Product Features (User-visible features default OFF)
+    market_demand_enabled: bool = Field(default=False, alias="MARKET_DEMAND_ENABLED")
+    apply_kit_enabled: bool = Field(default=False, alias="APPLY_KIT_ENABLED")
+    notification_outbox_enabled: bool = Field(default=False, alias="NOTIFICATION_OUTBOX_ENABLED")
+    referral_assistant_enabled: bool = Field(default=False, alias="REFERRAL_ASSISTANT_ENABLED")
+    telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
+
+
 @lru_cache
 def get_settings() -> Settings:
     """Return a cached Settings instance (env vars are read once)."""

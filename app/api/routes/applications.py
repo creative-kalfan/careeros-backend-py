@@ -84,7 +84,21 @@ async def get_application_stats(
     return SuccessResponse(data=data)
 
 
+@router.get(
+    "/analytics",
+    response_model=SuccessResponse[dict],
+    responses={401: {"model": ErrorResponse}},
+)
+async def get_application_analytics(
+    auth: AuthContext = Depends(get_current_user),
+) -> SuccessResponse[dict]:
+    """Get funnel analytics by resume version, source, company, and stage duration."""
+    data = await SERVICE.analytics(auth)
+    return SuccessResponse(data=data)
+
+
 @router.post(
+
     "",
     response_model=SuccessResponse[dict],
     responses={

@@ -261,12 +261,25 @@ class ApplicationService:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        stage_timestamps = raw.get("stage_timestamps") or {}
+        if isinstance(stage_timestamps, dict):
+            stage_timestamps = dict(stage_timestamps)
+        else:
+            stage_timestamps = {}
+        now_iso = datetime.utcnow().isoformat()
+        stage_timestamps[new_status] = now_iso
+
         updated = await self.repository.update_application(
             auth.supabase,
             auth.user.id,
             app_id,
-            {"status": new_status, "updated_at": datetime.utcnow().isoformat()},
+            {
+                "status": new_status,
+                "stage_timestamps": stage_timestamps,
+                "updated_at": now_iso,
+            },
         )
+
         if updated is None:
             raise HTTPException(status_code=404, detail="Application not found")
 
@@ -443,8 +456,104 @@ class ApplicationService:
             "streakDays": self._streak_days(rows),
         }
 
+    async def analytics(self, auth: Any) -> dict[str, Any]:
+        """Compute advanced application analytics: funnel by version/source/type and time-in-stage."""
+        try:
+            res = (
+                auth.supabase.table("applications")
+                .select("id, status, source_platform, resume_version_id, stage_timestamps, created_at, application_date, company_name")
+                .eq("user_id", auth.user.id)
+                .execute()
+            )
+            rows = (await res if hasattr(res, "__await__") else res).data or []
+        except Exception as exc:
+            logger.warning("Failed to fetch applications for analytics: %s", exc)
+            rows = []
+
+        total_apps = len(rows)
+        has_enough_data = total_apps >= 10
+
+        # 1. Funnel by resume version
+        by_version: dict[str, dict[str, int]] = {}
+        # 2. Funnel by source platform
+        by_source: dict[str, dict[str, int]] = {}
+        # 3. Funnel by company
+        by_company: dict[str, dict[str, int]] = {}
+
+        # 4. Time in stage (in days)
+        stage_durations: dict[str, list[float]] = {}
+
+        for row in rows:
+            st = row.get("status") or "applied"
+            v_id = str(row.get("resume_version_id") or "master")
+            src = str(row.get("source_platform") or "other")
+            comp = str(row.get("company_name") or "other")
+
+            # version bucket
+            if v_id not in by_version:
+                by_version[v_id] = {"total": 0, "interview": 0, "offer": 0}
+            by_version[v_id]["total"] += 1
+            if st in ("interview", "offer", "accepted"):
+                by_version[v_id]["interview"] += 1
+            if st in ("offer", "accepted"):
+                by_version[v_id]["offer"] += 1
+
+            # source bucket
+            if src not in by_source:
+                by_source[src] = {"total": 0, "interview": 0, "offer": 0}
+            by_source[src]["total"] += 1
+            if st in ("interview", "offer", "accepted"):
+                by_source[src]["interview"] += 1
+            if st in ("offer", "accepted"):
+                by_source[src]["offer"] += 1
+
+            # company bucket
+            if comp not in by_company:
+                by_company[comp] = {"total": 0, "interview": 0, "offer": 0}
+            by_company[comp]["total"] += 1
+            if st in ("interview", "offer", "accepted"):
+                by_company[comp]["interview"] += 1
+            if st in ("offer", "accepted"):
+                by_company[comp]["offer"] += 1
+
+            # compute durations from stage_timestamps
+            st_times = row.get("stage_timestamps")
+            if isinstance(st_times, dict):
+                # parse timestamps
+                sorted_stages = []
+                for stage_name, ts_str in st_times.items():
+                    try:
+                        dt = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+                        sorted_stages.append((stage_name, dt))
+                    except Exception:
+                        pass
+                sorted_stages.sort(key=lambda x: x[1])
+                for i in range(len(sorted_stages) - 1):
+                    s_name, s_time = sorted_stages[i]
+                    _, next_time = sorted_stages[i + 1]
+                    dur_days = (next_time - s_time).total_seconds() / 86400.0
+                    stage_durations.setdefault(s_name, []).append(round(dur_days, 1))
+
+        # Average stage durations
+        avg_time_in_stage = {
+            s: round(sum(durs) / len(durs), 1)
+            for s, durs in stage_durations.items() if durs
+        }
+
+        return {
+            "total": total_apps,
+            "has_enough_data": has_enough_data,
+            "sample_size": total_apps,
+            "warning": None if has_enough_data else "Not enough data (minimum 10 applications required for confident trends).",
+            "by_resume_version": by_version,
+            "by_source": by_source,
+            "by_company": by_company,
+            "avg_time_in_stage_days": avg_time_in_stage,
+        }
+
     @staticmethod
     def _count_this_week(rows: list[dict[str, Any]]) -> int:
+
         from datetime import timedelta
 
         now = datetime.utcnow()
