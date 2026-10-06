@@ -302,6 +302,25 @@ class JobIngestionService:
         del crawled_jobs
         return await self._persist_offloop(normalized_jobs, source=source, slug=slug, cancel_event=cancel_event)
 
+    async def ingest_workday_jobs(
+        self,
+        slug: str,
+        cancel_event: Optional[threading.Event] = None,
+        source: str = "workday",
+        india_only: bool = False,
+    ) -> dict[str, int]:
+        """Ingest jobs from Workday public CxS JSON API."""
+        from app.crawlers.adapters.workday import WorkdayCrawler
+
+        crawler = WorkdayCrawler.from_slug(slug)
+        crawled_jobs = await crawler.crawl(india_only=india_only)
+        normalized_jobs = [
+            self._apply_source_quality(self.job_service.normalize_and_classify(j))
+            for j in crawled_jobs
+        ]
+        del crawled_jobs
+        return await self._persist_offloop(normalized_jobs, source=source, slug=slug, cancel_event=cancel_event)
+
     def _apply_source_quality(self, job: NormalizedJob, careers_url: Optional[str] = None) -> NormalizedJob:
         """Attach verified source provenance to a normalized job.
 

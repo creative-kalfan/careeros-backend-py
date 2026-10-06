@@ -316,6 +316,10 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             result = await _dispatch_ingest(
                 ingestion.ingest_lever_jobs, slug, cancel_event=cancel_event
             )
+        elif source == "workday":
+            result = await _dispatch_ingest(
+                ingestion.ingest_workday_jobs, slug, cancel_event=cancel_event
+            )
         elif source == "adzuna":
             result = await _dispatch_ingest(
                 ingestion.ingest_adzuna_jobs,
@@ -396,7 +400,7 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                 .eq("is_active", True)
                 .eq("source_platform", source)
             )
-            if slug and source in ("ashby", "greenhouse", "lever", "smartrecruiters", "firecrawl"):
+            if slug and source in ("ashby", "greenhouse", "lever", "smartrecruiters", "workday", "firecrawl"):
                 prev_active_query = prev_active_query.eq("crawl_target_slug", slug)
             elif source == "firecrawl":
                 comp_part, _, url_part = slug.partition("|")
@@ -404,14 +408,14 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                     prev_active_query = prev_active_query.ilike("company", comp_part)
                 if url_part:
                     prev_active_query = prev_active_query.eq("careers_url", url_part)
-            elif source in ("ashby", "greenhouse", "lever", "smartrecruiters"):
+            elif source in ("ashby", "greenhouse", "lever", "smartrecruiters", "workday"):
                 comp = _resolve_company_scope(source, slug)
                 if comp:
                     prev_active_query = prev_active_query.ilike("company", comp)
             prev_active_res = prev_active_query.execute()
             count_val = getattr(prev_active_res, "count", 0)
             prev_active_count = int(count_val) if isinstance(count_val, (int, float)) else 0
-            if prev_active_count == 0 and slug and source in ("ashby", "greenhouse", "lever", "smartrecruiters", "firecrawl"):
+            if prev_active_count == 0 and slug and source in ("ashby", "greenhouse", "lever", "smartrecruiters", "workday", "firecrawl"):
                 # Fallback to legacy company/url scope if crawl_target_slug has no matches (un-backfilled rows)
                 fallback_query = (
                     ingestion.job_repository._client.table("jobs")

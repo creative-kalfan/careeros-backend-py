@@ -205,6 +205,9 @@ class Settings(BaseSettings):
     firecrawl_min_interval_hours: int = Field(
         default=72, alias="FIRECRAWL_MIN_INTERVAL_HOURS"
     )
+    firecrawl_consecutive_zero_pause: int = Field(
+        default=3, alias="FIRECRAWL_CONSECUTIVE_ZERO_PAUSE"
+    )
     analysis_queue_name: str = Field(
         default="arq:queue:analysis", alias="ANALYSIS_QUEUE_NAME"
     )

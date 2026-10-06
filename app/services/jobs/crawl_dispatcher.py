@@ -262,6 +262,45 @@ async def dispatch_due_targets(ctx: dict[str, Any]) -> int:
     enqueued = 0
     for row in rows or []:
         source, slug = row["source"], row.get("slug") or ""
+        
+        # Firecrawl cost control: pause when active validated ATS target exists or consecutive zero threshold met
+        if source == "firecrawl":
+            company = slug.partition("|")[0] if "|" in slug else slug
+            should_pause = False
+            pause_reason = ""
+            
+            # Check 1: Active validated ATS target exists for the same company
+            try:
+                from app.crawlers.crawl_registry import all_targets
+                ats_match = next(
+                    (t for t in all_targets() if t.company.lower() == company.lower() and t.source in ("ashby", "greenhouse", "lever", "smartrecruiters", "workday") and t.enabled),
+                    None
+                )
+                if ats_match:
+                    should_pause = True
+                    pause_reason = f"active validated ATS target exists ({ats_match.source}:{ats_match.slug})"
+            except Exception:
+                pass
+            
+            # Check 2: Returned 0 jobs for N consecutive crawls
+            if not should_pause:
+                zero_streak = int(row.get("consecutive_zero_crawls", 0) or 0)
+                if zero_streak >= settings.firecrawl_consecutive_zero_pause:
+                    should_pause = True
+                    pause_reason = f"returned 0 jobs for {zero_streak} consecutive crawls"
+            
+            if should_pause:
+                logger.info("Pausing Firecrawl target %s (%s).", slug, pause_reason)
+                try:
+                    await asyncio.to_thread(
+                        lambda: get_service_client().table("crawl_targets")
+                        .update({"status": "paused", "last_error": f"Paused: {pause_reason}"})
+                        .eq("source", source).eq("slug", slug).execute()
+                    )
+                except Exception as p_exc:
+                    logger.warning("Failed to pause Firecrawl target in DB: %s", p_exc)
+                continue
+
         run_id = deterministic_job_id(source, slug, str(row.get("next_run_at", "")))
         try:
             job_id = await enqueue_scheduled_crawl(source, slug, run_id)

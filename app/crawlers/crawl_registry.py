@@ -230,6 +230,9 @@ ATS_TARGETS: list[CrawlTarget] = [
     # ---- SmartRecruiters Verified Boards (2 targets) ----
     CrawlTarget("smartrecruiters", "servicenow", "ats", 3, tier="P0", company="ServiceNow", india_filter="India", url="https://jobs.smartrecruiters.com/ServiceNow"),
     CrawlTarget("smartrecruiters", "averydennison", "ats", 3, tier="P2", company="Avery Dennison", india_filter="India", url="https://jobs.smartrecruiters.com/AveryDennison"),
+
+    # ---- Workday Verified Boards (CxS JSON API) ----
+    CrawlTarget("workday", "adobe|wd5|external_experienced", "ats", 3, tier="P1", company="Adobe", india_filter="India", url="https://adobe.wd5.myworkdayjobs.com/external_experienced"),
 ]
 
 # ---------------------------------------------------------------------------

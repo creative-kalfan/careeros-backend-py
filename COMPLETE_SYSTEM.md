@@ -1657,4 +1657,19 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - `/api/admin/crawl-status` extended with past 24h anomalies, last N runs by source, jobs per day by source, and median fetch/persist ms.
   - Periodic background retention job `prune_crawl_observability_job` (bounded batch 500, configurable `CRAWL_OBSERVABILITY_RETENTION_DAYS`, default 90 days) prunes `crawl_runs` and `job_events` without ever touching `jobs`.
 
+### 9.35 Phase 2: Crawler Coverage & Workday Integration
+
+- **Workday Adapter (`app/crawlers/adapters/workday.py`):**
+  - Uses public CxS unauthenticated JSON API: list via `POST /wday/cxs/{tenant}/{site}/jobs`, detail via `GET /job/{externalPath}`.
+  - Slug format: `{tenant}|{dc}|{site}`. Concurrency bounded to $\le 3$ per tenant with jittered retry and 5s connect / 20s read timeouts.
+  - Date fidelity: `posted_at` is sourced ONLY from structured `startDate` (ISO format); relative text (e.g. "Posted Yesterday") is strictly ignored.
+  - Detail fetches are capped per crawl (`WORKDAY_MAX_DETAILS_PER_CRAWL`, default 50).
+- **ATS Investigation & Probe Report (`docs/ats_coverage_report.md`):**
+  - Public unauthenticated probe test performed across Workday, Workable, Recruitee, Teamtailor, Zoho Recruit, Keka, Darwinbox, and Freshteam.
+  - Only Workday provides keyless, unauthenticated structured JSON endpoints without CAPTCHA or Cloudflare friction; all other evaluated providers require auth/partner credentials and were deferred.
+- **Firecrawl Cost Control (`app/services/jobs/crawl_dispatcher.py`):**
+  - Pauses Firecrawl targets when an active, validated ATS target exists for the same company (e.g. PostHog, Linear, CRED).
+  - Pauses Firecrawl targets when 0 jobs are returned for $N \ge 3$ consecutive crawls (`FIRECRAWL_CONSECUTIVE_ZERO_PAUSE`).
+
+
 
