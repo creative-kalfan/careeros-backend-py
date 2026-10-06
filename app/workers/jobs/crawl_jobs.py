@@ -563,6 +563,18 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                     jobs_processed=int(result.get("inserted", 0)),
                     metadata={"inserted": True, "identity_unavailable": True},
                 ))
+
+            # Bounded duplicate clustering & repost churn check on inserted jobs
+            if inserted_ids:
+                try:
+                    from app.services.jobs.job_cluster_service import JobClusterService
+                    cluster_service = JobClusterService()
+                    for ext_id in inserted_ids[:50]:  # bounded batch
+                        job_row = ingestion.job_repository.get_job_by_identity(ext_id, source)
+                        if job_row:
+                            cluster_service.cluster_job(job_row.get("id") or ext_id, job_row)
+                except Exception as cluster_exc:
+                    logger.warning("Post-ingestion clustering failed (non-blocking): %s", cluster_exc)
         except Exception as exc:
             logger.warning("Event Bus publish failed (non-blocking): %s", exc)
 

@@ -42,6 +42,7 @@ async def list_jobs(
     employment_type: Annotated[Optional[str], Query(alias="employmentType")] = None,
     experience: Optional[str] = None,
     sort: Optional[str] = None,
+    verified_live_only: Optional[bool] = None,
     service: JobRelevanceService = Depends(get_job_relevance_service),
 ) -> SuccessResponse[list[JobOut]]:
     """List all active jobs (unauthenticated)."""
@@ -61,6 +62,12 @@ async def list_jobs(
         experience=experience,
         sort=sort,
     )
+    if verified_live_only:
+        # Filter for verified live postings (first-party ATS, active)
+        first_party_ats = {"ashby", "greenhouse", "lever", "smartrecruiters", "workday"}
+        jobs = [j for j in jobs if j.source_platform in first_party_ats and j.source_tier in (1, 2)]
+        total = len(jobs)
+
     return SuccessResponse(
         data=[JobOut.from_db_row(j.model_dump()) for j in jobs],
         meta=build_meta(page, page_size, total),
@@ -290,7 +297,32 @@ async def get_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found",
         )
-    return SuccessResponse(data=JobOut.from_db_row(job.model_dump()))
+    job_dict = job.model_dump()
+    try:
+        from app.services.jobs.job_cluster_service import JobClusterService
+        job_dict = JobClusterService().decorate_job_with_cluster_metadata(job_dict)
+    except Exception as exc:
+        logger.debug("Cluster decoration skipped: %s", exc)
+
+    try:
+        from app.services.jobs.ghost_risk_service import GhostRiskService
+        grs = GhostRiskService()
+        record = grs.get_liveness_record(str(job_dict.get("id") or job_id))
+        if record:
+            job_dict["ghost_risk"] = {
+                "score": record.get("ghost_risk_score", 0),
+                "signals": record.get("ghost_signals", []),
+                "liveness_status": record.get("liveness_status", "active_unverified"),
+            }
+            job_dict["is_verified_live"] = record.get("liveness_status") == "verified_live"
+        else:
+            eval_res = grs.calculate_ghost_risk(job_dict)
+            job_dict["ghost_risk"] = eval_res
+            job_dict["is_verified_live"] = eval_res.get("is_verified_live", False)
+    except Exception as exc:
+        logger.debug("Ghost risk decoration skipped: %s", exc)
+
+    return SuccessResponse(data=JobOut.from_db_row(job_dict))
 
 
 @router.delete(

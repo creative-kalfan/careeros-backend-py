@@ -49,6 +49,10 @@ class JobOut(BaseModel):
     is_ghost_job: Optional[bool] = None
     is_high_roi: Optional[bool] = None
     viability_score: Optional[int] = None
+    also_listed_on: Optional[list[dict[str, Any]]] = None
+    preferred_apply_url: Optional[str] = None
+    ghost_risk: Optional[dict[str, Any]] = None
+    is_verified_live: Optional[bool] = None
 
     @classmethod
     def from_db_row(cls, row: dict[str, Any]) -> "JobOut":
@@ -139,4 +143,8 @@ class JobOut(BaseModel):
             is_ghost_job=is_ghost_job,
             is_high_roi=is_high_roi,
             viability_score=viability_score,
+            also_listed_on=row.get("also_listed_on"),
+            preferred_apply_url=row.get("preferred_apply_url") or row.get("url") or row.get("apply_url"),
+            ghost_risk=row.get("ghost_risk"),
+            is_verified_live=row.get("is_verified_live"),
         )

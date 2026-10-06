@@ -1,0 +1,280 @@
+{
+  "version": "1.0.0",
+  "skills": [
+    {
+      "canonical": "python",
+      "category": "programming",
+      "aliases": ["python", "python3", "python 3", "py"]
+    },
+    {
+      "canonical": "javascript",
+      "category": "programming",
+      "aliases": ["javascript", "js", "ecmascript"]
+    },
+    {
+      "canonical": "typescript",
+      "category": "programming",
+      "aliases": ["typescript", "ts"]
+    },
+    {
+      "canonical": "java",
+      "category": "programming",
+      "aliases": ["java", "core java"]
+    },
+    {
+      "canonical": "go",
+      "category": "programming",
+      "aliases": ["golang", "go language", "go lang"]
+    },
+    {
+      "canonical": "r",
+      "category": "analytics",
+      "aliases": ["r language", "r-project", "r programming"]
+    },
+    {
+      "canonical": "c++",
+      "category": "programming",
+      "aliases": ["c++", "cpp"]
+    },
+    {
+      "canonical": "c#",
+      "category": "programming",
+      "aliases": ["c#", "csharp", "c-sharp"]
+    },
+    {
+      "canonical": "ruby",
+      "category": "programming",
+      "aliases": ["ruby", "ruby on rails", "rails"]
+    },
+    {
+      "canonical": "php",
+      "category": "programming",
+      "aliases": ["php", "php7", "php8"]
+    },
+    {
+      "canonical": "rust",
+      "category": "programming",
+      "aliases": ["rust", "rustlang"]
+    },
+    {
+      "canonical": "scala",
+      "category": "programming",
+      "aliases": ["scala"]
+    },
+    {
+      "canonical": "kotlin",
+      "category": "programming",
+      "aliases": ["kotlin"]
+    },
+    {
+      "canonical": "swift",
+      "category": "programming",
+      "aliases": ["swift", "swiftui"]
+    },
+    {
+      "canonical": "react",
+      "category": "framework",
+      "aliases": ["react", "react.js", "reactjs", "react native"]
+    },
+    {
+      "canonical": "next.js",
+      "category": "framework",
+      "aliases": ["next.js", "nextjs", "next js"]
+    },
+    {
+      "canonical": "vue.js",
+      "category": "framework",
+      "aliases": ["vue", "vue.js", "vuejs"]
+    },
+    {
+      "canonical": "angular",
+      "category": "framework",
+      "aliases": ["angular", "angularjs", "angular 2+"]
+    },
+    {
+      "canonical": "node.js",
+      "category": "framework",
+      "aliases": ["node", "node.js", "nodejs", "node js"]
+    },
+    {
+      "canonical": "fastapi",
+      "category": "framework",
+      "aliases": ["fastapi", "fast-api", "fast api"]
+    },
+    {
+      "canonical": "django",
+      "category": "framework",
+      "aliases": ["django", "django rest framework", "drf"]
+    },
+    {
+      "canonical": "flask",
+      "category": "framework",
+      "aliases": ["flask"]
+    },
+    {
+      "canonical": "spring boot",
+      "category": "framework",
+      "aliases": ["spring", "spring boot", "springboot"]
+    },
+    {
+      "canonical": "express.js",
+      "category": "framework",
+      "aliases": ["express", "express.js", "expressjs"]
+    },
+    {
+      "canonical": "sql",
+      "category": "database",
+      "aliases": ["sql", "structured query language", "t-sql", "pl/sql"]
+    },
+    {
+      "canonical": "postgresql",
+      "category": "database",
+      "aliases": ["postgresql", "postgres", "postgres sql", "psql"]
+    },
+    {
+      "canonical": "mysql",
+      "category": "database",
+      "aliases": ["mysql", "my-sql"]
+    },
+    {
+      "canonical": "mongodb",
+      "category": "database",
+      "aliases": ["mongodb", "mongo", "mongo db"]
+    },
+    {
+      "canonical": "redis",
+      "category": "database",
+      "aliases": ["redis"]
+    },
+    {
+      "canonical": "sqlite",
+      "category": "database",
+      "aliases": ["sqlite", "sqlite3"]
+    },
+    {
+      "canonical": "elasticsearch",
+      "category": "database",
+      "aliases": ["elasticsearch", "elastic search", "opensearch"]
+    },
+    {
+      "canonical": "power bi",
+      "category": "analytics",
+      "aliases": ["power bi", "powerbi", "microsoft power bi"]
+    },
+    {
+      "canonical": "tableau",
+      "category": "analytics",
+      "aliases": ["tableau", "tableau desktop"]
+    },
+    {
+      "canonical": "data analysis",
+      "category": "analytics",
+      "aliases": ["data analysis", "data analytics", "data mining", "bi", "business intelligence"]
+    },
+    {
+      "canonical": "docker",
+      "category": "devops",
+      "aliases": ["docker", "docker container", "docker compose", "containerization"]
+    },
+    {
+      "canonical": "kubernetes",
+      "category": "devops",
+      "aliases": ["kubernetes", "k8s"]
+    },
+    {
+      "canonical": "aws",
+      "category": "cloud",
+      "aliases": ["aws", "amazon web services", "amazon aws"]
+    },
+    {
+      "canonical": "azure",
+      "category": "cloud",
+      "aliases": ["azure", "microsoft azure"]
+    },
+    {
+      "canonical": "google cloud",
+      "category": "cloud",
+      "aliases": ["gcp", "google cloud", "google cloud platform"]
+    },
+    {
+      "canonical": "git",
+      "category": "tools",
+      "aliases": ["git", "github", "gitlab", "version control"]
+    },
+    {
+      "canonical": "ci/cd",
+      "category": "devops",
+      "aliases": ["ci/cd", "continuous integration", "continuous deployment", "jenkins", "github actions"]
+    },
+    {
+      "canonical": "terraform",
+      "category": "devops",
+      "aliases": ["terraform", "iac", "infrastructure as code"]
+    },
+    {
+      "canonical": "rest api",
+      "category": "architecture",
+      "aliases": ["rest", "rest api", "restful", "restful api", "apis"]
+    },
+    {
+      "canonical": "graphql",
+      "category": "architecture",
+      "aliases": ["graphql", "graph ql"]
+    },
+    {
+      "canonical": "microservices",
+      "category": "architecture",
+      "aliases": ["microservices", "microservice", "service-oriented architecture"]
+    },
+    {
+      "canonical": "machine learning",
+      "category": "ai",
+      "aliases": ["machine learning", "ml", "deep learning", "statistical modeling"]
+    },
+    {
+      "canonical": "artificial intelligence",
+      "category": "ai",
+      "aliases": ["artificial intelligence", "ai", "generative ai", "genai", "llm", "large language models"]
+    },
+    {
+      "canonical": "natural language processing",
+      "category": "ai",
+      "aliases": ["natural language processing", "nlp"]
+    },
+    {
+      "canonical": "agile",
+      "category": "management",
+      "aliases": ["agile", "scrum", "kanban", "sprint planning"]
+    },
+    {
+      "canonical": "leadership",
+      "category": "management",
+      "aliases": ["leadership", "team leadership", "mentorship", "people management"]
+    },
+    {
+      "canonical": "communication",
+      "category": "soft_skills",
+      "aliases": ["communication", "verbal communication", "written communication", "presentation skills"]
+    },
+    {
+      "canonical": "project management",
+      "category": "management",
+      "aliases": ["project management", "pmp", "program management"]
+    },
+    {
+      "canonical": "figma",
+      "category": "design",
+      "aliases": ["figma", "ui design", "ux design", "product design"]
+    },
+    {
+      "canonical": "tailwind",
+      "category": "framework",
+      "aliases": ["tailwind", "tailwind css", "tailwindcss"]
+    },
+    {
+      "canonical": "supabase",
+      "category": "database",
+      "aliases": ["supabase"]
+    }
+  ]
+}
