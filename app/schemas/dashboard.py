@@ -21,6 +21,10 @@ class DashboardTelemetryResponse(BaseModel):
     average_ats_score: float | None = 0.0
     active_jobs_in_queue: int = 0
     activity_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    top_recommendations: list[dict[str, Any]] = Field(default_factory=list)
+    saved_jobs: list[dict[str, Any]] = Field(default_factory=list)
+    recent_jobs: list[dict[str, Any]] = Field(default_factory=list)
+
 
 
 EMPTY_TELEMETRY: dict[str, Any] = {

@@ -35,8 +35,11 @@ def authenticator() -> AuthContext:
 
 @pytest.fixture
 def override_auth(authenticator: AuthContext) -> Iterator[None]:
+    from app.api.routes.dashboard import clear_dashboard_cache
+    clear_dashboard_cache()
     app.dependency_overrides[get_current_user] = lambda: authenticator
     yield
+    clear_dashboard_cache()
     app.dependency_overrides.clear()
 
 
