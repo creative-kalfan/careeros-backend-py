@@ -73,7 +73,9 @@ from app.api.routes.webhooks import router as webhooks_router
 from app.api.routes.market_demand import router as market_demand_router
 from app.api.routes.apply_kit import router as apply_kit_router
 from app.api.routes.referrals import router as referrals_router
+from app.api.routes.public_profiles import router as public_profiles_router
 from app.auth.service import AuthError
+
 
 from app.config import get_settings
 
@@ -298,7 +300,9 @@ app.include_router(webhooks_router)
 app.include_router(market_demand_router)
 app.include_router(apply_kit_router)
 app.include_router(referrals_router)
+app.include_router(public_profiles_router)
 app.include_router(admin_router)
+
 
 
 

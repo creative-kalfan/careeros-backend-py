@@ -29,6 +29,8 @@ class ProfileUpdate(BaseModel):
     education: Optional[list[Any]] = None
     onboarding_completed: Optional[bool] = None
     onboarding_step: Optional[int] = None
+    career_stage: Optional[str] = None
+    graduating_year: Optional[int] = None
 
 
 class ProfileResponse(BaseModel):
@@ -52,3 +54,6 @@ class ProfileResponse(BaseModel):
     education: list[Any] = []
     onboarding_completed: bool = False
     onboarding_step: int = 0
+    career_stage: Optional[str] = None
+    graduating_year: Optional[int] = None
+

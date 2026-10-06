@@ -27,8 +27,11 @@ class UserProfile(BaseModel):
     education: Optional[list[Any]] = None
     onboarding_completed: Optional[bool] = None
     onboarding_step: Optional[int] = None
+    career_stage: Optional[str] = None
+    graduating_year: Optional[int] = None
 
     @classmethod
+
     def from_db_row(cls, row: dict[str, Any] | None) -> "UserProfile | None":
         """Build a UserProfile from a Supabase ``profiles`` row (or None).
 
@@ -57,4 +60,7 @@ class UserProfile(BaseModel):
             education=row.get("education") or [],
             onboarding_completed=row.get("onboarding_completed") or False,
             onboarding_step=row.get("onboarding_step") or 0,
+            career_stage=row.get("career_stage"),
+            graduating_year=row.get("graduating_year"),
         )
+

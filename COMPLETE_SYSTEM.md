@@ -1705,3 +1705,9 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - Added table `referral_connections` with owner-only RLS and index on `(user_id, company)`.
   - `ReferralAssistantService` parses candidate LinkedIn Connections CSV exports, strictly dropping phone numbers and email addresses for privacy.
   - Endpoints at `POST /api/referrals/upload-csv`, `GET /api/referrals/match`, and one-click `DELETE /api/referrals/all`.
+- **Campus Mode & Public Profiles (Phase 6.8):**
+  - Migration `040_campus_mode_and_public_profiles.sql` adds `career_stage` (`student`/`fresher`/`experienced`) and `graduating_year` to `profiles`, plus `public_profiles` table.
+  - Public profile endpoints at `GET/POST /api/public/profile/settings` and public unauthenticated `GET /api/public/profile/{slug}` (enforcing default `noindex, nofollow` metadata).
+  - Frontend i18n string scaffolding in `src/lib/i18n.ts` supporting dictionary keys without unreviewed machine translations.
+  - Placement cell architectural hypothesis documented in `docs/ideas/placement_cell.md` (hypothesis only, explicit non-goal to build placement-cell portal).
+

@@ -23,8 +23,9 @@ _PROFILE_COLUMNS = (
     "id, email, full_name, role, current_role, desired_role, skills, location, "
     "preferred_locations, remote_preference, preferred_companies, "
     "salary_expectation_min, salary_expectation_max, salary_currency, "
-    "experience, education, onboarding_completed, onboarding_step"
+    "experience, education, onboarding_completed, onboarding_step, career_stage, graduating_year"
 )
+
 
 
 class ProfileRepository:
