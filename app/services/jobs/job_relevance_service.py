@@ -374,6 +374,40 @@ class JobRelevanceService:
                 except Exception:
                     logger.warning("get_priority_candidates failed; continuing with base candidate pool", exc_info=True)
 
+        # ── Semantic Retrieval candidate augmentation (Phase 4, feature-flagged) ──
+        from app.config import get_settings
+        if get_settings().semantic_retrieval_enabled and profile is not None:
+            try:
+                from app.llm.embeddings import get_embedding_provider
+                from app.repositories.job_embedding_repository import JobEmbeddingRepository
+                from app.llm.sync_bridge import run_coro_sync
+
+                embed_provider = get_embedding_provider()
+                embed_repo = JobEmbeddingRepository()
+                if embed_provider.is_configured() and embed_repo.is_available():
+                    # Construct search text from profile skills and target roles
+                    profile_skills_str = " ".join(profile.skills or [])
+                    query_text = f"{desired_role or ''} {profile_skills_str}".strip()
+                    if query_text:
+                        query_vector = run_coro_sync(embed_provider.embed_text(query_text), timeout_seconds=5.0)
+                        if query_vector:
+                            top_matches = embed_repo.search_similar_jobs(
+                                query_embedding=query_vector,
+                                top_k=get_settings().semantic_top_k,
+                                min_similarity=get_settings().semantic_min_similarity,
+                                newer_than_days=get_settings().embed_max_age_days,
+                            )
+                            seen_ids = {r.get("id") for r in db_rows if r.get("id")}
+                            for match in top_matches:
+                                match_id = match.get("job_id")
+                                if match_id and match_id not in seen_ids:
+                                    sem_row = self.job_repository.get_job(str(match_id))
+                                    if sem_row and sem_row.get("is_active"):
+                                        seen_ids.add(match_id)
+                                        db_rows.append(sem_row)
+            except Exception as sem_exc:
+                logger.warning("Semantic candidate retrieval failed (failing open): %s", sem_exc)
+
         # Convert to NormalizedJob objects
         jobs = [NormalizedJob.model_validate(row) for row in db_rows]
 

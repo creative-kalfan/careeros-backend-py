@@ -232,6 +232,17 @@ class Settings(BaseSettings):
     meta_whatsapp_token: str = Field(default="", alias="META_WHATSAPP_TOKEN")
     meta_whatsapp_phone_number_id: str = Field(default="", alias="META_WHATSAPP_PHONE_NUMBER_ID")
 
+    # Semantic Retrieval & Embeddings (Phase 4, default OFF)
+    semantic_retrieval_enabled: bool = Field(default=False, alias="SEMANTIC_RETRIEVAL_ENABLED")
+    embedding_provider: str = Field(default="gemini", alias="EMBEDDING_PROVIDER")
+    embedding_model: str = Field(default="text-embedding-004", alias="EMBEDDING_MODEL")
+    embed_dims: int = Field(default=768, alias="EMBED_DIMS")
+    embed_max_age_days: int = Field(default=90, alias="EMBED_MAX_AGE_DAYS")
+    embed_max_rows_cap: int = Field(default=10000, alias="EMBED_MAX_ROWS_CAP")
+    embed_batch_size: int = Field(default=25, alias="EMBED_BATCH_SIZE")
+    semantic_top_k: int = Field(default=50, alias="SEMANTIC_TOP_K")
+    semantic_min_similarity: float = Field(default=0.6, alias="SEMANTIC_MIN_SIMILARITY")
+
 @lru_cache
 def get_settings() -> Settings:
     """Return a cached Settings instance (env vars are read once)."""

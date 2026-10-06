@@ -17,6 +17,7 @@ from app.workers.jobs.crawl_jobs import crawl_company_job
 from app.workers.jobs.interview_prep_jobs import generate_interview_prep_job  # noqa: F401 — registration side effect
 from app.workers.jobs.job_intelligence_job import analyze_job_intelligence_job, analyze_jobs_batch
 from app.workers.jobs.observability_retention_job import prune_crawl_observability_job
+from app.workers.jobs.embedding_jobs import embed_jobs_batch, backfill_job_embeddings  # noqa: F401 — registration side effect
 from app.workers.registry import JobDefinition, get_registered_jobs
 
 logger = logging.getLogger(__name__)
