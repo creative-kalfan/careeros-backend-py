@@ -51,8 +51,23 @@ async def crawl_status(admin_status_token: str | None = Header(default=None, ali
                 "created_at", (now - timedelta(days=days)).isoformat()
             ).execute().count or 0
             result[label] = count
-        return {"crawl_lag_seconds": crawl_lag, "overdue_count": overdue, "dead_targets": dead_targets,
-                "jobs_added": result, "yield_by_source": yields}
+
+        from app.repositories.observability_repository import ObservabilityRepository
+        obs_repo = ObservabilityRepository(client=client)
+        obs_summary = obs_repo.get_crawl_observability_summary(hours=24, last_n_runs=10)
+
+        return {
+            "crawl_lag_seconds": crawl_lag,
+            "overdue_count": overdue,
+            "dead_targets": dead_targets,
+            "jobs_added": result,
+            "yield_by_source": yields,
+            "anomalies_24h": obs_summary.get("anomalies_24h", []),
+            "last_runs_by_source": obs_summary.get("last_runs_by_source", {}),
+            "jobs_per_day_by_source": obs_summary.get("jobs_per_day_by_source", {}),
+            "median_timing_ms": obs_summary.get("median_timing_ms", {"fetch_ms": 0, "persist_ms": 0}),
+            "observability_enabled": obs_summary.get("available", False),
+        }
 
     try:
         return await asyncio.to_thread(load)

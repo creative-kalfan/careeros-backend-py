@@ -16,6 +16,7 @@ from app.workers.functions import aggregate_market_skill_trends_job
 from app.workers.jobs.crawl_jobs import crawl_company_job
 from app.workers.jobs.interview_prep_jobs import generate_interview_prep_job  # noqa: F401 — registration side effect
 from app.workers.jobs.job_intelligence_job import analyze_job_intelligence_job, analyze_jobs_batch
+from app.workers.jobs.observability_retention_job import prune_crawl_observability_job
 from app.workers.registry import JobDefinition, get_registered_jobs
 
 logger = logging.getLogger(__name__)
@@ -211,7 +212,8 @@ class WorkerSettings:
     health_check_interval = 3600
     retry_jobs = True
     cron_jobs = [
-        cron(aggregate_market_skill_trends_job, hour=0, minute=0, run_at_startup=True)
+        cron(aggregate_market_skill_trends_job, hour=0, minute=0, run_at_startup=True),
+        cron(prune_crawl_observability_job, hour=3, minute=0, run_at_startup=False),
     ]
 
 

@@ -142,6 +142,7 @@ def _deactivate_after_success(
     timeout_seconds: float = 45.0,
     already_gated: bool = False,
     miss_threshold: int = 2,
+    crawl_run_id: Optional[str] = None,
 ) -> tuple[int, int, int, int]:
     """Synchronous post-ingestion deactivation; runs in a worker thread.
 
@@ -160,7 +161,7 @@ def _deactivate_after_success(
     """
     from app.db.supabase import call_serialized, run_gated_persistence
 
-    not_seen_kwargs: dict[str, Any] = {"miss_threshold": miss_threshold}
+    not_seen_kwargs: dict[str, Any] = {"miss_threshold": miss_threshold, "crawl_run_id": crawl_run_id}
     stale_kwargs: dict[str, Any] = {}
 
     if source == "firecrawl":
@@ -435,15 +436,35 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         except Exception:
             prev_active_count = 0
             
+        from app.config import get_settings
+        anomaly_ratio = get_settings().crawl_anomaly_ratio
         is_suspicious_empty = False
+        anomaly_reason = None
         if discovered == 0 and prev_active_count > 0:
             is_suspicious_empty = True
-        elif discovered < (prev_active_count * 0.5) and prev_active_count > 10:
+            anomaly_reason = f"discovered 0 jobs while previously active count was {prev_active_count}"
+        elif prev_active_count > 10 and discovered < (prev_active_count * anomaly_ratio):
             is_suspicious_empty = True
-            
+            anomaly_reason = f"discovered {discovered} jobs which is < {int(anomaly_ratio * 100)}% of previous {prev_active_count}"
+
         if is_suspicious_empty:
-            logger.warning("Suspicious empty crawl for %s:%s (discovered=%d, prev_active=%d). Skipping deactivation.", source, slug, discovered, prev_active_count)
-            result["status"] = "suspicious_empty"
+            logger.warning("Anomaly detected for %s:%s (%s). Skipping deactivation.", source, slug, anomaly_reason)
+            result["status"] = "suspicious_empty" if discovered == 0 else "anomaly"
+            result["anomaly_reason"] = anomaly_reason
+
+            # Raise SLO alert hook
+            alert_msg = f"Crawl anomaly detected for {source}:{slug}: {anomaly_reason}"
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_message(alert_msg, level="warning")
+            except Exception:
+                logger.error(alert_msg)
+            try:
+                if get_settings().alert_webhook_url:
+                    from app.services.jobs.crawl_dispatcher import _post_webhook
+                    await _post_webhook(get_settings().alert_webhook_url, {"message": alert_msg, "source": source, "slug": slug})
+            except Exception as hook_exc:
+                logger.warning("Failed to post crawl anomaly alert: %s", hook_exc)
         else:
             try:
                 from app.config import get_settings
@@ -557,31 +578,54 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
         )
 
         current_phase = "status_record"
-        await _record_crawl_status(
-            source,
-            slug,
-            {
-                "source": source,
-                "slug": slug,
-                "status": result.get("status", "success"),
-                "phase": current_phase,
-                "started_at": crawl_started_at,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "duration_ms": duration_ms,
-                "discovered": result.get("discovered", 0),
-                "inserted": result.get("inserted", 0),
-                "updated": result.get("updated", 0),
-                "unchanged": result.get("unchanged", 0),
-                "deduplicated": result.get("deduplicated", 0),
-                "skipped": result.get("skipped", 0),
-                "deactivated": deactivated_not_seen + deactivated,
-                "deactivated_not_seen": deactivated_not_seen,
-                "deactivated_stale": deactivated,
-                "provider_ms": provider_ms,
-                "upsert_ms": result.get("upsert_ms", 0),
-                "deactivation_total_ms": deactivation_total_ms,
-            },
-        )
+        finished_at_iso = datetime.now(timezone.utc).isoformat()
+        status_payload = {
+            "source": source,
+            "slug": slug,
+            "status": result.get("status", "success"),
+            "phase": current_phase,
+            "started_at": crawl_started_at,
+            "completed_at": finished_at_iso,
+            "duration_ms": duration_ms,
+            "discovered": result.get("discovered", 0),
+            "inserted": result.get("inserted", 0),
+            "updated": result.get("updated", 0),
+            "unchanged": result.get("unchanged", 0),
+            "deduplicated": result.get("deduplicated", 0),
+            "skipped": result.get("skipped", 0),
+            "deactivated": deactivated_not_seen + deactivated,
+            "deactivated_not_seen": deactivated_not_seen,
+            "deactivated_stale": deactivated,
+            "provider_ms": provider_ms,
+            "upsert_ms": result.get("upsert_ms", 0),
+            "deactivation_total_ms": deactivation_total_ms,
+        }
+        await _record_crawl_status(source, slug, status_payload)
+
+        # Record crawl_runs row in database (non-blocking)
+        try:
+            from app.repositories.observability_repository import ObservabilityRepository
+            obs_repo = ObservabilityRepository()
+            await asyncio.to_thread(
+                obs_repo.record_crawl_run,
+                source=source,
+                slug=slug,
+                started_at=crawl_started_at,
+                finished_at=finished_at_iso,
+                status=result.get("status", "success"),
+                discovered=result.get("discovered", 0),
+                inserted=result.get("inserted", 0),
+                updated=result.get("updated", 0),
+                unchanged=result.get("unchanged", 0),
+                deactivated=deactivated_not_seen + deactivated,
+                fetch_ms=provider_ms,
+                persist_wait_ms=result.get("async_wait_ms", 0),
+                persist_hold_ms=result.get("async_hold_ms", 0),
+                error_type=result.get("error"),
+                anomaly_reason=result.get("anomaly_reason"),
+            )
+        except Exception as obs_exc:
+            logger.warning("Observability recording skipped (non-blocking): %s", obs_exc)
 
         return {
             "success": True,
@@ -680,6 +724,7 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
             int(gate.get("sync_waiting_now", 0)),
             int(gate.get("sync_holding_now", 0)),
         )
+        failed_at_iso = datetime.now(timezone.utc).isoformat()
         await _record_crawl_status(
             source,
             slug,
@@ -689,11 +734,31 @@ async def crawl_company_job(ctx: dict[str, Any], source: str, slug: str) -> dict
                 "status": "failed",
                 "phase": current_phase,
                 "started_at": crawl_started_at,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": failed_at_iso,
                 "duration_ms": duration_ms,
                 "error": f"{exc.__class__.__name__}: {exc}",
             },
         )
+        try:
+            from app.repositories.observability_repository import ObservabilityRepository
+            obs_repo = ObservabilityRepository()
+            await asyncio.to_thread(
+                obs_repo.record_crawl_run,
+                source=source,
+                slug=slug,
+                started_at=crawl_started_at,
+                finished_at=failed_at_iso,
+                status="failed",
+                discovered=0,
+                inserted=0,
+                updated=0,
+                unchanged=0,
+                deactivated=0,
+                fetch_ms=provider_ms,
+                error_type=exc.__class__.__name__,
+            )
+        except Exception as obs_exc:
+            logger.warning("Observability recording failed run skipped (non-blocking): %s", obs_exc)
         raise
     finally:
         cancel_event.set()

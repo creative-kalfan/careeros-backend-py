@@ -229,7 +229,7 @@ async def test_stale_deactivation_guard_partial_drop():
             instance.job_repository._client = mock_client
 
             res_job = await crawl_company_job(ctx, "ashby", "acme")
-            assert res_job["status"] == "suspicious_empty"
+            assert res_job["status"] in ("anomaly", "suspicious_empty")
             assert res_job["deactivated"] == 0
 
 

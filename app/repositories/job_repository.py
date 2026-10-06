@@ -494,6 +494,7 @@ class JobRepository:
         source: Optional[str] = None,
         slug: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
+        crawl_run_id: Optional[str] = None,
     ) -> dict[str, int]:
         """Upsert a batch of normalized jobs."""
         self.last_inserted_ids: list[str] = []
@@ -597,7 +598,17 @@ class JobRepository:
                 chunk = json_rows[start:start + _UPSERT_WRITE_CHUNK]
                 try:
                     self._db_requests += 1
-                    res = self._client.rpc("upsert_jobs_batch", {"jobs_json": chunk}).execute()
+                    rpc_params: dict[str, Any] = {"jobs_json": chunk}
+                    if crawl_run_id:
+                        rpc_params["p_crawl_run_id"] = crawl_run_id
+                    try:
+                        res = self._client.rpc("upsert_jobs_batch", rpc_params).execute()
+                    except Exception:
+                        if "p_crawl_run_id" in rpc_params:
+                            rpc_params.pop("p_crawl_run_id")
+                            res = self._client.rpc("upsert_jobs_batch", rpc_params).execute()
+                        else:
+                            raise
                     if res.data:
                         inserted += res.data.get("inserted", 0)
                         updated += res.data.get("updated", 0)
@@ -934,6 +945,7 @@ class JobRepository:
         slug: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
         miss_threshold: int = 2,
+        crawl_run_id: Optional[str] = None,
     ) -> int:
         """Deactivate active jobs from a source NOT observed since ``since_iso``.
 
@@ -1026,14 +1038,22 @@ class JobRepository:
             }
             if slug is not None:
                 rpc_params["p_slug"] = slug
+            if crawl_run_id is not None:
+                rpc_params["p_crawl_run_id"] = crawl_run_id
             try:
                 result = self._client.rpc("deactivate_unseen_jobs_batch", rpc_params).execute()
             except Exception:
+                # Try falling back by removing newer params
+                if "p_crawl_run_id" in rpc_params:
+                    rpc_params.pop("p_crawl_run_id")
                 if "p_slug" in rpc_params:
-                    rpc_params.pop("p_slug")
-                    result = self._client.rpc("deactivate_unseen_jobs_batch", rpc_params).execute()
+                    try:
+                        result = self._client.rpc("deactivate_unseen_jobs_batch", rpc_params).execute()
+                    except Exception:
+                        rpc_params.pop("p_slug")
+                        result = self._client.rpc("deactivate_unseen_jobs_batch", rpc_params).execute()
                 else:
-                    raise
+                    result = self._client.rpc("deactivate_unseen_jobs_batch", rpc_params).execute()
             self.last_db_requests = self._db_requests
             return int(result.data or 0)
         except Exception as exc:

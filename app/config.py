@@ -162,6 +162,8 @@ class Settings(BaseSettings):
     crawl4ai_timeout_seconds: float = Field(default=60.0, alias="CRAWL4AI_TIMEOUT_SECONDS")
 
     # Observability.
+    crawl_anomaly_ratio: float = Field(default=0.5, alias="CRAWL_ANOMALY_RATIO")
+    crawl_observability_retention_days: int = Field(default=90, alias="CRAWL_OBSERVABILITY_RETENTION_DAYS")
     sentry_dsn: str = Field(default="", alias="SENTRY_DSN")
     sentry_environment: str = Field(default="development", alias="SENTRY_ENVIRONMENT")
 

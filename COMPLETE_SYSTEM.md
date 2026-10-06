@@ -1644,3 +1644,17 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
 - **Unresolved Questions:**
   - None. All behavior aligns with queueing math and observed production telemetry.
 
+### 9.34 Phase 1: Crawl Observability Data Model & Transition Events
+
+- **Architecture & Tables:**
+  - Idempotent migration `033_crawl_observability.sql` adds tables `crawl_runs` and `job_events` with service-role-only RLS and indexes `(target_id, started_at)`, `(job_id, occurred_at)`, `(crawl_run_id)`.
+  - Event emissions are strictly transition-bounded (`first_seen`, `changed`, `missing`, `reappeared`, `closed`) to respect Supabase free-tier storage bounds; generated set-based inside `upsert_jobs_batch` and `deactivate_unseen_jobs_batch` RPCs.
+  - Safe degradation: Probe-cache pattern in `ObservabilityRepository` and `JobRepository` falls back seamlessly if migration 033 has not yet been applied.
+- **Crawl Run Recording & Anomaly Detection:**
+  - Every `crawl_company_job` execution records a single structured row in `crawl_runs` upon completion (both success, anomaly, and failure).
+  - Configurable anomaly guard (`CRAWL_ANOMALY_RATIO`, default 0.5): Discovered jobs dropping below 50% of previous run (or 0 when previously >0) sets status `anomaly` or `suspicious_empty`, skips deactivation, and fires SLO alerts via Sentry and `ALERT_WEBHOOK_URL`.
+- **Telemetry & Retention:**
+  - `/api/admin/crawl-status` extended with past 24h anomalies, last N runs by source, jobs per day by source, and median fetch/persist ms.
+  - Periodic background retention job `prune_crawl_observability_job` (bounded batch 500, configurable `CRAWL_OBSERVABILITY_RETENTION_DAYS`, default 90 days) prunes `crawl_runs` and `job_events` without ever touching `jobs`.
+
+
