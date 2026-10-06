@@ -1,0 +1,39 @@
+# Test Baseline (HEAD a749071) - GROQ_API_KEY unset
+
+Total collected: 1354
+Passed: 1323
+Skipped: 1
+Warnings: 19
+Failed: 30
+
+## Failing Test IDs at Baseline
+1. tests/test_auth.py::test_valid_jwt_returns_user_and_role
+2. tests/test_auth.py::test_rls_authenticated_client_returns_own_row
+3. tests/test_auth.py::test_require_admin_rejects_non_admin
+4. tests/test_copilot.py::TestCopilotRoute::test_unauthenticated_rejected
+5. tests/test_copilot.py::TestCopilotRoute::test_empty_messages_rejected_with_422
+6. tests/test_copilot.py::TestCopilotRoute::test_chat_success_envelope
+7. tests/test_copilot.py::TestCopilotRoute::test_chat_with_resume_context
+8. tests/test_copilot.py::TestCopilotRoute::test_chat_unknown_resume_returns_404
+9. tests/test_copilot.py::TestCopilotRoute::test_chat_llm_unavailable_returns_503_envelope
+10. tests/test_crawl_throughput.py::test_bulk_not_seen_deactivation_same_rows_fewer_requests
+11. tests/test_crawl_throughput.py::test_bulk_stale_deactivation_uses_observation_freshness
+12. tests/test_crawl_throughput.py::test_bulk_deactivation_chunk_failure_keeps_partial_progress
+13. tests/test_india_target_freshness.py::TestObservationFreshness::test_reobserved_old_posting_regains_freshness
+14. tests/test_india_target_freshness.py::TestCombinedRanking::test_tier_order_new_fresh_aging_stale
+15. tests/test_ingestion_reliability.py::TestDeactivateStaleJobs::test_deactivates_scoped_to_source
+16. tests/test_job_discovery_3o.py::test_verified_company_registry_count_and_metadata
+17. tests/test_redis_efficiency.py::test_scheduler_target_count_bounds_daily_enqueue_cost
+18. tests/test_resume_studio_optimization.py::test_apply_version_operation_summary_and_skills_and_bullet
+19. tests/test_resume_studio_regression.py::test_visual_screenshot_diff_against_golden[1_single_column]
+20. tests/test_resume_studio_regression.py::test_visual_screenshot_diff_against_golden[2_two_column]
+21. tests/test_resume_studio_regression.py::test_visual_screenshot_diff_against_golden[9_graphics_and_images]
+22. tests/test_resume_studio_regression.py::test_visual_screenshot_diff_against_golden[10_unusual_fonts]
+23. tests/test_resume_studio_regression.py::test_visual_screenshot_diff_against_golden[real_john_doe]
+24. tests/test_resume_studio_regression.py::test_visual_screenshot_diff_against_golden[real_incident_dmx_technologies]
+25. tests/test_role_relevance_fixture.py::test_tier_separation_and_relevance_hierarchy
+26. tests/test_role_relevance_fixture.py::test_frontend_developer_candidate_regression
+27. tests/test_scoped_crawls_and_batch_analysis.py::test_crawl_job_enqueues_chunked_analysis_batches
+28. tests/test_smartrecruiters_adapter.py::test_smartrecruiters_adapter_real_api
+29. tests/test_smartrecruiters_adapter.py::test_smartrecruiters_adapter_remote_detection
+30. tests/test_whole_resume_tailoring.py::test_llm_tailoring_preserves_custom_skills_and_bullet_rewrites

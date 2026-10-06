@@ -18,7 +18,7 @@ def test_verified_company_registry_count_and_metadata():
     targets = all_targets()
     assert len(targets) >= 100, f"Expected >= 100 targets, got {len(targets)}"
     for t in targets:
-        assert t.source in {'ashby', 'greenhouse', 'lever', 'smartrecruiters', 'firecrawl', 'ycombinator', 'adzuna', 'jobspy'}
+        assert t.source in {'ashby', 'greenhouse', 'lever', 'smartrecruiters', 'firecrawl', 'ycombinator', 'adzuna', 'jobspy', 'instahyre', 'hirist', 'naukri'}
         assert t.slug or t.source == 'ycombinator'
         assert t.provider in {'yc', 'firecrawl', 'ats', 'aggregator'}
         assert t.tier in {'P0', 'P1', 'P2'}

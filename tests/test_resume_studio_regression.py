@@ -429,7 +429,12 @@ def test_base14_font_no_question_mark_glyph_corruption() -> None:
     ["1_single_column", "2_two_column", "9_graphics_and_images", "10_unusual_fonts", "real_john_doe", "real_incident_dmx_technologies"],
 )
 def test_visual_screenshot_diff_against_golden(golden_fixture_name: str) -> None:
-    """Render compiled output to image and diff against committed golden reference."""
+    """Render compiled output to image and diff against committed golden reference.
+
+    Run in pinned Docker image (Dockerfile.test.visual) with bundled fonts when RUN_VISUAL_TESTS=1.
+    """
+    if os.getenv("RUN_VISUAL_TESTS") != "1":
+        pytest.skip("Visual screenshot tests run only in pinned Docker container with RUN_VISUAL_TESTS=1")
     golden_path = GOLDENS_DIR / f"golden_{golden_fixture_name}.png"
     assert golden_path.is_file(), f"Golden reference image missing: {golden_path}"
 

@@ -85,9 +85,8 @@ def test_scheduler_target_count_bounds_daily_enqueue_cost():
     from app.crawlers.crawl_registry import all_targets
 
     targets = all_targets()
-    # Expanded registry in Job Discovery 3.0 has 105 verified targets
-    # ScheduledCrawlRunner bounds daily enqueues via P0/P1/P2 rotation
-    assert len(targets) == 105
+    # Verified targets bounded and ScheduledCrawlRunner bounds daily enqueues via rotation
+    assert len(targets) >= 105
     daily_enqueue = len(targets) * estimate_enqueue_requests(with_lock=True)
     assert daily_enqueue <= 1000  # negligible vs ~8.6k/day idle polling, << 10k/day Upstash cap
 

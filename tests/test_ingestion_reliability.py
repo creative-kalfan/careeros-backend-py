@@ -113,7 +113,7 @@ class TestDeactivateStaleJobs:
         repo._has_last_seen_at = True
         client.execute.return_value = MagicMock(data=[{"id": "a", "posted_at": "2025-01-01T00:00:00Z"}, {"id": "b", "posted_at": "2025-01-15T00:00:00Z"}])
 
-        count = repo.deactivate_stale_jobs(source_platform="ashby", max_age_days=30)
+        count = repo.deactivate_stale_jobs(source_platform="ashby", max_age_days=30, company="Acme", slug="acme")
 
         assert count == 2
 

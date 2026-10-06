@@ -465,8 +465,7 @@ class WholeResumeTailoringService:
                 if exp_id in bullet_map:
                     rewrites = bullet_map[exp_id]
                     resps = exp.get("responsibilities") or []
-                    new_resps = []
-                    # Take up to 4 selected rewrites
+                    # Update matched bullet indices in place
                     for rw in rewrites[:4]:
                         idx = rw.get("bullet_index")
                         new_txt = rw.get("rewritten_text")
@@ -480,10 +479,6 @@ class WholeResumeTailoringService:
                                 resps[idx]["text"] = new_txt
                             elif isinstance(resps[idx], str):
                                 resps[idx] = new_txt
-                            new_resps.append(resps[idx])
-                    
-                    if new_resps:
-                        exp["responsibilities"] = new_resps
 
         if isinstance(data.get("sub_engagement_bullets"), list):
             exp_list = tailored_dict.get("experience") or []

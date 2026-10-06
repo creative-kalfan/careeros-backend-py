@@ -381,16 +381,16 @@ def test_bulk_not_seen_deactivation_same_rows_fewer_requests():
     fresh = datetime.now(timezone.utc).isoformat()
     _seed(client, [
         {"id": "s1", "source_platform": "ashby", "external_job_id": "a",
-         "is_active": True, "last_seen_at": old},
+         "company": "Acme", "crawl_target_slug": "acme", "is_active": True, "last_seen_at": old},
         {"id": "s2", "source_platform": "ashby", "external_job_id": "b",
-         "is_active": True, "last_seen_at": old},
+         "company": "Acme", "crawl_target_slug": "acme", "is_active": True, "last_seen_at": old},
         {"id": "s3", "source_platform": "ashby", "external_job_id": "c",
-         "is_active": True, "last_seen_at": fresh},
+         "company": "Acme", "crawl_target_slug": "acme", "is_active": True, "last_seen_at": fresh},
         {"id": "s4", "source_platform": "greenhouse", "external_job_id": "d",
-         "is_active": True, "last_seen_at": old},
+         "company": "Other", "crawl_target_slug": "other", "is_active": True, "last_seen_at": old},
     ])
     repo = _repo(client)
-    count = repo.deactivate_not_seen_since("ashby", fresh)
+    count = repo.deactivate_not_seen_since("ashby", fresh, company="Acme", slug="acme")
     assert count == 2
     assert client.store[("ashby", "a")]["is_active"] is False
     assert client.store[("ashby", "b")]["is_active"] is False
@@ -406,14 +406,14 @@ def test_bulk_stale_deactivation_uses_observation_freshness():
     seen_today = datetime.now(timezone.utc).isoformat()
     _seed(client, [
         {"id": "o1", "source_platform": "ashby", "external_job_id": "a",
-         "is_active": True, "last_seen_at": old, "posted_at": old},
+         "company": "Acme", "crawl_target_slug": "acme", "is_active": True, "last_seen_at": old, "posted_at": old},
         {"id": "o2", "source_platform": "ashby", "external_job_id": "b",
-         "is_active": True, "last_seen_at": seen_today, "posted_at": old},
+         "company": "Acme", "crawl_target_slug": "acme", "is_active": True, "last_seen_at": seen_today, "posted_at": old},
         {"id": "o3", "source_platform": "ashby", "external_job_id": "c",
-         "is_active": True},  # no usable date: never staleness-deleted
+         "company": "Acme", "crawl_target_slug": "acme", "is_active": True},  # no usable date: never staleness-deleted
     ])
     repo = _repo(client)
-    assert repo.deactivate_stale_jobs(source_platform="ashby", max_age_days=30) == 1
+    assert repo.deactivate_stale_jobs(source_platform="ashby", max_age_days=30, company="Acme", slug="acme") == 1
     assert client.store[("ashby", "a")]["is_active"] is False
     assert client.store[("ashby", "b")]["is_active"] is True
     assert client.store[("ashby", "c")]["is_active"] is True
@@ -425,12 +425,12 @@ def test_bulk_deactivation_chunk_failure_keeps_partial_progress():
     fresh = datetime.now(timezone.utc).isoformat()
     _seed(client, [
         {"id": f"s{i}", "source_platform": "ashby", "external_job_id": str(i),
-         "is_active": True, "last_seen_at": old}
+         "company": "Acme", "crawl_target_slug": "acme", "is_active": True, "last_seen_at": old}
         for i in range(3)
     ])
     client.fail_next_bulk = True  # bulk chunk fails; per-row fallback must save progress
     repo = _repo(client)
-    assert repo.deactivate_not_seen_since("ashby", fresh) == 3
+    assert repo.deactivate_not_seen_since("ashby", fresh, company="Acme", slug="acme") == 3
 
 
 # ---------------------------------------------------------------------------

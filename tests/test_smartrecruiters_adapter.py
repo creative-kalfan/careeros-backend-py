@@ -7,6 +7,7 @@ from app.crawlers.adapters.smartrecruiters import SmartRecruitersAdapter
 from app.crawlers.models import CrawledJob
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_smartrecruiters_adapter_real_api():
     """Test against real SmartRecruiters board."""
@@ -36,6 +37,7 @@ async def test_smartrecruiters_adapter_real_api():
         assert job.external_job_id, "External job ID should not be empty"
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_smartrecruiters_adapter_invalid_slug():
     """Test that invalid slug returns empty list, not exception."""
@@ -46,6 +48,7 @@ async def test_smartrecruiters_adapter_invalid_slug():
     assert len(jobs) == 0
 
 
+@pytest.mark.live
 @pytest.mark.asyncio
 async def test_smartrecruiters_adapter_remote_detection():
     """Test remote detection with real data from SmartRecruiters."""

@@ -25,6 +25,8 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 
+pytestmark = pytest.mark.live
+
 # Load .env so the live-Supabase test fixtures can read the credentials.
 load_dotenv()
 
