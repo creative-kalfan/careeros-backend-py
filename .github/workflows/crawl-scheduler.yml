@@ -1,0 +1,36 @@
+name: Crawl Scheduler Tick
+
+# Wakes the backend scheduler. This workflow NEVER crawls: it only calls the
+# authenticated tick endpoint, which claims due crawl_targets and enqueues ARQ
+# jobs that the Render worker executes.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: crawl-scheduler
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger one crawl dispatch tick
+        env:
+          CRAWL_TICK_URL: ${{ secrets.CRAWL_TICK_URL }}
+          SCHEDULER_TRIGGER_SECRET: ${{ secrets.SCHEDULER_TRIGGER_SECRET }}
+        run: |
+          test -n "$CRAWL_TICK_URL" || { echo "::error::CRAWL_TICK_URL secret missing"; exit 1; }
+          test -n "$SCHEDULER_TRIGGER_SECRET" || { echo "::error::SCHEDULER_TRIGGER_SECRET secret missing"; exit 1; }
+          # Retries are safe: claims use FOR UPDATE SKIP LOCKED + leases.
+          # max-time covers a Render cold start.
+          curl --fail-with-body --silent --show-error \
+            --max-time 120 --retry 2 --retry-delay 10 --retry-all-errors \
+            -X POST -H "Authorization: Bearer ${SCHEDULER_TRIGGER_SECRET}" \
+            "$CRAWL_TICK_URL"
+          echo

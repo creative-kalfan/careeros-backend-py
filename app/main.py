@@ -74,6 +74,7 @@ from app.api.routes.market_demand import router as market_demand_router
 from app.api.routes.apply_kit import router as apply_kit_router
 from app.api.routes.referrals import router as referrals_router
 from app.api.routes.public_profiles import router as public_profiles_router
+from app.api.routes.internal_scheduler import router as internal_scheduler_router
 from app.auth.service import AuthError
 
 
@@ -154,7 +155,12 @@ async def lifespan(app: FastAPI):
     """Keep scheduled crawling in workers unless explicitly opted in."""
     _init_sentry()
     runner = None
-    if get_settings().run_scheduler_in_web and get_settings().legacy_apscheduler_enabled:
+    settings = get_settings()
+    if (
+        settings.run_scheduler_in_web
+        and settings.legacy_apscheduler_enabled
+        and settings.crawl_scheduler_mode != "github"
+    ):
         from app.services.jobs.scheduled_crawl_runner import ScheduledCrawlRunner
         runner = ScheduledCrawlRunner()
         runner.start()
@@ -302,6 +308,7 @@ app.include_router(apply_kit_router)
 app.include_router(referrals_router)
 app.include_router(public_profiles_router)
 app.include_router(admin_router)
+app.include_router(internal_scheduler_router)
 
 
 

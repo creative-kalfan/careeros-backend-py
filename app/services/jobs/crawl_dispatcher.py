@@ -334,9 +334,10 @@ async def complete_target(
     source: str, slug: str, success: bool, *, job_count: int = 0,
     content_hash: str | None = None, error: str | None = None, not_found: bool = False,
 ) -> None:
-    # Only DB-dispatched workers mutate a leased target; manual/legacy jobs
-    # remain on the old schedule until the migration probe succeeds.
-    if _migration_available is not True:
+    # Only mutate leased targets once migration 025 is confirmed. Probe here
+    # (cached) because in CRAWL_SCHEDULER_MODE=github dispatch runs in the web
+    # process, so the worker never probes via dispatch_due_targets.
+    if not await asyncio.to_thread(_migration_probe):
         return
     settings = get_settings()
     priority = 1
@@ -463,27 +464,42 @@ async def backfill_missing_intelligence(ctx: dict[str, Any]) -> int:
     return enqueued
 
 
-async def dispatcher_loop(ctx: dict[str, Any]) -> None:
-    """Run crawl dispatch, periodic intelligence backfill, and hourly checks until cancelled."""
+_last_slo_at: float | None = None
+_last_discovery_date = ""
+
+
+async def run_dispatch_tick(ctx: dict[str, Any]) -> dict[str, int]:
+    """Run exactly one bounded scheduler tick: dispatch, backfill, hourly SLO, daily discovery.
+
+    Shared by the in-worker ``dispatcher_loop`` and the externally triggered
+    ``POST /internal/scheduler/crawl-tick`` endpoint, so there is one source of
+    truth for scheduling. Concurrent ticks are safe: claims use
+    ``FOR UPDATE SKIP LOCKED`` plus leases (migration 025).
+    """
+    global _last_slo_at, _last_discovery_date
     settings = get_settings()
-    last_slo = 0.0
-    last_discovery_date = ""
+    enqueued = await dispatch_due_targets(ctx)
+    backfilled = await backfill_missing_intelligence(ctx)
+    now = time.monotonic()
+    if _last_slo_at is None or now - _last_slo_at >= 3600:
+        await check_crawl_slo()
+        _last_slo_at = now
+    date_key = datetime.now(timezone.utc).date().isoformat()
+    if date_key != _last_discovery_date:
+        try:
+            from app.workers.dispatcher import _get_redis
+            redis = await _get_redis()
+            await redis.enqueue_job("discover_ats_targets", _job_id=f"discover-ats:{date_key}")
+            _last_discovery_date = date_key
+        except Exception as exc:
+            logger.warning("ATS discovery enqueue failed (%s)", type(exc).__name__)
+    if settings.heartbeat_url:
+        await _post_webhook(settings.heartbeat_url)
+    return {"enqueued": enqueued, "analysis_backfill_enqueued": backfilled}
+
+
+async def dispatcher_loop(ctx: dict[str, Any]) -> None:
+    """Run scheduler ticks until cancelled (CRAWL_SCHEDULER_MODE=worker)."""
     while True:
-        await dispatch_due_targets(ctx)
-        await backfill_missing_intelligence(ctx)
-        now = asyncio.get_running_loop().time()
-        if now - last_slo >= 3600:
-            await check_crawl_slo()
-            last_slo = now
-        date_key = datetime.now(timezone.utc).date().isoformat()
-        if date_key != last_discovery_date:
-            try:
-                from app.workers.dispatcher import _get_redis
-                redis = await _get_redis()
-                await redis.enqueue_job("discover_ats_targets", _job_id=f"discover-ats:{date_key}")
-                last_discovery_date = date_key
-            except Exception as exc:
-                logger.warning("ATS discovery enqueue failed (%s)", type(exc).__name__)
-        if settings.heartbeat_url:
-            await _post_webhook(settings.heartbeat_url)
-        await asyncio.sleep(max(5, settings.dispatch_tick_seconds))
+        await run_dispatch_tick(ctx)
+        await asyncio.sleep(max(5, get_settings().dispatch_tick_seconds))

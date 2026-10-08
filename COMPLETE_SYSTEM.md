@@ -1735,3 +1735,42 @@ Evaluated 5 distinct profiles across the entire active inventory (2,952 jobs). S
   - Added `GET /health/ready` (checks Supabase and Redis connectivity with a 15s cache TTL and short timeouts, protecting dependencies from probe storms).
 
 
+
+## Crawl Scheduling via GitHub Actions Cron (2026-10-08)
+
+```
+GitHub Actions cron (.github/workflows/crawl-scheduler.yml, every 10 min + workflow_dispatch)
+    ↓  POST /internal/scheduler/crawl-tick  (Authorization: Bearer SCHEDULER_TRIGGER_SECRET)
+FastAPI web → crawl_dispatcher.run_dispatch_tick()  (one bounded tick)
+    ↓  claim_due_crawl_targets (FOR UPDATE SKIP LOCKED + lease) → enqueue_scheduled_crawl
+Valkey/ARQ queue
+    ↓
+Render ARQ worker executes crawl_company_job (persistence gate, retries, analysis queue unchanged)
+```
+
+**Why.** The worker previously ran `dispatcher_loop` forever (one tick every `DISPATCH_TICK_SECONDS`). Moving the clock to GitHub Actions keeps the worker a pure job consumer, so worker restarts, sleeps, or crashes no longer stop scheduling, and the cadence is visible in the Actions run history.
+
+**What runs where.** GitHub only sends one HTTP request: no checkout, `permissions: {}`, no crawl code. `run_dispatch_tick` is the former `dispatcher_loop` body (dispatch due targets, intelligence backfill, hourly SLO check, daily ATS discovery enqueue, heartbeat). The worker loop now calls that same function, so there is one source of truth for selection, claiming, priority, admission, and enqueueing. Each tick claims at most `min(DISPATCH_BATCH, worker capacity - in-flight leases)` targets.
+
+**Overlap/retry safety.** Ticks can overlap or be retried safely. Claims use `FOR UPDATE SKIP LOCKED` plus `lease_until` (migration 025), and ARQ job IDs are deterministic per `(source, slug, next_run_at)`. The workflow also sets `concurrency: crawl-scheduler`.
+
+**Authentication.** `SCHEDULER_TRIGGER_SECRET` env on the web service; the endpoint returns 503 when the secret is unset and 401 when the token is wrong (`hmac.compare_digest`). The secret is never logged. `JOB_CRAWL_ENABLED=false` makes the tick a no-op (`status: disabled`).
+
+**Configuration.**
+- `CRAWL_SCHEDULER_MODE=worker` (default): unchanged; the worker runs the dispatcher loop.
+- `CRAWL_SCHEDULER_MODE=github`: the worker starts no scheduler (neither the dispatcher loop nor the legacy APScheduler), and the web legacy scheduler is also blocked.
+- GitHub repo secrets: `CRAWL_TICK_URL` (for example `https://<web>.onrender.com/internal/scheduler/crawl-tick`) and `SCHEDULER_TRIGGER_SECRET`.
+- `complete_target` now runs the cached migration-025 probe itself, because in github mode the worker never dispatches and would otherwise skip every completion.
+
+**Known trade-offs.**
+- Throughput: each tick admits ≤ `DISPATCH_BATCH` targets, so a 10-minute cadence dispatches fewer crawls per hour than the old 60-second loop. Raise `DISPATCH_BATCH` or tighten the cron if the overdue SLO alerts fire.
+- The RSS soft-memory guard in `dispatch_due_targets` now measures the **web** process when ticks come from GitHub. Worker load is still bounded by the in-flight lease admission guard and `max_jobs`.
+
+**Rollout.**
+1. Deploy with `CRAWL_SCHEDULER_MODE=worker` and set `SCHEDULER_TRIGGER_SECRET` on the web service.
+2. Add both GitHub secrets, then run the workflow manually (`workflow_dispatch`). Verify `{"status":"ok","enqueued":N,...}` and that the worker picks up the jobs.
+3. Let the cron run alongside the worker loop and observe. Overlap is safe because of the claim mechanism.
+4. Set `CRAWL_SCHEDULER_MODE=github` on the **worker** service and restart it. The log should show `crawl scheduling delegated to external trigger`.
+5. Verify no duplicate scheduling: each target gets one ARQ job per `next_run_at`, and the SLO stays green.
+
+**Rollback.** Set `CRAWL_SCHEDULER_MODE=worker` on the worker and restart it (the loop resumes). Optionally disable the workflow in the Actions tab. No migration is involved.

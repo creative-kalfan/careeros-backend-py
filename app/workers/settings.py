@@ -113,7 +113,12 @@ async def worker_startup(ctx: dict[str, Any]) -> None:
                     logger.critical("Redis maxmemory-policy=%s; ARQ jobs may be evicted", value)
         except Exception as exc:
             logger.warning("Unable to inspect Redis maxmemory-policy: %s", exc)
-    if settings.job_crawl_enabled and settings.legacy_apscheduler_enabled:
+    if settings.job_crawl_enabled and settings.crawl_scheduler_mode == "github":
+        logger.info(
+            "crawl scheduling delegated to external trigger (CRAWL_SCHEDULER_MODE=github); "
+            "worker only consumes queued jobs"
+        )
+    elif settings.job_crawl_enabled and settings.legacy_apscheduler_enabled:
         try:
             from app.services.jobs.scheduled_crawl_runner import ScheduledCrawlRunner
             _crawl_runner = ScheduledCrawlRunner()

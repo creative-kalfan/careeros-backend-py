@@ -1,7 +1,7 @@
 """Application configuration loaded from environment variables."""
 
 from functools import lru_cache
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     legacy_apscheduler_enabled: bool = Field(default=False, alias="LEGACY_APSCHEDULER_ENABLED")
     run_scheduler_in_web: bool = Field(default=False, alias="RUN_SCHEDULER_IN_WEB")
     dispatch_tick_seconds: int = Field(default=60, alias="DISPATCH_TICK_SECONDS")
+    # "worker": ARQ worker runs the dispatcher loop (default, current behavior).
+    # "github": worker only consumes jobs; GitHub Actions calls
+    # POST /internal/scheduler/crawl-tick for each bounded scheduler tick.
+    crawl_scheduler_mode: Literal["worker", "github"] = Field(default="worker", alias="CRAWL_SCHEDULER_MODE")
+    # Bearer secret for /internal/scheduler/crawl-tick. Empty disables the endpoint.
+    scheduler_trigger_secret: str = Field(default="", alias="SCHEDULER_TRIGGER_SECRET")
     dispatch_batch: int = Field(default=2, alias="DISPATCH_BATCH")
     crawl_lease_seconds: int = Field(default=900, alias="CRAWL_LEASE_SECONDS")
     # crawl_targets migration 025 re-probe interval (seconds). The dispatcher
